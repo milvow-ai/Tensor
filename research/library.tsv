@@ -1,0 +1,17 @@
+# name	url	commit	licence	purpose
+crawl4ai	https://github.com/unclecode/crawl4ai	e5d2e786d1a101225f3f6a3e6fd344d76eeb13af	Apache-2.0	Website to LLM-ready markdown + extraction (enrichment)
+email-verifier	https://github.com/AfterShip/email-verifier	a97c75ff8da09ebfcd30011197cacc78b1c5458e	MIT	MX/catch-all/role/SMTP email verification (MIT)
+check-if-email-exists	https://github.com/reacherhq/check-if-email-exists	81da93e8a419f601c05e1bcf4a197d25eb0e349d	AGPL-3.0	SMTP mailbox verification (AGPL or commercial) — reference
+wappalyzergo	https://github.com/projectdiscovery/wappalyzergo	156e85b132e79e1d9c70b0b451d406ded39cb3b4	MIT	Tech-stack detection
+webappanalyzer	https://github.com/enthec/webappanalyzer	eea872af449e207e055398f7369d11ee48c8ea03	GPL-3.0	Wappalyzer fingerprint data (GPL) — reference
+jobspy	https://github.com/speedyapply/JobSpy	10b5417c8f2c99a6159733cf0f52a06c96c3832d	MIT	Job posts as hiring signals
+google-maps-scraper	https://github.com/gosom/google-maps-scraper	d0b51bcf3cd56d9a3f71e049cb6e226554e24162	MIT	Maps scraping — REFERENCE ONLY (Google ToS)
+yc-oss-api	https://github.com/yc-oss/api	ecb209d945527f96df43453b59092168fa745d5e	none-found	YC company directory JSON
+overturemaps-py	https://github.com/OvertureMaps/overturemaps-py	f250fefe4598f8592e0a54421e39eda4e8e6cc21	MIT	Overture Places download (open licence)
+theharvester	https://github.com/laramies/theHarvester	2e6b1ae1aef5b0eed9cecd75c006d9905cfbe085	GPL-2.0	OSINT email/name discovery (GPL) — reference
+dbos-transact-py	https://github.com/dbos-inc/dbos-transact-py	03fb5c92cde8e107ff333cd2b419f65e02719e99	MIT	Durable Python workflows in Postgres
+procrastinate	https://github.com/procrastinate-org/procrastinate	58c4b34dec0414a7c4713dd221e06ebd4c86b525	MIT	Postgres task queue (Python)
+pgmq	https://github.com/pgmq/pgmq	8cc0959b2489c5622af5e5cf6fd8eb8a0b7fd459	PostgreSQL	Postgres message queue (Supabase Queues)
+supabase-mcp	https://github.com/supabase-community/supabase-mcp	4cc6660f656673eb83f3b80b0c3ae7030b3d2772	Apache-2.0	Supabase MCP server (Claude ↔ DB)
+claude-code-action	https://github.com/anthropics/claude-code-action	97c53473391bff1901034d4b454b5bac7ab7a029	MIT	Claude Code in GitHub Actions (subscription token route)
+litellm	https://github.com/BerriAI/litellm	ae6b762190658e695c77b0ba63b6c65913b86ac0	MIT	LLM router — reference (see research/01 incident)
