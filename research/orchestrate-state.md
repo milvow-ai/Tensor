@@ -17,6 +17,18 @@ Next action: user asked to stop all work (2026-10-02). On return: get answers to
 | R7 Hermes + MCP | general-purpose | sonnet | research/07-hermes-and-mcp.md | Stopped on user request 2026-10-02, no file written | – |
 | R8 data assets | general-purpose | sonnet | research/08-data-assets.md, research/data/** | Stopped on user request 2026-10-02; partial downloads only (gpts-are-gpts, anthropic-economic-index), no README or checksums | research/data/ |
 
+## Foundation research round (2026-10-03)
+User brief: research + architecture A–H in docs/TENSOR-FOUNDATION.md (A–C written by lead).
+| Worker | Model | Owns | Status |
+|---|---|---|---|
+| R1 data providers | sonnet | research/r1-data-providers.md | Running |
+| R2 market US/CA | sonnet | research/r2-market.md | Running |
+| R3 email + compliance | sonnet | research/r3-email.md | Running |
+| R4 backend platform | sonnet | research/r4-platform.md | Running |
+| R5 UI + web audit | sonnet | research/r5-ui-and-web.md | Running |
+| R6 AI layer + Hermes + MCP | sonnet | research/r6-ai-layer.md | Running |
+Next: when all report, lead writes D–H + final test, commits.
+
 ## Contract
 - Phase gate: no product code until the user approves the Phase 2 design. Phase 1 output is research only.
 - $0 budget. No sends, no purchases, no cloud resources created, no DNS changes without the user's explicit word.
@@ -25,6 +37,7 @@ Next action: user asked to stop all work (2026-10-02). On return: get answers to
 - Lead lives in this cloud container: network reaches only GitHub, PyPI, npm (+ MCP connectors server-side). Hermes is not installed here.
 
 ## Decisions log
+- 2026-10-03: User answered geography (US+Canada), runtime (own PC, no VPS), offers (A website, B AI workflow). Research before design per brief.
 - 2026-10-02: Stopped building after the user's correction; schema moved to research/sketches/data-model-v0.sql as a sketch, not a decision — user asked for collect → design → develop.
 - 2026-10-02: Research workers on sonnet per the skill's role table — token economics.
 - 2026-10-02: Orchestrate pack copied unchanged into .claude/ so future cloud sessions have /orchestrate — cloud containers do not keep ~/.claude.
