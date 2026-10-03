@@ -15,3 +15,4 @@ pgmq	https://github.com/pgmq/pgmq	8cc0959b2489c5622af5e5cf6fd8eb8a0b7fd459	Postg
 supabase-mcp	https://github.com/supabase-community/supabase-mcp	4cc6660f656673eb83f3b80b0c3ae7030b3d2772	Apache-2.0	Supabase MCP server (Claude ↔ DB)
 claude-code-action	https://github.com/anthropics/claude-code-action	97c53473391bff1901034d4b454b5bac7ab7a029	MIT	Claude Code in GitHub Actions (subscription token route)
 litellm	https://github.com/BerriAI/litellm	ae6b762190658e695c77b0ba63b6c65913b86ac0	MIT	LLM router — reference (see research/01 incident)
+hermes-agent	https://github.com/NousResearch/hermes-agent	c8301ea6c9b797184df16a9c5dd462400b264ff4	MIT	Hermes Agent: agent executor, research/dev/ops worker (studied 2026-10-03)

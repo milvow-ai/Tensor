@@ -29,6 +29,14 @@ User brief: research + architecture A–H in docs/TENSOR-FOUNDATION.md (A–C wr
 | R6 AI layer + Hermes + MCP | sonnet | research/r6-ai-layer.md | Done |
 Done 2026-10-03: docs/TENSOR-FOUNDATION.md A–H + final test committed (61b9b8a). Next: user answers "Decisions needed before Phase 3", then Phase 3 plan gate.
 
+## Hermes integration round (2026-10-03)
+Brief: maximum useful Hermes role; deliverable docs/HERMES-INTEGRATION.md (21 sections). Repo cloned at library/hermes-agent @ c8301ea6.
+| Worker | Model | Owns | Status |
+|---|---|---|---|
+| H1 core/integration/control | sonnet | research/h1-hermes-core.md | Running |
+| H2 tools + MCP client | sonnet | research/h2-hermes-tools-mcp.md | Running |
+| H3 MCP ecosystem | sonnet | research/h3-mcp-ecosystem.md | Running |
+
 ## Contract
 - Phase gate: no product code until the user approves the Phase 2 design. Phase 1 output is research only.
 - $0 budget. No sends, no purchases, no cloud resources created, no DNS changes without the user's explicit word.
