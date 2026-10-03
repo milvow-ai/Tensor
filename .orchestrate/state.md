@@ -33,10 +33,15 @@ Next action: on "go" → start Bifrost (`scripts/start-bifrost.ps1`), write brie
 v4-flash 15/15 $0.0016 · v4-pro 15/15 $0.0084 · qwen3.8-27b:free 15/15 $0 (429s when run in parallel) · nemotron-3-super:free 15/15 $0 · cohere/north-mini-code:free 14/15 (missed Feb clamp; 16 calls). Pinned-cwd rerun left 0 stray files.
 Routing: free model first → v4-flash fallback → v4-pro for important/judgment steps. OpenRouter spend so far ≈ $0.02 of $3.
 
-## Active workers
-| Worker | Agent | Model | Owns | Status | Output file |
+## Active workers (Phase 1 started 2026-10-04 ~05:00 on the user's "use whatever you can, final product" — user asleep; defaults taken for AI pool / Codex / keep-awake)
+| Worker | Agent | Model | Owns | Status | Output |
 |---|---|---|---|---|---|
-| (none yet) | | | | | |
+| M1a db+ledger | agy (main tree) | gemini-3.8-flash-high | farm/db, ledger, conftest, pyproject | Running | D:\dev-cacheuns\M1a-db-ledger |
+| M1b registry+adapters | worker-build (worktree .claude/worktrees/agent-…) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | Running | agent reply |
+| C1 console core | agy (worktree D:\Harness Farm\wt-c1, branch c1-console) | gemini-3.8-flash-high | console/** , console/sql/views.sql | Running | D:\dev-cacheuns\C1-console-core |
+| M1c router+gateway | worker-build | sonnet | see briefs/M1c | Waiting for M1a+M1b | — |
+Shared contract: `briefs/CONTEXT.md`. Keep-awake helper: D:\dev-cache\keep-awake.ps1 (14 h from 04:57).
+User approved (2026-10-04): Sonnet 5.5 subagents for coding as a second build lane.
 
 ## Plan — Phase 1 (Farm) + Phase 2 (Console)  [v3.1 2026-10-04: v2 review fixes + AI pool (M3) + 24/7; waiting for user "go"]
 
