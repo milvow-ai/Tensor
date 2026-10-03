@@ -12,6 +12,7 @@ Next action: on "go" → start Bifrost (`scripts/start-bifrost.ps1`), write brie
 
 - 2026-10-04: repo moved to `D:\Harness Farm\Tensor` (C: copy left, can be deleted). Caches on D: via user env: PLAYWRIGHT_BROWSERS_PATH, UV_CACHE_DIR, UV_PYTHON_INSTALL_DIR, npm_config_cache = `D:\dev-cache\*`; pnpm store-dir `D:\dev-cache\pnpm-store`.
 - Versions: git 2.51, Python 3.12.5, uv 0.12.17, node 22.19, pnpm 9.12, docker 29.6.2 (daemon did NOT start), hermes 0.21.3 (upstream afaa53e5; library pin c8301ea6), agy 1.2.16, claude 2.1.268.
+- Scaffold (§8.2.5): `uv run pytest` 1 passed, ruff + mypy clean (Gemini, 318k tokens, 246 s); `console/` = starter @1888b20, npm lock → pnpm-lock via `pnpm import`, `pnpm build` PASS (Next 16, React 19). `farm db check` waits for SUPABASE_DB_URL in .env. pgserver PG 16.2 smoke OK (data D:/farm-data/pgtest).
 - Library: 25 repos at pinned commits (`bash scripts/fetch-library.sh` → 25× ok).
 - Supabase: project `harness-farm`, ref `aftetufrpjgghxgnnowq`, ap-south-1, Postgres 17.11, $0/mo. User must put SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / SUPABASE_DB_URL in `.env`.
 - Hermes default profile = Bedrock (Kimi K2). **Every Farm Hermes call must use `-p farm-builder|farm-agent`** (pinned to OpenRouter).
