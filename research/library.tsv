@@ -1,5 +1,5 @@
 # name	url	commit	licence	purpose
-crawl4ai	https://github.com/unclecode/crawl4ai	e5d2e786d1a101225f3f6a3e6fd344d76eeb13af	Apache-2.0	Website to LLM-ready markdown + extraction (enrichment)
+crawl4ai	https://github.com/unclecode/crawl4ai	133e1d92e37885dfccc03ea2e3687d06c98b7ceb	Apache-2.0	Website capture: screenshot, HTML, markdown (v0.9.4, Farm dependency)
 email-verifier	https://github.com/AfterShip/email-verifier	a97c75ff8da09ebfcd30011197cacc78b1c5458e	MIT	MX/catch-all/role/SMTP email verification (MIT)
 check-if-email-exists	https://github.com/reacherhq/check-if-email-exists	81da93e8a419f601c05e1bcf4a197d25eb0e349d	AGPL-3.0	SMTP mailbox verification (AGPL or commercial) — reference
 wappalyzergo	https://github.com/projectdiscovery/wappalyzergo	156e85b132e79e1d9c70b0b451d406ded39cb3b4	MIT	Tech-stack detection
@@ -9,10 +9,18 @@ google-maps-scraper	https://github.com/gosom/google-maps-scraper	d0b51bcf3cd56d9
 yc-oss-api	https://github.com/yc-oss/api	ecb209d945527f96df43453b59092168fa745d5e	none-found	YC company directory JSON
 overturemaps-py	https://github.com/OvertureMaps/overturemaps-py	f250fefe4598f8592e0a54421e39eda4e8e6cc21	MIT	Overture Places download (open licence)
 theharvester	https://github.com/laramies/theHarvester	2e6b1ae1aef5b0eed9cecd75c006d9905cfbe085	GPL-2.0	OSINT email/name discovery (GPL) — reference
-dbos-transact-py	https://github.com/dbos-inc/dbos-transact-py	03fb5c92cde8e107ff333cd2b419f65e02719e99	MIT	Durable Python workflows in Postgres
+dbos-transact-py	https://github.com/dbos-inc/dbos-transact-py	d324156616281d7d4923bc60851617bdbb70ea5e	MIT	Durable workflows, per-connection queues, dedup (3.2.0, Farm dependency)
 procrastinate	https://github.com/procrastinate-org/procrastinate	58c4b34dec0414a7c4713dd221e06ebd4c86b525	MIT	Postgres task queue (Python)
 pgmq	https://github.com/pgmq/pgmq	8cc0959b2489c5622af5e5cf6fd8eb8a0b7fd459	PostgreSQL	Postgres message queue (Supabase Queues)
 supabase-mcp	https://github.com/supabase-community/supabase-mcp	4cc6660f656673eb83f3b80b0c3ae7030b3d2772	Apache-2.0	Supabase MCP server (Claude ↔ DB)
 claude-code-action	https://github.com/anthropics/claude-code-action	97c53473391bff1901034d4b454b5bac7ab7a029	MIT	Claude Code in GitHub Actions (subscription token route)
 litellm	https://github.com/BerriAI/litellm	ae6b762190658e695c77b0ba63b6c65913b86ac0	MIT	LLM router — reference (see research/01 incident)
 hermes-agent	https://github.com/NousResearch/hermes-agent	c8301ea6c9b797184df16a9c5dd462400b264ff4	MIT	Hermes Agent: agent executor, research/dev/ops worker (studied 2026-10-03)
+fastmcp	https://github.com/PrefectHQ/fastmcp	34597af15256dad0935809fb4b7959bd4eaf3e59	Apache-2.0	MCP gateway: middleware, proxy provider, OpenAPI tools (v4.0.10, Farm dependency)
+mcp-python-sdk	https://github.com/modelcontextprotocol/python-sdk	2118f14f8a19bc158d8a1cf90af58d85d187f849	MIT	Official MCP SDK (v2.3.0, FastMCP dependency)
+bifrost	https://github.com/maximhq/bifrost	e8b579fd1a710753cfa97611b5cff6c3411b0825	Apache-2.0	LLM gateway: budgets, virtual keys, fallback (main @ 2026-10-04)
+pybreaker	https://github.com/danielfm/pybreaker	faf54de652991899768d7075feab6fcc10b72ba7	BSD-3-Clause	Circuit breaker (v1.4.1)
+mcp-context-forge	https://github.com/IBM/mcp-context-forge	9bb9c2ac58af4cd126c05e8153f9025770646bd2	Apache-2.0	Gateway federation ideas — reference only
+next-shadcn-admin-dashboard	https://github.com/arhamkhnz/next-shadcn-admin-dashboard	1888b2077da9d28bdd1d1be237061ca6ab574ef3	MIT	Farm Console starter (Next.js + shadcn/ui)
+shadcn-admin	https://github.com/satnaing/shadcn-admin	e16c87f213a5ba5e45964e9b67c792105ec74d26	MIT	Farm Console fallback starter
+rjsf	https://github.com/rjsf-team/react-jsonschema-form	4aeb5fa83d27f262e352510b5ff151a0bab241e2	Apache-2.0	Forms from JSON Schema incl. @rjsf/shadcn (v6.11.0)
