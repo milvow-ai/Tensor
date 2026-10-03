@@ -60,7 +60,7 @@ Stop rule: milestone > 150% of box → stop and report why.
 Deviations from HANDOFF (recorded): extract/classify route Groq → OpenRouter free → v4-flash (Bedrock banned by user 2026-10-04; Ollama off for C: space); Hermes models via Bifrost VK instead of Bedrock; farm-agent has no terminal so Docker is off the critical path.
 
 Blockers (user):
-1. GitHub push 403 (git user Mr-amaanx has no write on milvow-ai/Tensor) — needed before the first push.
+1. ~~GitHub push 403~~ — fixed 2026-10-04.
 2. `claude` CLI login expired — re-login (`claude` → /login) before M1's manual MCP check.
 3. Fill `D:\Harness Farm\Tensor\.env` (created, names only): SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / SUPABASE_DB_URL before M1; REOON/ZEROBOUNCE before M1 cassette; the rest by M2.
 4. Account inventory (7 Clay accounts: plan, API vs MCP) before M3.
@@ -84,7 +84,10 @@ Blockers (user):
 - 2026-10-04: Vercel = user's Hobby account; Console must be a real SaaS-style dashboard to see and adjust the Farm (not an artifact) — user.
 - 2026-10-04: Test Postgres = pgserver (no Docker); Docker Desktop off the critical path — lead.
 - 2026-10-04: Vision confirmed by user: one mega-MCP for Claude; tools in pools of accounts; manager watches billing/usage and fails over so the machine never stops; runs 24/7; also runs agentic work on a pool of AI accounts (user's 3 unused Claude Pro accounts + other AIs). Plan v3 adds the AI pool (M3; corrected 2026-10-04: it is main Claude delegating to other Claude/Codex/Antigravity/Hermes accounts via CLI through the Farm MCP, each AI keeping its own memory) and 24/7 auto-start/watchdog (M5); Console 'Accounts' becomes 'Tools & Pools' — user.
-- 2026-10-04: **No AWS Bedrock** (AWS warning pending). Hermes uses OpenRouter free models; a very cheap paid model (DeepSeek-class) only for important steps; OpenRouter balance $3 total — user. Replaces §2/§7 "Qwen3-Coder-Next via Bedrock".
+- 2026-10-04 (later): **AWS Bedrock allowed again, cap $20** — user fixed the AWS warning. Enforce via a Bifrost VK on the bedrock provider (to add at M2 with the LLM route); until then only Hermes' default profile uses Bedrock.
+- 2026-10-04: GitHub push fixed: origin = `https://milvow-ai@github.com/milvow-ai/Tensor.git` (per-repo user; Mr-amaanx untouched elsewhere). Branch pushed; history now on GitHub.
+- 2026-10-04: Hermes limits seen: its secret redaction turned `milvow-ai@` in a URL into `***` (command silently wrong), and it probed credentials beyond its brief. Rule: never give Hermes commands containing user@host URLs or credentials; check its actual effect, not its report.
+- 2026-10-04: ~~No AWS Bedrock~~ (superseded above): **No AWS Bedrock** (AWS warning pending). Hermes uses OpenRouter free models; a very cheap paid model (DeepSeek-class) only for important steps; OpenRouter balance $3 total — user. Replaces §2/§7 "Qwen3-Coder-Next via Bedrock".
 
 ## Previous efforts
 See .orchestrate/history-2026-10-02-03.md (research + design rounds).
