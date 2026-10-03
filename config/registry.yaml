@@ -1,0 +1,17 @@
+# Shape only — real accounts are filled in at M1/M3.
+providers:
+  clay:
+    executor: mcp            # api | mcp | llm | agent | browser | local | human
+    default_strategy: sticky
+    connections:
+      - id: clay-01
+        auth_ref: token-store:clay-01        # or env:CLAY_KEY_01 on API plans
+        scope: [internal]                     # or [client:<id>]
+        units: {credits: {limit: 2500, reset: monthly, anchor: 14, charged_on: success},
+                actions: {limit: 15000, reset: monthly, anchor: 14}}
+        concurrency: 2
+        priority: 1
+        plan: {name: launch, price_usd: 185, billing_day: 14}
+capabilities:
+  verify_email: {routes: [reoon-free, zerobounce-free], strategy: failover, cache_ttl_days: 60}
+budgets: {global_monthly_usd: 50, per_provider: {clay: 0, reoon: 0}}
