@@ -40,3 +40,10 @@ Tests: `tests/test_cli_agent_*.py` (fake CLIs: small Python scripts placed on a 
 
 ## Reply (≤ 15 lines)
 Files changed; test count; check tail; per-CLI facts discovered (flags, JSON fields, limit/auth error formats, multi-account mechanism) — these go into CONTEXT; live smoke cost; deviations.
+
+## Phase A (run now, in parallel with M1) — executors only
+Do ONLY: `farm/executors/cli_agent/*` (all five modules), the fake-CLI test harness, `tests/test_cli_agent_*.py`, the Codex install + per-CLI fact discovery, and the two live smokes driven directly through the executors (not via MCP).
+If `farm/executors/base.py` does not exist in your worktree yet, create it **exactly** as CONTEXT §4 specifies (a parallel builder owns the real one; at merge the lead keeps theirs, so do not add anything beyond §4).
+Do NOT touch capability schemas, router, gateway, CLI or registry in Phase A — they are Phase B (after M1c lands).
+Done when: `uv run pytest tests/test_cli_agent_*.py -q` passes and ruff/mypy are clean on `farm/executors/cli_agent` (`uv run ruff check farm/executors/cli_agent tests` and `uv run mypy farm/executors/cli_agent`).
+Reply additionally with: a "CLI facts" block (≤ 12 lines) for CONTEXT — exact argv, JSON fields, limit/auth error formats, multi-account mechanism per CLI.
