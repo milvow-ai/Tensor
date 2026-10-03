@@ -33,9 +33,11 @@ Done 2026-10-03: docs/TENSOR-FOUNDATION.md A–H + final test committed (61b9b8a
 Brief: maximum useful Hermes role; deliverable docs/HERMES-INTEGRATION.md (21 sections). Repo cloned at library/hermes-agent @ c8301ea6.
 | Worker | Model | Owns | Status |
 |---|---|---|---|
-| H1 core/integration/control | sonnet | research/h1-hermes-core.md | Running |
-| H2 tools + MCP client | sonnet | research/h2-hermes-tools-mcp.md | Running |
-| H3 MCP ecosystem | sonnet | research/h3-mcp-ecosystem.md | Running |
+| H1 core/integration/control | sonnet | – | Stopped (user: token cost); lead verified key facts directly |
+| H2 tools + MCP client | sonnet | research/h2-hermes-tools-mcp.md | Done |
+| H3 MCP ecosystem | sonnet | – | Stopped (user: token cost); gaps listed in HERMES-INTEGRATION §22 |
+
+Result: docs/HERMES-INTEGRATION.md written 2026-10-03. User prefers lean execution: no more research workers unless asked.
 
 ## Contract
 - Phase gate: no product code until the user approves the Phase 2 design. Phase 1 output is research only.

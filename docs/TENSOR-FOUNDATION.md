@@ -1,5 +1,7 @@
 # Tensor — foundation: problem, capabilities, architecture, resources
 
+Hermes's role is revised in `docs/HERMES-INTEGRATION.md` (2026-10-03). That supersedes the 'Agent chores' row in D and executor item 1 in F.
+
 Status: sections A–C were written on 2026-10-03, *before* resource research, as the brief requires. Sections D–H come from that research.
 
 Labels used throughout:
