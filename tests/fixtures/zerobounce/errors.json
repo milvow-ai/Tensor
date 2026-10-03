@@ -1,0 +1,20 @@
+{
+  "_source": "https://www.zerobounce.net/docs/email-validation-api-quickstart/v2-validate-emails, fetched 2026-10-04. 'key_or_credits' is the documented error body ({\"error\":\"Invalid API Key or your account ran out of credits\"}). The documentation does not state the HTTP status that accompanies it, so tests exercise it with 200, 400 and 401. UNVERIFIED: the other error texts are plausible wordings, not recorded provider output. '{KEY}' is replaced with the test's sentinel key.",
+  "cases": {
+    "key_or_credits": {
+      "error": "Invalid API Key or your account ran out of credits"
+    },
+    "key_only": {
+      "error": "Invalid API Key"
+    },
+    "credits_only": {
+      "error": "Your account ran out of credits"
+    },
+    "other_error": {
+      "error": "Something unexpected happened"
+    },
+    "echoes_key": {
+      "error": "Invalid API Key {KEY} or your account ran out of credits"
+    }
+  }
+}

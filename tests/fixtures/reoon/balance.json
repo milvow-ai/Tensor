@@ -1,0 +1,27 @@
+{
+  "_source": "https://www.reoon.com/articles/api-documentation-of-reoon-email-verifier/ (Check Account Balance), fetched 2026-10-04. 'ok' is the documented example; 'free_tier', 'inactive' and 'no_credit_fields' are variations of it (the non-active api_status value is UNVERIFIED).",
+  "cases": {
+    "ok": {
+      "api_status": "active",
+      "remaining_daily_credits": 150,
+      "remaining_instant_credits": 5000,
+      "status": "success"
+    },
+    "free_tier": {
+      "api_status": "active",
+      "remaining_daily_credits": 17,
+      "remaining_instant_credits": 0,
+      "status": "success"
+    },
+    "inactive": {
+      "api_status": "inactive",
+      "remaining_daily_credits": 0,
+      "remaining_instant_credits": 0,
+      "status": "success"
+    },
+    "no_credit_fields": {
+      "api_status": "active",
+      "status": "success"
+    }
+  }
+}
