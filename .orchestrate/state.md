@@ -29,6 +29,8 @@ Next action: on "go" → start Bifrost (`scripts/start-bifrost.ps1`), write brie
 | farm-builder | bifrost → openrouter/deepseek/deepseek-v4-flash (VK $1.50) | terminal, file, code_execution, todo | local (cwd pinned per run) | 60 turns, 1800 s | keyless off, memory off, aux = v4-flash, .env = BIFROST_VK only (no provider key), no MCP |
 | farm-agent | same, via Bifrost VK $0.50 | todo (+ Farm MCP at M4, sampling off) — no terminal | n/a | 25 turns, 600 s | same |
 
+- **farm-builder-bedrock** (2026-10-04 05:55): Hermes on AWS Bedrock `qwen.qwen3-coder-next` (custom:bedrock-mantle, us-east-1), toolsets terminal/file/code_execution/todo, 120 turns / 3600 s, keyless off, memory off, .env = AWS_BEARER_TOKEN_BEDROCK only. Smoke OK (37.9k tokens). Hermes reports cost 0.0 for this model → track tokens; owner's AWS cap $20 is the hard limit. Run: `scripts/run-hermes.ps1 -Profile farm-builder-bedrock -Model qwen.qwen3-coder-next`.
+
 ## Model eval (2026-10-04, same Farm-util coding task, hidden 15-case check)
 v4-flash 15/15 $0.0016 · v4-pro 15/15 $0.0084 · qwen3.8-27b:free 15/15 $0 (429s when run in parallel) · nemotron-3-super:free 15/15 $0 · cohere/north-mini-code:free 14/15 (missed Feb clamp; 16 calls). Pinned-cwd rerun left 0 stray files.
 Routing: free model first → v4-flash fallback → v4-pro for important/judgment steps. OpenRouter spend so far ≈ $0.02 of $3.
@@ -36,9 +38,11 @@ Routing: free model first → v4-flash fallback → v4-pro for important/judgmen
 ## Active workers (Phase 1 started 2026-10-04 ~05:00 on the user's "use whatever you can, final product" — user asleep; defaults taken for AI pool / Codex / keep-awake)
 | Worker | Agent | Model | Owns | Status | Output |
 |---|---|---|---|---|---|
-| M1a db+ledger | agy (main tree) | gemini-3.8-flash-high | farm/db, ledger, conftest, pyproject | Running | D:\dev-cacheuns\M1a-db-ledger |
+| M1a db+ledger | agy (cut off by quota) → Sonnet worker-build finishing, main tree | sonnet | farm/db, ledger, conftest, pyproject | Finishing | agent reply |
+uns\M1a-db-ledger |
 | M1b registry+adapters | worker-build (worktree .claude/worktrees/agent-…) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | Running | agent reply |
-| C1 console core | agy (worktree D:\Harness Farm\wt-c1, branch c1-console) | gemini-3.8-flash-high | console/** , console/sql/views.sql | Running | D:\dev-cacheuns\C1-console-core |
+| C1 console core | agy (cut off) → Sonnet worker-build finishing in D:/Harness Farm/wt-c1 (branch c1-console) | sonnet | console/**, console/sql/views.sql | Finishing | agent reply |
+uns\C1-console-core |
 | M1c router+gateway | worker-build | sonnet | see briefs/M1c | Waiting for M1a+M1b | — |
 Shared contract: `briefs/CONTEXT.md`. Keep-awake helper: D:\dev-cache\keep-awake.ps1 (14 h from 04:57).
 User approved (2026-10-04): Sonnet 5.5 subagents for coding as a second build lane.
@@ -89,6 +93,7 @@ Blockers (user):
 - 2026-10-04: Vercel = user's Hobby account; Console must be a real SaaS-style dashboard to see and adjust the Farm (not an artifact) — user.
 - 2026-10-04: Test Postgres = pgserver (no Docker); Docker Desktop off the critical path — lead.
 - 2026-10-04: Vision confirmed by user: one mega-MCP for Claude; tools in pools of accounts; manager watches billing/usage and fails over so the machine never stops; runs 24/7; also runs agentic work on a pool of AI accounts (user's 3 unused Claude Pro accounts + other AIs). Plan v3 adds the AI pool (M3; corrected 2026-10-04: it is main Claude delegating to other Claude/Codex/Antigravity/Hermes accounts via CLI through the Farm MCP, each AI keeping its own memory) and 24/7 auto-start/watchdog (M5); Console 'Accounts' becomes 'Tools & Pools' — user.
+- 2026-10-04 05:50: **Gemini (agy) weekly quota exhausted** after scaffold + M1a + C1 (~1.36M tokens total): "Individual quota reached… resets in 166h" for every agy model (3.8 flash, 3.1 pro, 3.7). Bulk lane switched to **Sonnet 5.5 worker-build subagents** (user approved 2026-10-04); Hermes for mechanical side jobs. M1a and C1 were cut off mid-way; Sonnet builders finish them from the partial work.
 - 2026-10-04 (later): **AWS Bedrock allowed again, cap $20** — user fixed the AWS warning. Enforce via a Bifrost VK on the bedrock provider (to add at M2 with the LLM route); until then only Hermes' default profile uses Bedrock.
 - 2026-10-04: GitHub push fixed: origin = `https://milvow-ai@github.com/milvow-ai/Tensor.git` (per-repo user; Mr-amaanx untouched elsewhere). Branch pushed; history now on GitHub.
 - 2026-10-04: Hermes limits seen: its secret redaction turned `milvow-ai@` in a URL into `***` (command silently wrong), and it probed credentials beyond its brief. Rule: never give Hermes commands containing user@host URLs or credentials; check its actual effect, not its report.
