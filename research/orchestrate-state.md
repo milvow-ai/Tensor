@@ -21,13 +21,13 @@ Next action: user asked to stop all work (2026-10-02). On return: get answers to
 User brief: research + architecture A–H in docs/TENSOR-FOUNDATION.md (A–C written by lead).
 | Worker | Model | Owns | Status |
 |---|---|---|---|
-| R1 data providers | sonnet | research/r1-data-providers.md | Running |
-| R2 market US/CA | sonnet | research/r2-market.md | Running |
-| R3 email + compliance | sonnet | research/r3-email.md | Running |
-| R4 backend platform | sonnet | research/r4-platform.md | Running |
-| R5 UI + web audit | sonnet | research/r5-ui-and-web.md | Running |
-| R6 AI layer + Hermes + MCP | sonnet | research/r6-ai-layer.md | Running |
-Next: when all report, lead writes D–H + final test, commits.
+| R1 data providers | sonnet | research/r1-data-providers.md | Done |
+| R2 market US/CA | sonnet | research/r2-market.md | Done |
+| R3 email + compliance | sonnet | research/r3-email.md | Done |
+| R4 backend platform | sonnet | research/r4-platform.md | Done |
+| R5 UI + web audit | sonnet | research/r5-ui-and-web.md | Done |
+| R6 AI layer + Hermes + MCP | sonnet | research/r6-ai-layer.md | Done |
+Done 2026-10-03: docs/TENSOR-FOUNDATION.md A–H + final test committed (61b9b8a). Next: user answers "Decisions needed before Phase 3", then Phase 3 plan gate.
 
 ## Contract
 - Phase gate: no product code until the user approves the Phase 2 design. Phase 1 output is research only.
