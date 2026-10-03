@@ -40,10 +40,12 @@ Routing: free model first → v4-flash fallback → v4-pro for important/judgmen
 |---|---|---|---|---|---|
 | M1a db+ledger | agy (cut off by quota) → Sonnet worker-build finishing, main tree | sonnet | farm/db, ledger, conftest, pyproject | Finishing | agent reply |
 uns\M1a-db-ledger |
-| M1b registry+adapters | worker-build (worktree .claude/worktrees/agent-…) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | Running | agent reply |
+| M1b registry+adapters | worker-build (worktree) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | **Merged 932d7eb** (385 tests, gate green; deviations in commit msg) | — |
 | C1 console core | agy (cut off) → Sonnet worker-build finishing in D:/Harness Farm/wt-c1 (branch c1-console) | sonnet | console/**, console/sql/views.sql | Finishing | agent reply |
 uns\C1-console-core |
 | M1c router+gateway | worker-build | sonnet | see briefs/M1c | Waiting for M1a+M1b | — |
+| M2c adapters+LLM | worker-build (worktree) | sonnet | adapters apollo/hunter/pagespeed/adzuna/ats_public, executors/llm.py, schemas, registry | Running | agent reply |
+| M3e-A AI executors | agy (worktree D:/Harness Farm/wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | Running | D:/dev-cache/runs/M3e-ai-pool |
 Shared contract: `briefs/CONTEXT.md`. Keep-awake helper: D:\dev-cache\keep-awake.ps1 (14 h from 04:57).
 User approved (2026-10-04): Sonnet 5.5 subagents for coding as a second build lane.
 
