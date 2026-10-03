@@ -1,8 +1,16 @@
 # Orchestrate state
 
 ## Current state
-Effort: Harness Farm + Farm Console (see HANDOFF.md). Phase: **0 — pre-setup, not started**.
-Next action: new lead session reads CLAUDE.md + HANDOFF.md, asks the user the §8.1 questions, runs §8.2 checks, writes the plan here, waits for "go".
+Effort: Harness Farm + Farm Console (see HANDOFF.md). Phase: **0 — pre-setup, §8.1 questions asked (2026-10-03)**.
+Next action: user answers §8.1 (open: 3–11); then a lead session **on the PC** runs §8.2, writes the plan here, waits for "go".
+
+## Phase 0 findings (verified 2026-10-03, cloud session)
+- Repo restored from bundle `3b4b1ec` onto branch `claude/zen-noether-qa7d3y`; zip == bundle tree.
+- §8.1 Q1 GitHub: first push → HTTP 403; user installed the Claude GitHub App → push OK. Full history now on `origin/claude/zen-noether-qa7d3y` (first branch, so GitHub's default). **Resolved.**
+- §8.1 Q2: this session is a cloud container and cannot reach the PC. §8.2 and Phase 1 need a PC session (`claude remote-control` in the repo folder, or Claude Desktop).
+- Supabase: one org ("milvow-ai's Org"); 3 projects, all INACTIVE: APTIX (ap-southeast-2), milvow-dev (ap-south-1), Milvow_bsp (ap-south-1). 0 of 2 free active slots used → a new `harness-farm` project fits.
+- Vercel: one team, "milvowai-5995's projects" (slug `milvow`); plan not checked (name suggests personal Hobby).
+- Connectors on the cloud session: GitHub (read), Supabase, Vercel, Clay (one workspace; untouched, no credits spent), Notion, Gmail, Google Drive/Calendar, Figma, Firecrawl, Namecheap. **No mem0** → memory import still pending. Cloudflare connector needs authorization.
 
 ## Active workers
 | Worker | Agent | Model | Owns | Status | Output file |
