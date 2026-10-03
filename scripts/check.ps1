@@ -19,7 +19,10 @@ Step "pytest" { uv run pytest -q -p no:cacheprovider }
 # Secret grep over tracked + untracked (non-ignored) files: key-shaped strings must never be committed.
 $files = git ls-files --cached --others --exclude-standard | Where-Object { $_ -notmatch '^(library|research/data)/' -and $_ -notmatch '\.lock$' }
 $pat = 'sk-or-v1-[0-9a-f]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|eyJhbGciOi[A-Za-z0-9_-]{30,}|sk-bf-(?!farm-p0-local-test)[A-Za-z0-9-]{16,}|postgres(ql)?://[^:\s]+:[^@\s]{6,}@'
-$hits = $files | Where-Object { Test-Path $_ -PathType Leaf } | Select-String -Pattern $pat -List | ForEach-Object { "$($_.Path):$($_.LineNumber)" }
+# -LiteralPath: Next.js route folders like [...slug] are wildcard patterns to PowerShell.
+$hits = $files | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | ForEach-Object { Get-Item -LiteralPath $_ } |
+  Select-String -Pattern $pat -List | ForEach-Object { "$($_.Path):$($_.LineNumber)" }
+"      secret-grep scanned $(@($files).Count) files"
 if ($hits) { "FAIL  secret-grep"; $hits; $failed++ } else { "PASS  secret-grep" }
 
 # Optional: files the brief said would change must show up in git status.
