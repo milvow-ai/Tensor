@@ -78,12 +78,23 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
     // 4. Idle paid accounts card & Pause action
     await expect(page.getByRole("heading", { name: "Idle paid accounts (14+ days)" })).toBeVisible();
     const clay07Row = page.getByTestId("idle-account-clay-07");
-    await expect(clay07Row).toBeVisible();
     await expect(clay07Row).toContainText("Clay Pro");
-    const pauseBtn = clay07Row.getByRole("button", { name: "Pause account" });
-    await expect(pauseBtn).toBeVisible();
-    await pauseBtn.click();
-    await expect(page.locator("[data-sonner-toast]", { hasText: "Pause clay-07: done" })).toBeVisible();
+    await expect(clay07Row).toContainText("Needs Login");
+    // Pause an idle account that is Active, then resume it from its pool page: the fixture state is shared by
+    // every spec in this run, so this test must leave it exactly as it found it.
+    const activeIdle = page.locator('[data-testid^="idle-account-"]').filter({ hasText: "Active (Idle)" }).first();
+    await expect(activeIdle).toBeVisible();
+    const idleId = ((await activeIdle.getAttribute("data-testid")) ?? "").replace("idle-account-", "");
+    expect(idleId).toMatch(/^[a-z0-9]+-\d+$/);
+    await activeIdle.getByRole("button", { name: "Pause account" }).click();
+    await expect(page.locator("[data-sonner-toast]", { hasText: `Pause ${idleId}: done` })).toBeVisible();
+
+    await page.goto(`/pools/${idleId.replace(/-\d+$/, "")}`);
+    const poolRow = page.getByTestId("account-row").filter({ hasText: idleId });
+    await expect(poolRow.getByText("Paused", { exact: true })).toBeVisible();
+    await poolRow.getByRole("switch").click();
+    await expect(page.locator("[data-sonner-toast]", { hasText: `Resume ${idleId}: done` })).toBeVisible();
+    await expect(poolRow.getByText("Active", { exact: true })).toBeVisible();
 
     expect(problems()).toEqual([]);
   });
