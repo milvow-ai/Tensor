@@ -51,6 +51,10 @@ def test_real_registry_loads_and_matches_the_brief() -> None:
         "zerobounce",
         "apollo",
         "hunter",
+        "pagespeed",
+        "adzuna",
+        "ats_public",
+        "llm",
         "clay",
         "claude",
         "gemini",
@@ -118,7 +122,7 @@ def test_real_registry_loads_and_matches_the_brief() -> None:
     verify = reg.capabilities["verify_email"]
     assert (verify.kind, verify.routes, verify.strategy, verify.cache_ttl_seconds) == (
         "tool",
-        ["reoon", "zerobounce"],
+        ["reoon", "zerobounce", "hunter"],  # Hunter is the third verify pool (M2c)
         "failover",
         5184000,
     )

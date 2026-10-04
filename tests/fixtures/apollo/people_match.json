@@ -1,0 +1,45 @@
+{
+  "_source": "RECORDED FROM THE DOCS (not live output): the 200 example of https://docs.apollo.io/reference/people-enrichment (POST /people/match), fetched 2026-10-04, trimmed. match_confidence values high/medium/low/none are from the endpoint description. 'locked_email_placeholder', 'no_email', 'match_none' and 'empty_person' are UNVERIFIED variations (the placeholder wording 'email_not_unlocked@...' is from public reports of Apollo responses, not from these docs).",
+  "cases": {
+    "verified": {
+      "person": {
+        "id": "672c91d4a7be42000184f2c9",
+        "first_name": "Jordan",
+        "last_name": "Blake",
+        "name": "Jordan Blake",
+        "linkedin_url": "http://www.linkedin.com/in/jordan-blake-4a7c21",
+        "title": "Founder & CEO",
+        "email_status": "verified",
+        "extrapolated_email_confidence": null,
+        "email": "jordan.blake@northstaranalytics.io",
+        "organization_id": "61f2d5a8c40b7200019e4f31",
+        "match_confidence": "high"
+      },
+      "request_id": 718432950164203900
+    },
+    "extrapolated_email": {
+      "person": {
+        "id": "672c91d4a7be42000184f2d0",
+        "title": "VP Sales",
+        "email_status": "likely to engage",
+        "extrapolated_email_confidence": 0.87,
+        "email": "jordan.blake@northstaranalytics.io",
+        "match_confidence": "medium"
+      }
+    },
+    "locked_email_placeholder": {
+      "person": {
+        "id": "672c91d4a7be42000184f2d1",
+        "title": "CTO",
+        "email": "email_not_unlocked@northstaranalytics.io",
+        "email_status": null,
+        "match_confidence": "medium"
+      }
+    },
+    "no_email": {
+      "person": {"id": "672c91d4a7be42000184f2d2", "first_name": "Jordan", "last_name": "Blake", "title": "Advisor", "email": null, "match_confidence": "low"}
+    },
+    "match_none": {"person": {"match_confidence": "none"}},
+    "empty_person": {"person": null}
+  }
+}

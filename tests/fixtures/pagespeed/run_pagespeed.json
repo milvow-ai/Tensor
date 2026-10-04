@@ -1,0 +1,81 @@
+{
+  "_source": "Structure and field names are from https://developers.google.com/speed/docs/insights/v5/get-started (sample response: loadingExperience.metrics with percentile/distributions/category, lighthouseResult.audits/categories, analysisUTCTimestamp) and https://developers.google.com/speed/docs/insights/rest/v5/pagespeedapi/runpagespeed (schema incl. origin_fallback, runtimeError), fetched 2026-10-04. FIRST_CONTENTFUL_PAINT_MS and INTERACTION_TO_NEXT_PAINT keys appear in those pages; LARGEST_CONTENTFUL_PAINT_MS and CUMULATIVE_LAYOUT_SHIFT_SCORE keys, the x100 scale of the CLS percentile (percentile 7 = CLS 0.07) and the audit ids largest-contentful-paint / cumulative-layout-shift / total-blocking-time / speed-index are UNVERIFIED against the docs pages (they follow public PSI output). The numbers are invented; this is not recorded provider output.",
+  "cases": {
+    "page_level": {
+      "kind": "pagespeedonline#result",
+      "id": "https://example.com/",
+      "loadingExperience": {
+        "id": "https://example.com/",
+        "metrics": {
+          "FIRST_CONTENTFUL_PAINT_MS": {"percentile": 1700, "distributions": [{"min": 0, "max": 1800, "proportion": 0.71}, {"min": 1800, "max": 3000, "proportion": 0.2}, {"min": 3000, "proportion": 0.09}], "category": "FAST"},
+          "LARGEST_CONTENTFUL_PAINT_MS": {"percentile": 2400, "distributions": [{"min": 0, "max": 2500, "proportion": 0.78}, {"min": 2500, "max": 4000, "proportion": 0.15}, {"min": 4000, "proportion": 0.07}], "category": "AVERAGE"},
+          "INTERACTION_TO_NEXT_PAINT": {"percentile": 180, "distributions": [{"min": 0, "max": 200, "proportion": 0.8}, {"min": 200, "max": 500, "proportion": 0.15}, {"min": 500, "proportion": 0.05}], "category": "FAST"},
+          "CUMULATIVE_LAYOUT_SHIFT_SCORE": {"percentile": 7, "distributions": [{"min": 0, "max": 10, "proportion": 0.9}, {"min": 10, "max": 25, "proportion": 0.07}, {"min": 25, "proportion": 0.03}], "category": "FAST"}
+        },
+        "overall_category": "AVERAGE",
+        "initial_url": "https://example.com/"
+      },
+      "originLoadingExperience": {"id": "https://example.com", "metrics": {"LARGEST_CONTENTFUL_PAINT_MS": {"percentile": 3900, "category": "AVERAGE"}}, "overall_category": "AVERAGE"},
+      "lighthouseResult": {
+        "requestedUrl": "https://example.com/",
+        "finalUrl": "https://www.example.com/",
+        "lighthouseVersion": "12.6.0",
+        "fetchTime": "2026-10-04T11:59:40.394Z",
+        "runWarnings": [],
+        "configSettings": {"emulatedFormFactor": "mobile", "locale": "en-US", "onlyCategories": ["performance"]},
+        "audits": {
+          "first-contentful-paint": {"id": "first-contentful-paint", "title": "First Contentful Paint", "score": 0.93, "scoreDisplayMode": "numeric", "numericValue": 1432.5, "displayValue": "1.4 s"},
+          "largest-contentful-paint": {"id": "largest-contentful-paint", "score": 0.7, "scoreDisplayMode": "numeric", "numericValue": 2874.1, "displayValue": "2.9 s"},
+          "cumulative-layout-shift": {"id": "cumulative-layout-shift", "score": 1, "scoreDisplayMode": "numeric", "numericValue": 0.012, "displayValue": "0.012"},
+          "total-blocking-time": {"id": "total-blocking-time", "score": 0.88, "scoreDisplayMode": "numeric", "numericValue": 120, "displayValue": "120 ms"},
+          "speed-index": {"id": "speed-index", "score": 0.95, "scoreDisplayMode": "numeric", "numericValue": 1650.3, "displayValue": "1.7 s"}
+        },
+        "categories": {"performance": {"id": "performance", "title": "Performance", "score": 0.96}}
+      },
+      "analysisUTCTimestamp": "2026-10-04T11:59:40.394Z",
+      "version": {"major": "1", "minor": "0"}
+    },
+    "origin_fallback": {
+      "id": "https://example.com/blog",
+      "loadingExperience": {
+        "id": "https://example.com",
+        "metrics": {
+          "LARGEST_CONTENTFUL_PAINT_MS": {"percentile": 4100, "category": "AVERAGE"},
+          "CUMULATIVE_LAYOUT_SHIFT_SCORE": {"percentile": 31, "category": "SLOW"}
+        },
+        "overall_category": "SLOW",
+        "initial_url": "https://example.com/blog",
+        "origin_fallback": true
+      },
+      "lighthouseResult": {"finalUrl": "https://example.com/blog", "audits": {"largest-contentful-paint": {"numericValue": 5100}}, "categories": {"performance": {"score": 0.41}}},
+      "analysisUTCTimestamp": "2026-10-04T11:59:40.394Z"
+    },
+    "origin_only": {
+      "id": "https://small.example/",
+      "loadingExperience": {"id": "https://small.example/", "initial_url": "https://small.example/"},
+      "originLoadingExperience": {"id": "https://small.example", "metrics": {"INTERACTION_TO_NEXT_PAINT": {"percentile": 640, "category": "SLOW"}}, "overall_category": "SLOW"},
+      "lighthouseResult": {"finalUrl": "https://small.example/", "categories": {"performance": {"score": 0.55}}},
+      "analysisUTCTimestamp": "2026-10-04T11:59:40.394Z"
+    },
+    "no_crux": {
+      "id": "https://tiny.example/",
+      "loadingExperience": {"id": "https://tiny.example/", "initial_url": "https://tiny.example/"},
+      "lighthouseResult": {"finalUrl": "https://tiny.example/", "lighthouseVersion": "12.6.0", "audits": {"first-contentful-paint": {"numericValue": 900}, "cumulative-layout-shift": {"numericValue": 0}}, "categories": {"performance": {"score": 1}}},
+      "analysisUTCTimestamp": "2026-10-04T11:59:40.394Z"
+    },
+    "null_score": {
+      "id": "https://x.example/",
+      "lighthouseResult": {"audits": {"first-contentful-paint": {"numericValue": null, "score": null}}, "categories": {"performance": {"score": null}}}
+    },
+    "no_lighthouse_metrics": {"id": "https://x.example/", "lighthouseResult": {"audits": {}, "categories": {}}},
+    "no_lighthouse_result": {"id": "https://x.example/", "loadingExperience": {"id": "https://x.example/"}},
+    "runtime_error_dns": {
+      "id": "https://nope.example/",
+      "lighthouseResult": {"runtimeError": {"code": "FAILED_DOCUMENT_REQUEST", "message": "Lighthouse was unable to reliably load the page you requested."}, "audits": {}, "categories": {}}
+    },
+    "runtime_error_timeout": {
+      "id": "https://slow.example/",
+      "lighthouseResult": {"runtimeError": {"code": "LIGHTHOUSE_TIMEOUT", "message": "The page took too long."}, "audits": {}, "categories": {}}
+    }
+  }
+}

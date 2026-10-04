@@ -1,0 +1,14 @@
+{
+  "_source": "The envelope {\"errors\": [{\"id\", \"code\", \"details\"}]} and the ids wrong_params, invalid_email and claimed_email are RECORDED FROM THE DOCS (https://hunter.io/api-documentation/v2#errors and the Email Finder / Email Verifier error lists, fetched 2026-10-04), together with the status meanings 403 = rate limit and 429 = usage limit. 'authentication_failed', 'rate_limit_exceeded' and 'usage_limit_reached' are UNVERIFIED plausible ids (the docs list statuses but not ids for these). '{KEY}' is replaced with the test's sentinel key.",
+  "cases": {
+    "wrong_params": {"errors": [{"id": "wrong_params", "code": 400, "details": "You are missing the domain parameter"}]},
+    "invalid_email": {"errors": [{"id": "invalid_email", "code": 400, "details": "The supplied email is invalid"}]},
+    "claimed_email": {"errors": [{"id": "claimed_email", "code": 451, "details": "The person owning the email address asked us to stop processing their personal data"}]},
+    "authentication_failed": {"errors": [{"id": "authentication_failed", "code": 401, "details": "No user found for the API key supplied"}]},
+    "rate_limit_exceeded": {"errors": [{"id": "rate_limit_exceeded", "code": 429, "details": "Too many requests, slow down"}]},
+    "usage_limit_reached": {"errors": [{"id": "usage_limit_reached", "code": 403, "details": "You have reached your monthly usage limit"}]},
+    "no_details": {"errors": [{"id": "something_new"}]},
+    "empty_errors": {"errors": []},
+    "echoes_key": {"errors": [{"id": "authentication_failed", "code": 401, "details": "No user found for the API key {KEY}"}]}
+  }
+}

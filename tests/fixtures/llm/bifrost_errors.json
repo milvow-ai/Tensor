@@ -1,0 +1,21 @@
+{
+  "_source": "'virtual_key_required', 'access_blocked_inactive', 'access_blocked_expired', 'token_limited', 'budget_exceeded' and 'model_blocked' and 'provider_blocked' are RECORDED FROM THE DOCS (not live output): the 'Error Responses' section of library/bifrost/docs/features/governance/virtual-keys.mdx (docs.getbifrost.ai, repo pinned in research/library.tsv), read 2026-10-04. The 'declared_*' cases follow the BifrostError schema of library/bifrost/docs/openapi/openapi.json (extra_fields.error_type, extra_fields.retry_after_ms) and the vocabulary in features/observability/prometheus.mdx; the exact bodies are UNVERIFIED (only the field names and the error_type values are documented). 'bare_*', 'budget_without_type' and 'echoes_vk' are UNVERIFIED variations. '{VK}' is replaced with the test's sentinel virtual key.",
+  "cases": {
+    "virtual_key_required": {"type": "virtual_key_required", "status_code": 401, "error": {"message": "virtual key is required. Provide a virtual key via the x-bf-vk header."}},
+    "access_blocked_inactive": {"type": "access_blocked", "status_code": 403, "error": {"message": "virtual key is inactive"}},
+    "access_blocked_expired": {"type": "access_blocked", "status_code": 403, "error": {"message": "virtual key has expired"}},
+    "token_limited": {"type": "token_limited", "status_code": 429, "error": {"message": "Rate limit exceeded: rate limit violated for vk_model_config * : [token limit exceeded (1500/1000, resets every 1h)]"}},
+    "budget_exceeded": {"type": "budget_exceeded", "status_code": 402, "error": {"message": "Budget exceeded: vk_model_config * budget exceeded: 105.5000 >= 100.0000 dollars"}},
+    "model_blocked": {"type": "model_blocked", "status_code": 403, "error": {"message": "Model 'gpt-4o' is not allowed for virtual key 'my-key'"}},
+    "provider_blocked": {"type": "provider_blocked", "status_code": 403, "error": {"message": "Provider 'anthropic' is not allowed for virtual key 'my-key'"}},
+    "budget_without_type": {"error": {"message": "Budget limit reached for this virtual key"}},
+    "bare_429_text": "Too Many Requests",
+    "declared_provider_rate_limited": {"is_bifrost_error": true, "status_code": 429, "error": {"message": "Rate limit reached for the free model"}, "extra_fields": {"provider": "openrouter", "error_type": "provider_rate_limited", "retry_after_ms": 30000}},
+    "declared_policy_rate_limited": {"is_bifrost_error": true, "status_code": 429, "error": {"message": "Rate limit exceeded: request limit exceeded (61/60, resets every 1m)"}, "extra_fields": {"error_type": "policy_rate_limited"}},
+    "declared_budget": {"is_bifrost_error": true, "status_code": 402, "error": {"message": "Budget exceeded"}, "extra_fields": {"error_type": "policy_budget_exceeded", "retry_after_ms": 120000}},
+    "declared_billing": {"is_bifrost_error": true, "status_code": 402, "error": {"message": "Insufficient credits"}, "extra_fields": {"provider": "openrouter", "error_type": "provider_billing"}},
+    "declared_auth": {"is_bifrost_error": true, "status_code": 401, "error": {"message": "No auth credentials found"}, "extra_fields": {"provider": "openrouter", "error_type": "provider_auth_failed"}},
+    "declared_timeout": {"is_bifrost_error": true, "status_code": 504, "error": {"message": "upstream timed out"}, "extra_fields": {"error_type": "provider_timeout"}},
+    "echoes_vk": {"type": "access_blocked", "status_code": 403, "error": {"message": "virtual key {VK} is inactive"}}
+  }
+}

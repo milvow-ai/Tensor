@@ -55,8 +55,11 @@ providers:
         auth_ref: env:APOLLO_API_KEY
         status: needs_login
         priority: 1
+        rate_per_min: 50          # Free plan: 50/min per endpoint (docs.apollo.io/reference/rate-limits)
         units:
-          credits: {limit: null}
+          # people search 0, organization enrich 1, people match 1 when a person is matched. The adapter
+          # reports the real charge, so success commits exactly that. Fill the plan's allowance here.
+          credits: {limit: null, charged_on: success}
 
   hunter:
     name: Hunter
@@ -68,8 +71,107 @@ providers:
         label: Hunter
         auth_ref: env:HUNTER_API_KEY
         priority: 1
+        concurrency: 2            # the verifier can hold a request for 20 s
         units:
-          credits: {limit: null}     # no adapter or route yet; fill the real allowance before routing to it
+          # Fill the plan's allowance (and period) from Hunter's account page; GET /v2/account reports them.
+          searches: {limit: null, charged_on: found}            # email finder: 1 only when an email is found
+          verifications: {limit: null, charged_on: success}     # email verifier: 1 per answer
+
+  pagespeed:
+    name: Google PageSpeed Insights
+    kind: tool
+    executor: api
+    default_strategy: failover
+    connections:
+      - id: pagespeed-01
+        label: PageSpeed Insights API key
+        auth_ref: env:GOOGLE_PAGESPEED_API_KEY
+        priority: 1
+        concurrency: 3            # one run takes 10-30 s
+        plan: {name: free, price_usd: 0}
+        units:
+          requests: {limit: 25000, period: day, charged_on: attempt}
+
+  adzuna:
+    name: Adzuna
+    kind: tool
+    executor: api
+    default_strategy: failover
+    connections:
+      - id: adzuna-01
+        label: Adzuna (250 hits/day, 25/min)
+        auth_ref: env:ADZUNA_APP_KEY
+        priority: 1
+        rate_per_min: 25
+        meta: {app_id_ref: "env:ADZUNA_APP_ID"}   # Adzuna wants an app id and an app key; both stay in .env
+        plan: {name: free, price_usd: 0}
+        units:
+          # Adzuna also caps 1,000/week and 2,500/month; only the daily cap is tracked here, the others
+          # surface as a 429 from Adzuna.
+          requests: {limit: 250, period: day, charged_on: attempt}
+
+  ats_public:
+    name: Public job boards (Greenhouse, Lever, Ashby)
+    kind: tool
+    executor: api
+    default_strategy: failover
+    connections:
+      - id: ats-public-01
+        label: Public ATS job-board JSON (no key, no quota)
+        auth_ref: "cli:none"      # needs no credential; the schema requires an auth_ref and this one is never resolved
+        priority: 1
+        concurrency: 4
+        units:
+          requests: {limit: null}
+
+  llm:
+    name: LLM via Bifrost
+    kind: tool
+    executor: llm
+    default_strategy: failover
+    # Every connection uses the one Bifrost virtual key (env:BIFROST_FARM_VK): the Farm never holds an LLM
+    # provider key. Bifrost owns the provider keys, the key's spend budget and its rate limits. The model is
+    # meta.model; meta.structured_output is "prompt" (default) or "json_schema" (also send response_format).
+    connections:
+      - id: llm-or-free
+        label: OpenRouter free model (20/min, 50/day until $10 of credits are bought)
+        auth_ref: env:BIFROST_FARM_VK
+        priority: 1
+        rate_per_min: 20
+        meta: {model: "openrouter/qwen/qwen3.8-27b:free"}
+        plan: {name: free, price_usd: 0}
+        units:
+          requests: {limit: 50, period: day, charged_on: attempt}   # 1,000/day after ~$10 of credits
+          tokens: {limit: null, charged_on: attempt}
+      - id: llm-or-flash
+        label: OpenRouter DeepSeek V4 Flash (paid per token, billed through the Bifrost key budget)
+        auth_ref: env:BIFROST_FARM_VK
+        priority: 2
+        concurrency: 2
+        meta: {model: "openrouter/deepseek/deepseek-v4-flash"}
+        units:
+          requests: {limit: null, charged_on: attempt}
+          tokens: {limit: null, charged_on: attempt}
+      - id: llm-groq
+        label: Groq free (30/min, 1,000/day) - needs a Groq key in Bifrost
+        auth_ref: env:BIFROST_FARM_VK
+        status: needs_login       # until a Groq key exists and Bifrost has it
+        priority: 3
+        rate_per_min: 30
+        meta: {model: "groq/qwen/qwen3.8-27b"}
+        plan: {name: free, price_usd: 0}
+        units:
+          requests: {limit: 1000, period: day, charged_on: attempt}
+          tokens: {limit: null, charged_on: attempt}
+      - id: llm-bedrock
+        label: AWS Bedrock (paid; capped at $20 by the Bifrost key budget)
+        auth_ref: env:BIFROST_FARM_VK
+        status: paused            # the owner enables it in the Console
+        priority: 4
+        meta: {model: "bedrock_mantle/qwen.qwen3-coder-next"}   # must be a model the Bifrost key may use
+        units:
+          requests: {limit: null, charged_on: attempt}
+          tokens: {limit: null, charged_on: attempt}
 
   clay:
     name: Clay
@@ -165,9 +267,58 @@ capabilities:
   verify_email:
     kind: tool
     description: Verify that an email address exists and can receive mail.
-    routes: [reoon, zerobounce]
+    routes: [reoon, zerobounce, hunter]
     strategy: failover
     cache_ttl_seconds: 5184000          # 60 days
+
+  find_person:
+    kind: tool
+    description: Find people at a company by domain, optionally filtered by job title and seniority.
+    routes: [apollo, clay]
+    strategy: failover
+    cache_ttl_seconds: 604800           # 7 days
+
+  find_email:
+    kind: tool
+    description: Find a person's work email from first name, last name and company domain.
+    routes: [hunter, apollo]
+    strategy: failover
+    cache_ttl_seconds: 2592000          # 30 days
+
+  enrich_company:
+    kind: tool
+    description: Company profile from a domain (name, industry, size, location, socials, technologies).
+    routes: [apollo, clay]
+    strategy: failover
+    cache_ttl_seconds: 2592000          # 30 days
+
+  pagespeed:
+    kind: tool
+    description: PageSpeed Insights for a URL, with real-user Core Web Vitals (CrUX) and Lighthouse lab metrics kept apart.
+    routes: [pagespeed]
+    strategy: failover
+    cache_ttl_seconds: 86400            # 1 day
+
+  jobs_lookup:
+    kind: tool
+    description: Open job postings of a company (public ATS boards) or matching a search (Adzuna).
+    routes: [ats_public, adzuna]
+    strategy: failover
+    cache_ttl_seconds: 21600            # 6 hours
+
+  extract:
+    kind: tool
+    description: Pull structured data out of text, validated against a JSON Schema (LLM through Bifrost).
+    routes: [llm]
+    strategy: failover
+    cache_ttl_seconds: 86400            # 1 day; temperature 0, so identical input gives the same answer
+
+  classify:
+    kind: tool
+    description: Pick one label for a text from a given list, with a self-reported confidence (LLM through Bifrost).
+    routes: [llm]
+    strategy: failover
+    cache_ttl_seconds: 86400            # 1 day
 
   ask_ai:
     kind: ai
@@ -188,6 +339,10 @@ budgets:
     zerobounce: 0
     apollo: 0
     hunter: 0
+    pagespeed: 0
+    adzuna: 0
+    ats_public: 0
+    llm: 0
     clay: 0
     claude: 0
     gemini: 0
