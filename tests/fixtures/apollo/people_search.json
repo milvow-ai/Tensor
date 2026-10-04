@@ -1,0 +1,58 @@
+{
+  "_source": "RECORDED FROM THE DOCS (not live output): the 200 example of https://docs.apollo.io/reference/people-api-search (POST /mixed_people/api_search), fetched 2026-10-04, trimmed to three people. 'masked_and_full' and 'no_name' are UNVERIFIED variations written to exercise the mapping (the docs never show a response with an unmasked surname).",
+  "cases": {
+    "ok": {
+      "total_entries": 232764882,
+      "people": [
+        {
+          "id": "67bdafd0c3a4c50001bbd7c2",
+          "first_name": "Andrew",
+          "last_name_obfuscated": "Hu***n",
+          "title": "Professor and Neuroscientist at Stanford & Host",
+          "last_refreshed_at": "2025-11-04T23:20:32.690+00:00",
+          "has_email": true,
+          "has_city": true,
+          "has_state": true,
+          "has_country": true,
+          "has_direct_phone": "Yes",
+          "organization": {"name": "Scicomm Media", "has_industry": true, "has_phone": false}
+        },
+        {
+          "id": "6775057df8360a0001a6852c",
+          "first_name": "Jon",
+          "last_name_obfuscated": "St***g",
+          "title": "Managing Director",
+          "last_refreshed_at": "2025-11-05T15:56:08.901+00:00",
+          "has_email": true,
+          "has_direct_phone": "Yes",
+          "organization": {"name": "Lazard", "has_industry": true, "has_phone": true}
+        },
+        {
+          "id": "637dd5071c576c0001ccbff4",
+          "first_name": "Lorena",
+          "last_name_obfuscated": "Ac***a",
+          "title": "Director of Operations",
+          "last_refreshed_at": "2025-11-03T10:01:50.493+00:00",
+          "has_email": false,
+          "has_direct_phone": "No",
+          "organization": {"name": "Be Busy Being Awesome", "has_industry": true}
+        }
+      ]
+    },
+    "empty": {"total_entries": 0, "people": []},
+    "masked_and_full": {
+      "total_entries": 2,
+      "people": [
+        {"id": "a1", "first_name": "Jordan", "last_name": "Blake", "title": "Founder & CEO", "linkedin_url": "http://www.linkedin.com/in/jordan-blake-4a7c21", "has_email": true, "organization": {"name": "Northstar Analytics"}},
+        {"id": "a2", "name": "Casey Morgan", "first_name": "Casey", "title": "President", "organization": {"name": "Northstar Analytics"}}
+      ]
+    },
+    "no_name": {
+      "total_entries": 2,
+      "people": [
+        {"id": "b1", "title": "Ghost with no name"},
+        {"id": "b2", "first_name": "Sam", "last_name_obfuscated": "Li***u", "title": "CTO"}
+      ]
+    }
+  }
+}

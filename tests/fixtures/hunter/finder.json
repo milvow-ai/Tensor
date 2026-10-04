@@ -1,0 +1,34 @@
+{
+  "_source": "'found' is RECORDED FROM THE DOCS (not live output): the 200 example of https://hunter.io/api-documentation/v2#email-finder (GET /v2/email-finder), fetched 2026-10-04, sources trimmed. The other cases are UNVERIFIED variations of that shape: the docs state that an unfound email is 'no credit is charged' and that verification.status is valid, accept_all or unknown, but show no example of a miss.",
+  "cases": {
+    "found": {
+      "data": {
+        "first_name": "Alexis",
+        "last_name": "Ohanian",
+        "email": "alexis@reddit.com",
+        "score": 97,
+        "domain": "reddit.com",
+        "accept_all": false,
+        "position": "Cofounder",
+        "twitter": null,
+        "linkedin_url": null,
+        "phone_number": null,
+        "company": "Reddit",
+        "sources": [{"domain": "redditblog.com", "uri": "http://redditblog.com/2008/10/22/widgets-get-an-upgrade", "extracted_on": "2018-10-19", "last_seen_on": "2021-05-18", "still_on_page": true}],
+        "verification": {"date": "2021-06-14", "status": "valid"}
+      },
+      "meta": {"params": {"first_name": "Alexis", "last_name": "Ohanian", "full_name": null, "domain": "reddit.com", "company": null, "max_duration": null}}
+    },
+    "accept_all": {
+      "data": {"first_name": "Alexis", "last_name": "Ohanian", "email": "alexis@reddit.com", "score": 62, "domain": "reddit.com", "accept_all": true, "position": null, "linkedin_url": "https://www.linkedin.com/in/alexisohanian", "company": "Reddit", "sources": [], "verification": {"date": "2026-09-30", "status": "accept_all"}}
+    },
+    "unverified_guess": {
+      "data": {"first_name": "Alexis", "last_name": "Ohanian", "email": "alexis@reddit.com", "score": 44.6, "domain": "reddit.com", "accept_all": false, "position": "Cofounder", "linkedin_url": null, "company": "Reddit", "sources": [], "verification": {"date": null, "status": "unknown"}}
+    },
+    "no_email": {
+      "data": {"first_name": "Alexis", "last_name": "Ohanian", "email": null, "score": null, "domain": "reddit.com", "accept_all": false, "position": null, "linkedin_url": null, "company": "Reddit", "sources": [], "verification": null}
+    },
+    "blank_email": {"data": {"email": "   "}},
+    "no_data_key": {"meta": {"params": {}}}
+  }
+}

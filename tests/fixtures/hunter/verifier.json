@@ -1,0 +1,30 @@
+{
+  "_source": "'valid' is RECORDED FROM THE DOCS (not live output): the 200 example of https://hunter.io/api-documentation/v2#email-verifier (GET /v2/email-verifier), fetched 2026-10-04, sources trimmed. The other cases keep that shape and change the status/flags to each of the six documented status values (valid, invalid, accept_all, webmail, disposable, unknown); they are UNVERIFIED as recorded output.",
+  "cases": {
+    "valid": {
+      "data": {"status": "valid", "score": 100, "email": "patrick@stripe.com", "regexp": true, "gibberish": false, "disposable": false, "webmail": false, "mx_records": true, "smtp_server": true, "smtp_check": true, "accept_all": false, "block": false, "verification": {"date": "2026-09-14", "status": "valid"}, "sources": []},
+      "meta": {"params": {"email": "patrick@stripe.com"}}
+    },
+    "invalid": {
+      "data": {"status": "invalid", "score": 0, "email": "nobody@stripe.com", "regexp": true, "gibberish": false, "disposable": false, "webmail": false, "mx_records": true, "smtp_server": true, "smtp_check": false, "accept_all": false, "block": false, "verification": {"date": "2026-09-14", "status": "invalid"}, "sources": []}
+    },
+    "invalid_syntax": {
+      "data": {"status": "invalid", "score": 0, "email": "nobody@stripe", "regexp": false, "gibberish": false, "disposable": false, "webmail": false, "mx_records": false, "smtp_server": false, "smtp_check": false, "accept_all": false, "block": false, "verification": null, "sources": []}
+    },
+    "invalid_no_mx": {
+      "data": {"status": "invalid", "score": 0, "email": "nobody@no-mail.example", "regexp": true, "gibberish": false, "disposable": false, "webmail": false, "mx_records": false, "smtp_server": false, "smtp_check": false, "accept_all": false, "block": false, "verification": null, "sources": []}
+    },
+    "accept_all": {
+      "data": {"status": "accept_all", "score": 70, "email": "anyone@catchall.example", "regexp": true, "gibberish": false, "disposable": false, "webmail": false, "mx_records": true, "smtp_server": true, "smtp_check": true, "accept_all": true, "block": false, "verification": {"date": "2026-09-14", "status": "accept_all"}, "sources": []}
+    },
+    "webmail": {
+      "data": {"status": "webmail", "score": 50, "email": "someone@gmail.com", "regexp": true, "gibberish": false, "disposable": false, "webmail": true, "mx_records": true, "smtp_server": true, "smtp_check": true, "accept_all": false, "block": false, "verification": null, "sources": []}
+    },
+    "disposable": {
+      "data": {"status": "disposable", "score": 50, "email": "x@mailinator.com", "regexp": true, "gibberish": false, "disposable": true, "webmail": false, "mx_records": true, "smtp_server": true, "smtp_check": true, "accept_all": false, "block": false, "verification": null, "sources": []}
+    },
+    "unknown": {
+      "data": {"status": "unknown", "score": 0, "email": "x@blocked.example", "regexp": true, "gibberish": false, "disposable": false, "webmail": false, "mx_records": true, "smtp_server": false, "smtp_check": false, "accept_all": false, "block": true, "verification": null, "sources": []}
+    }
+  }
+}

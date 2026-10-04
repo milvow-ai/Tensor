@@ -1,0 +1,37 @@
+{
+  "_source": "Field names are from the Lever postings API README (https://github.com/lever/postings-api, fetched 2026-10-04): GET /v0/postings/SITE?mode=json returns a JSON list of postings with id, text, categories {location, commitment, team, department, allLocations}, country, hostedUrl, applyUrl, workplaceType (unspecified|on-site|remote|hybrid) and an optional salaryRange {currency, interval, min, max}. The values are invented and 'createdAt' (ms since epoch) is UNVERIFIED (not in the README's field table). Not recorded provider output.",
+  "cases": {
+    "ok": [
+      {
+        "id": "5ac21346-8e0c-4494-8e7a-3eb92ff77902",
+        "text": "Backend Engineer",
+        "categories": {"location": "San Francisco", "commitment": "Full-time", "team": "Platform", "department": "Engineering", "allLocations": ["San Francisco", "Remote"]},
+        "country": "US",
+        "hostedUrl": "https://jobs.lever.co/acme/5ac21346-8e0c-4494-8e7a-3eb92ff77902",
+        "applyUrl": "https://jobs.lever.co/acme/5ac21346-8e0c-4494-8e7a-3eb92ff77902/apply",
+        "workplaceType": "remote",
+        "salaryRange": {"currency": "USD", "interval": "per-year-salary", "min": 150000, "max": 190000},
+        "createdAt": 1759579200000
+      },
+      {
+        "id": "b7c1d2e3-0000-4000-8000-000000000002",
+        "text": "Warehouse Associate",
+        "categories": {"location": "Austin", "commitment": "Part-time", "team": "Operations"},
+        "country": "US",
+        "hostedUrl": "https://jobs.lever.co/acme/b7c1d2e3-0000-4000-8000-000000000002",
+        "workplaceType": "on-site",
+        "salaryRange": {"currency": "USD", "interval": "per-hour-wage", "min": 18, "max": 22}
+      },
+      {
+        "id": "c0ffee00-0000-4000-8000-000000000003",
+        "text": "Account Executive",
+        "categories": {"location": "Chicago", "team": "Sales"},
+        "hostedUrl": "https://jobs.lever.co/acme/c0ffee00-0000-4000-8000-000000000003",
+        "workplaceType": "unspecified"
+      },
+      {"id": "no-url", "text": "Unusable: no hostedUrl"}
+    ],
+    "empty": [],
+    "wrong_shape": {"ok": false, "error": "Document not found"}
+  }
+}

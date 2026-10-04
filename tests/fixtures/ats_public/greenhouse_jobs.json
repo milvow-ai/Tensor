@@ -1,0 +1,35 @@
+{
+  "_source": "'ok' is RECORDED FROM THE DOCS (not live output): the 'List jobs' example of https://developers.greenhouse.io/job-board.html (GET https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs), fetched 2026-10-04, plus a second job built to the same field list. 'empty' and 'unusable' are UNVERIFIED variations.",
+  "cases": {
+    "ok": {
+      "jobs": [
+        {
+          "id": 127817,
+          "internal_job_id": 144381,
+          "title": "Vault Designer",
+          "updated_at": "2016-01-14T10:55:28-05:00",
+          "requisition_id": "50",
+          "location": {"name": "NYC"},
+          "absolute_url": "https://boards.greenhouse.io/vaulttec/jobs/127817",
+          "language": "en",
+          "metadata": null
+        },
+        {
+          "id": 127818,
+          "internal_job_id": 144382,
+          "title": "Vault Engineer",
+          "updated_at": "2016-01-15T09:00:00-05:00",
+          "requisition_id": "51",
+          "location": {"name": "Remote - US"},
+          "absolute_url": "https://boards.greenhouse.io/vaulttec/jobs/127818",
+          "language": "en",
+          "metadata": null
+        }
+      ],
+      "meta": {"total": 2}
+    },
+    "empty": {"jobs": [], "meta": {"total": 0}},
+    "unusable": {"jobs": [{"id": 1, "title": "No url"}, {"title": "No id", "absolute_url": "https://boards.greenhouse.io/x/jobs/2"}, "not an object"], "meta": {"total": 3}},
+    "no_jobs_key": {"meta": {"total": 0}}
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "_source": "RECORDED FROM THE DOCS (not live output): the 200 example of https://docs.apollo.io/reference/organization-enrichment (GET /organizations/enrich), fetched 2026-10-04, trimmed to the fields the adapter reads. 'no_org_key', 'null_org', 'empty_org' and 'no_technology_names' are UNVERIFIED: the docs do not say what Apollo answers when it knows no organization.",
+  "cases": {
+    "apollo_io": {
+      "organization": {
+        "id": "5e66b6381e05b4008c8331b8",
+        "name": "Apollo.io",
+        "website_url": "http://www.apollo.io",
+        "linkedin_url": "https://www.linkedin.com/company/apolloio",
+        "twitter_url": "https://x.com/useapolloio",
+        "facebook_url": "https://www.facebook.com/example-company",
+        "founded_year": 2015,
+        "primary_domain": "apollo.io",
+        "industry": "information technology & services",
+        "estimated_num_employees": 1600,
+        "city": "San Francisco",
+        "state": "California",
+        "country": "United States",
+        "short_description": "Apollo.io combines a buyer database of over 270M contacts and powerful sales engagement and automation tools in one, easy to use platform.",
+        "technology_names": ["AI", "Android", "Salesforce", "Stripe", "WordPress.org", "reCAPTCHA"],
+        "current_technologies": [{"uid": "ai", "name": "AI", "category": "Other"}]
+      }
+    },
+    "no_technology_names": {
+      "organization": {
+        "name": "Northstar Analytics",
+        "primary_domain": "northstaranalytics.io",
+        "estimated_num_employees": 42,
+        "current_technologies": [
+          {"uid": "wordpress_org", "name": "WordPress.org", "category": "CMS"},
+          {"uid": "recaptcha", "name": "reCAPTCHA", "category": "Captcha"}
+        ]
+      }
+    },
+    "no_org_key": {},
+    "null_org": {"organization": null},
+    "empty_org": {"organization": {}}
+  }
+}

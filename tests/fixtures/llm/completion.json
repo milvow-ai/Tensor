@@ -1,0 +1,35 @@
+{
+  "_source": "Shape of a Bifrost /v1/chat/completions success body (OpenAI-compatible), from library/bifrost/docs/openapi/openapi.json (ChatCompletionResponse: id, choices[].message/finish_reason, model, usage.prompt_tokens/completion_tokens/total_tokens/cost, extra_fields), read 2026-10-04. 'cost_object' is the 2.0.0 shape shown in library/bifrost/docs/migration-guides/v2.0.0.mdx (input_cost, output_cost, total_cost 0.0096); 'cost_bare_number' is the legacy shape that doc says still parses. The values are invented; this is not recorded provider output. '{CONTENT}' is replaced with the answer text of each test.",
+  "cases": {
+    "cost_object": {
+      "id": "chatcmpl-test-1",
+      "object": "chat.completion",
+      "created": 1759579200,
+      "model": "openrouter/qwen/qwen3.8-27b:free",
+      "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "{CONTENT}"}}],
+      "usage": {
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "total_tokens": 150,
+        "cost": {"input_cost": 0.0021, "input_cost_details": {"text_cost": 0.0021}, "output_cost": 0.0075, "output_cost_details": {"text_cost": 0.0071, "reasoning_cost": 0.0004}, "total_cost": 0.0096}
+      },
+      "extra_fields": {"request_type": "chat_completion", "provider": "openrouter", "model_requested": "qwen/qwen3.8-27b:free"}
+    },
+    "cost_bare_number": {
+      "id": "chatcmpl-test-2",
+      "model": "openrouter/deepseek/deepseek-v4-flash",
+      "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "{CONTENT}"}}],
+      "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.0003}
+    },
+    "no_cost": {
+      "id": "chatcmpl-test-3",
+      "model": "openrouter/qwen/qwen3.8-27b:free",
+      "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "{CONTENT}"}}],
+      "usage": {"prompt_tokens": 40, "completion_tokens": 8}
+    },
+    "no_usage": {
+      "id": "chatcmpl-test-4",
+      "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "{CONTENT}"}}]
+    }
+  }
+}

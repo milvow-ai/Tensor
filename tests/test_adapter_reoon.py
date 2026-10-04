@@ -676,12 +676,14 @@ def test_clip_flattens_and_bounds_provider_text() -> None:
 
 
 def test_adapter_registry_and_executor_contract() -> None:
-    assert ADAPTERS == {"reoon": ReoonAdapter, "zerobounce": ZeroBounceAdapter}
+    assert ADAPTERS["reoon"] is ReoonAdapter and ADAPTERS["zerobounce"] is ZeroBounceAdapter
     for provider_id, cls in ADAPTERS.items():
         assert issubclass(cls, ApiAdapter) and cls.provider_id == provider_id
         adapter = cls(clock=lambda: NOW)
         assert isinstance(adapter, Executor)
-        assert "verify_email" in adapter.capabilities()
+        assert adapter.capabilities()  # every adapter serves at least one capability
+    for verifier in (ReoonAdapter, ZeroBounceAdapter):
+        assert "verify_email" in verifier().capabilities()
 
 
 async def test_adapter_creates_and_closes_its_own_client_but_not_an_injected_one(
