@@ -2,6 +2,16 @@
 
 Owner: lead. Builders read it, never edit it. If something here is wrong or missing, say so in your reply instead of guessing.
 
+## 0. Quality bar (the owner's words: "real engineering, a real builder/developer product — not average, not vibe-coded")
+Single owner, single workspace — no multi-tenant or scale-for-others work. But every line is production engineering:
+- **Correct under failure first.** Concurrency, crashes, timeouts, partial failures, retries and restarts are designed and tested, not hoped for. Every money/quota path is atomic and idempotent.
+- **Tests prove behaviour, not lines.** Each acceptance test reproduces the real failure it guards (kill the process, exhaust the account, race 200 tasks). No test that cannot fail. No mocking the thing under test.
+- **Typed, explicit, small.** mypy strict, Pydantic at every boundary, no `Any` leaking out of adapters, no dead code, no TODOs left behind, no copy-paste between adapters (shared code lives in the template/base).
+- **Observable.** Every decision the Farm makes is visible in `run_events`/logs with a reason; errors carry a kind, a cause and what the owner should do.
+- **Safe by construction.** Secrets never cross a log, an error string, a DB row, a test output or the Console. Inputs validated; SQL parameterised; subprocesses with argv lists, timeouts and kill-on-timeout.
+- **Real, not demo.** Real data paths, real CLIs, real Postgres. Fixtures exist only for tests and clearly marked local dev. Every UI state (loading, empty, error, needs-login, exhausted) designed. No lorem ipsum, no placeholder screens pretending to work.
+- **Report honestly.** If something is not done, unverified or a deviation, say so in the reply. A smaller true result beats a bigger claimed one.
+
 ## 1. What we build
 One MCP server ("Harness Farm") that Claude calls for **capabilities** (verify an email, enrich a company, ask another AI…).
 The Farm picks a **provider pool** (a tool such as Clay, or an AI such as Claude) and an **account/connection** inside it, reserves quota,

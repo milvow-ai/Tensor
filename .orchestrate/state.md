@@ -1,8 +1,15 @@
 # Orchestrate state
 
 ## Current state
-Effort: Harness Farm + Farm Console (see HANDOFF.md). Phase: **0 — pre-setup DONE 2026-10-04 except user blockers; plan v2 written; waiting for "go"**.
-Next action: on "go" → start Bifrost (`scripts/start-bifrost.ps1`), write briefs M1a–M1d, run M1.
+Effort: Harness Farm + Farm Console. Phase: **1 — building (paused 2026-10-04 ~07:00: Claude Pro usage limit reached)**.
+Done + merged: Phase 0; briefs for M1a–M5, C1 (briefs/); CONTEXT.md (§0 quality bar); **M1b merged 932d7eb**.
+**RESUME HERE (next session):**
+1. Main tree `D:\Harness Farm\Tensor` has UNCOMMITTED M1a work (Gemini partial + Sonnet finisher, may be cut off): farm/db/**, farm/resources/ledger.py, tests/conftest.py, tests/test_ledger.py, test_db_schema.py, test_accept_m1_ledger_concurrency.py, pyproject/uv.lock, cli.py, settings.py. Run `powershell -File scripts/check.ps1`; finish/fix per briefs/M1a-db-ledger.md; then commit.
+2. `D:\Harness Farm\wt-c1` (branch c1-console): C1 Console partial (Gemini stripped starter, Sonnet finisher possibly cut off). Check `pnpm check` + `pnpm test:e2e` in console/; finish per briefs/C1-console-core.md; then merge; wrap console/sql/views.sql into Alembic 0003.
+3. `D:\Harness Farm\wt-m3e` (branch m3e-ai-pool): M3e phase A (Gemini) FINISHED but UNREVIEWED — read D:/dev-cache/runs/M3e-ai-pool/agy.json reply, run its tests, review, merge (keep M1b's farm/executors/base.py on conflict).
+4. M2c (Sonnet, worktree under .claude/worktrees/agent-*): possibly partial — inspect `git worktree list`, run checks, finish or relaunch from briefs/M2c-adapters-llm.md.
+5. Then: M1c (Sonnet) → M1 milestone gate (adversarial review workflow + real e2e) → M2a/M2b → M3a/M3b/M3c/M3e-B → M4 → M5 → C2/C3.
+Services: Bifrost via scripts/start-bifrost.ps1 (127.0.0.1:8080); keep-awake helper until ~19:00; agy on owner's Gemini Pro account (works); Hermes profiles farm-builder (Bifrost), farm-builder-bedrock (AWS, cap $20).
 
 ## Phase 0 findings (2026-10-04, PC: Windows 11, 15.3 GB RAM)
 - Repo cloned from bundle to `C:\Users\Amaan\Harness Farm\Tensor`. Push as GitHub user `Mr-amaanx` → 403 (no write access to milvow-ai/Tensor).
@@ -40,17 +47,19 @@ Routing: free model first → v4-flash fallback → v4-pro for important/judgmen
 |---|---|---|---|---|---|
 | M1a db+ledger | agy (cut off by quota) → Sonnet worker-build finishing, main tree | sonnet | farm/db, ledger, conftest, pyproject | Finishing | agent reply |
 uns\M1a-db-ledger |
-| M1b registry+adapters | worker-build (worktree .claude/worktrees/agent-…) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | Running | agent reply |
+| M1b registry+adapters | worker-build (worktree) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | **Merged 932d7eb** (385 tests, gate green; deviations in commit msg) | — |
 | C1 console core | agy (cut off) → Sonnet worker-build finishing in D:/Harness Farm/wt-c1 (branch c1-console) | sonnet | console/**, console/sql/views.sql | Finishing | agent reply |
 uns\C1-console-core |
 | M1c router+gateway | worker-build | sonnet | see briefs/M1c | Waiting for M1a+M1b | — |
+| M2c adapters+LLM | worker-build (worktree) | sonnet | adapters apollo/hunter/pagespeed/adzuna/ats_public, executors/llm.py, schemas, registry | Running | agent reply |
+| M3e-A AI executors | agy (worktree D:/Harness Farm/wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | Running | D:/dev-cache/runs/M3e-ai-pool |
 Shared contract: `briefs/CONTEXT.md`. Keep-awake helper: D:\dev-cache\keep-awake.ps1 (14 h from 04:57).
 User approved (2026-10-04): Sonnet 5.5 subagents for coding as a second build lane.
 
 ## Plan — Phase 1 (Farm) + Phase 2 (Console)  [v3.1 2026-10-04: v2 review fixes + AI pool (M3) + 24/7; waiting for user "go"]
 
 Owners: **G** = Gemini 3.8 Flash High via `scripts/run-agy.ps1` (bulk code; quota fallback → gemini-3.1-pro-high → lead writes small pieces) · **H** = Hermes `farm-builder` via `scripts/run-hermes.ps1` (Bifrost VK $1.50 cap; v4-flash default, free models one at a time, v4-pro for judgment) — fixtures, docs, repetitive edits · **S** = `scripts/check.ps1` (ruff, mypy, pytest, secret grep, expected files; zero tokens) · **WC** = worker-check (Sonnet), once per milestone · **L** = lead (briefs, diff review, commit, push, state).
-Round = brief → G/H → S (fix loop ≤ 2) → WC at milestone end → L reviews `git diff --stat` + key hunks → commit → push → state + token/cost tally (`D:\dev-cache\runs\ledger.tsv`).
+Round = brief → builder (Gemini / Sonnet / Hermes) → S (fix loop ≤ 2) → **milestone gate: adversarial review workflow (2–3 verifier agents with distinct lenses: correctness-under-failure, security/secret-safety, test-honesty — each tries to break the milestone; confirmed findings go back to the builder)** → real end-to-end run (real Postgres, real MCP client, real CLIs where logged in) → L reviews diff → commit → push → state + cost tally (D:/dev-cache/runs/ledger.tsv). Quality bar = `briefs/CONTEXT.md` §0 (owner 2026-10-04: real engineering, single-owner SaaS quality, no vibe code).
 Tests never spend credits: respx/vcrpy, network blocked in pytest. Exception: once keys exist, L records ONE happy-path cassette per adapter from a free-tier call (redacted) — fault cases stay doc-derived. Test DB = `pgserver` (PG 16, data in FARM_DATA_DIR=D:/farm-data); runtime DB = Supabase `harness-farm` (PG 17) — SQL kept PG16-compatible.
 
 | # | Scope | Briefs (owner) | Done when (S, then WC) | Box |

@@ -1,0 +1,20 @@
+{
+  "_source": "https://www.zerobounce.net/docs/email-validation-api-quickstart/v2-credit-balance, fetched 2026-10-04. 'ok' and 'invalid_key' are the documented success / error examples ({\"Credits\": -1} means the API key is invalid); 'zero', 'numeric_string' and 'missing' are variations.",
+  "cases": {
+    "ok": {
+      "Credits": 2375323
+    },
+    "zero": {
+      "Credits": 0
+    },
+    "invalid_key": {
+      "Credits": -1
+    },
+    "numeric_string": {
+      "Credits": "1500"
+    },
+    "missing": {
+      "Balance": 5
+    }
+  }
+}

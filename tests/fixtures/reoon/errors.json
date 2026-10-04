@@ -1,0 +1,36 @@
+{
+  "_source": "UNVERIFIED: the single-verify error body is not documented. Only {\"status\": \"error\", \"reason\": \"...\"} is documented, for the bulk endpoints (https://www.reoon.com/articles/api-documentation-of-reoon-email-verifier/, fetched 2026-10-04). The reason texts below are plausible wordings used to exercise the classifier, not recorded provider output. '{KEY}' is replaced with the test's sentinel key.",
+  "cases": {
+    "auth_reason": {
+      "status": "error",
+      "reason": "Invalid API key"
+    },
+    "inactive_key_reason": {
+      "status": "error",
+      "reason": "Your API key is not active"
+    },
+    "limit_reason": {
+      "status": "error",
+      "reason": "Daily limit exceeded, no credits left"
+    },
+    "rate_reason": {
+      "status": "error",
+      "reason": "Too many requests, slow down"
+    },
+    "bad_email_reason": {
+      "status": "error",
+      "reason": "Invalid email address syntax"
+    },
+    "unrecognised_reason": {
+      "status": "error",
+      "reason": "Something unexpected happened"
+    },
+    "reason_without_text": {
+      "status": "error"
+    },
+    "echoes_key": {
+      "status": "error",
+      "reason": "The key {KEY} could not be authenticated, api key rejected"
+    }
+  }
+}
