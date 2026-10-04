@@ -16,7 +16,8 @@ $raw = agy -p $prompt --model $Model --dangerously-skip-permissions --output-for
 "agy exit=$LASTEXITCODE secs=$([int]$sw.Elapsed.TotalSeconds) out=$out"
 $i = $raw.IndexOf('{"conversation')
 if ($i -lt 0) { "no agy JSON found"; $raw.Substring([Math]::Max(0, $raw.Length - 800)); exit 2 }
-$j = $raw.Substring($i) | ConvertFrom-Json
+$e = $raw.LastIndexOf('}')  # agy may print notices (e.g. 'terminating 1 background task(s)') after the JSON
+$j = $raw.Substring($i, $e - $i + 1) | ConvertFrom-Json
 "status=$($j.status) tokens=$($j.usage.total_tokens)"
 Add-Content "D:\dev-cache\runs\ledger.tsv" "$(Get-Date -Format s)`tagy`t$id`t$Model`t0`t$($j.usage.total_tokens)"
 $j.response -split "`n" | Select-Object -Last 14

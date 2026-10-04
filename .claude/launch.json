@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "console-fixtures",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-Command", "$env:FARM_DATA_SOURCE='fixtures'; Set-Location console; pnpm dev --port 3100"],
+      "port": 3100
+    }
+  ]
+}

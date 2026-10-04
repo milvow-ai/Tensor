@@ -105,3 +105,7 @@ Run every command in the foreground and wait for it; never start long commands i
 - **Antigravity (agy):** `agy -p <task> --output-format json [--model m] [--conversation id]`; JSON `conversation_id, status, response, usage`; limit `RESOURCE_EXHAUSTED`/`Individual quota reached`; **single account only** (global config; no per-account dir) — must be the owner's Gemini Pro account.
 - **Hermes:** `hermes -p <profile> -z <task> --usage-file f [-m m] [--resume id]`, cwd via `TERMINAL_CWD`; usage JSON `estimated_cost_usd, session_id, input/output_tokens, failed`. **One account per profile.**
 - Claude/Codex limit + reset formats are from docs and fakes, not yet observed live — verify on the first real limit and adjust the parsers.
+
+
+## Reuse first (owner 2026-10-05)
+Before writing any non-trivial component, check `library/` (pinned repos, `research/library.tsv`) and the pinned dependencies (FastMCP 4, DBOS, pybreaker, RJSF, shadcn starter, TanStack, Recharts, …) for an existing implementation and build on it. Hand-rolled code is for the Farm's own logic (registry, router/ledger wiring, policies, UI composition). Never trade quality for reuse: a reused block must meet §0 (typed, tested, secure, accessible) or it is wrapped until it does. New repos worth pinning are proposed to the lead (name, URL, licence, why), not vendored silently.
