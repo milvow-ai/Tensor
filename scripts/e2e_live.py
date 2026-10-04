@@ -3,8 +3,9 @@
 Run from the repo root after `farm db migrate` and `farm registry sync`:
     uv run python scripts/e2e_live.py [--local]
 
-Needs Bifrost on 127.0.0.1:8080 and BIFROST_FARM_VK in the environment (or the repo .env). The value is passed to
-the server process through its environment only and is never printed. Spends a few hundredths of a cent.
+Needs Bifrost on 127.0.0.1:8080 and BIFROST_FARM_VK in the environment (or the repo .env).
+The value is passed to the server process through its environment only and is never printed.
+Spends a few hundredths of a cent.
 Exit code 0 only when the answer is valid AND the run's trajectory shows reserve → execute → success → commit.
 """
 
