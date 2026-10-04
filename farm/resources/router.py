@@ -128,16 +128,12 @@ HINTS: dict[str, str] = {
     INTERNAL: (
         "The Farm hit an unexpected error; the run trajectory (get_run) and the Farm log have the details."
     ),
-    "session_unknown": (
-        "The session ID was not found in active sessions; start a new conversation."
-    ),
+    "session_unknown": ("The session ID was not found in active sessions; start a new conversation."),
     "session_account_unavailable": (
         "The account that owns this session is unavailable or exhausted; "
         "wait for reset or start a new session."
     ),
 }
-
-
 
 
 class UnknownCapability(LookupError):
@@ -484,7 +480,6 @@ class _Call:
     session_pinned: bool = False
 
 
-
 @dataclass(frozen=True)
 class _Held:
     unit: UnitConfig
@@ -691,8 +686,8 @@ class _Chain:
         else:
             ordered = order_candidates(ranked, "failover")
 
-        # Bulkheads: a connection that is busy right now (concurrency or rate limit full) moves to the back so it
-        # never delays a free one, and the run history says why instead of reordering silently.
+        # Bulkheads: a connection that is busy right now (concurrency or rate limit full) moves to the back so
+        # it never delays a free one, and the run history says why instead of reordering silently.
         free_candidates: list[Candidate] = []
         busy_candidates: list[Candidate] = []
         for c in ordered:
@@ -729,7 +724,6 @@ class _Chain:
                 await self._skip(provider_pool, candidate, "saturated")
                 continue
         return None
-
 
     async def _skip(
         self, provider_pool: ProviderPool, candidate: Candidate | None, reason: str, **detail: Any
@@ -823,6 +817,7 @@ class _Chain:
         result: ExecResult
         try:
             if is_idempotent:
+
                 def _retry_fallback(state: tenacity.RetryCallState) -> ExecResult:
                     if state.outcome is not None:
                         return state.outcome.result()  # type: ignore[no-any-return]
@@ -1118,9 +1113,7 @@ class _Chain:
         held.clear()
         return spent
 
-    async def _usage_event(
-        self, candidate: Candidate, unit: str, actual: Decimal, cost: Decimal
-    ) -> None:
+    async def _usage_event(self, candidate: Candidate, unit: str, actual: Decimal, cost: Decimal) -> None:
         async with self.ctx.pool.connection() as conn:
             await conn.execute(
                 "insert into public.usage_events "
@@ -1291,7 +1284,6 @@ async def _route(
         pin = pinned_conn_id
         session_pinned = True
 
-
     call = _Call(
         capability=cap.name,
         cap=cap,
@@ -1304,7 +1296,6 @@ async def _route(
         models=models,
         session_pinned=session_pinned,
     )
-
 
     if pin is not None:
         return _outcome(traj.run_id, await _lead(ctx, call, traj, shared=False))
