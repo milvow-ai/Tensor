@@ -1,6 +1,6 @@
 # Tensor / Harness Farm — boot context
 
-**Read `HANDOFF.md` before doing anything else.** It holds the full plan, the phases and the pre-setup checklist.
+**Phase 1 is in progress: read the `▶ RESUME HERE` block at the top of `.orchestrate/state.md` first** — it is the handoff (status, what is in flight, next queue, token rules). Read `HANDOFF.md` sections only when you need them, not in full.
 
 ## What this repo is
 
