@@ -96,3 +96,10 @@ The Farm makes no AI decisions itself: routing is deterministic code. Design sou
 ## 6. Builder rules (every brief)
 Touch only the files your brief owns. Never `git add/commit/push`, deploy, delete outside the repo, or send data off the machine. Never read or print `.env`. Do not change `pyproject.toml` unless your brief owns it.
 Finish by running `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1` and include its last lines in your reply.
+
+## 7. AI CLI facts (discovered by M3e-A, 2026-10-04; fake-CLI tests in `tests/test_cli_agent_*.py`)
+- **Claude Code:** `claude -p <task> --output-format json [--model m] [--resume id] [--allowedTools ""] [--permission-mode acceptEdits]`; JSON `result, session_id, total_cost_usd, usage, is_error`; limit text `usage limit`/`rate limit` + reset time; auth `not logged in`/`please log in`. **One account per `CLAUDE_CONFIG_DIR`.**
+- **Codex 0.160.0:** `codex exec [--sandbox read-only|workspace-write] [-m m] --json --skip-git-repo-check <task>`, resume `codex exec resume <id>`; JSONL events (`message`, `turn.finished` usage, `thread_id`); limit `insufficient_quota`/`rate limit exceeded`; auth `Not logged in`. **One account per `CODEX_HOME`.**
+- **Antigravity (agy):** `agy -p <task> --output-format json [--model m] [--conversation id]`; JSON `conversation_id, status, response, usage`; limit `RESOURCE_EXHAUSTED`/`Individual quota reached`; **single account only** (global config; no per-account dir) — must be the owner's Gemini Pro account.
+- **Hermes:** `hermes -p <profile> -z <task> --usage-file f [-m m] [--resume id]`, cwd via `TERMINAL_CWD`; usage JSON `estimated_cost_usd, session_id, input/output_tokens, failed`. **One account per profile.**
+- Claude/Codex limit + reset formats are from docs and fakes, not yet observed live — verify on the first real limit and adjust the parsers.

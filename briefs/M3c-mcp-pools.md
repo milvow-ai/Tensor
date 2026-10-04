@@ -36,3 +36,8 @@ OAuth browser flow for that one account and stores tokens in its own store), `fa
 
 ## Reply (≤ 15 lines)
 Files changed; test count; check tail; Clay MCP facts (URL, auth, tool names/shapes, credit signals) + what is UNVERIFIED; deviations.
+
+## Phase A (run now, before the router lands)
+Do ONLY: `farm/executors/mcp/{__init__,client,mapping}.py`, `farm/secrets.py` token-store extension (append; do not change existing behaviour or tests), `tests/fake_mcp_server.py`, `tests/test_mcp_executor.py` (executor-level: per-account token-store dirs, tool call, error/credit/auth mapping, sentinel no-leak, generic non-Clay server via mapping config), and the Clay MCP facts (URL, auth, tools, credit signals).
+Not in Phase A: registry.yaml, CLI commands, router/acceptance tests (Phase B).
+Done when: `uv run pytest tests/test_mcp_executor.py tests/test_secrets.py -q` passes and ruff + mypy are clean.
