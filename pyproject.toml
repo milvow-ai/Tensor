@@ -29,6 +29,7 @@ dependencies = [
     "alembic>=1.14",
     "sqlalchemy>=2.0",
     "playwright>=1.50",
+    "jsonschema>=4.23",
 ]
 
 [project.scripts]
