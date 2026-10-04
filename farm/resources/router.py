@@ -119,7 +119,16 @@ HINTS: dict[str, str] = {
     INTERNAL: (
         "The Farm hit an unexpected error; the run trajectory (get_run) and the Farm log have the details."
     ),
+    "session_unknown": (
+        "The session ID was not found in active sessions; start a new conversation."
+    ),
+    "session_account_unavailable": (
+        "The account that owns this session is unavailable or exhausted; "
+        "wait for reset or start a new session."
+    ),
 }
+
+
 
 
 class UnknownCapability(LookupError):
@@ -442,6 +451,8 @@ class _Call:
     pin: str | None
     scope: str
     models: Models | None
+    session_pinned: bool = False
+
 
 
 @dataclass(frozen=True)
@@ -530,6 +541,11 @@ class _Chain:
     async def run(self) -> _Settled:
         call = self.call
         routes = await _load_routes(self.ctx.pool, call.capability)
+        if call.params.get("ai") and call.params["ai"] != "any":
+            target_ai = str(call.params["ai"]).lower()
+            routes = [p for p in routes if p.id.lower() == target_ai]
+            if not routes:
+                return await self._reject(f"no provider route for ai '{call.params['ai']}'")
         if call.pin is not None:
             restricted = await self._restrict_to_pin(routes, call.pin)
             if isinstance(restricted, _Settled):
@@ -586,8 +602,24 @@ class _Chain:
             await self._skip(provider_pool, None, "no_connections")
             return None
         now = ctx.clock()
+        requested_model = call.params.get("model")
         eligible: list[Candidate] = []
         for candidate in candidates:
+            if requested_model:
+                models_meta = candidate.meta.get("models")
+                if isinstance(models_meta, str):
+                    candidate_models = [models_meta]
+                elif isinstance(models_meta, list):
+                    candidate_models = [str(m) for m in models_meta]
+                else:
+                    single_m = candidate.meta.get("model")
+                    candidate_models = [str(single_m)] if single_m else []
+                if not any(m.lower() == str(requested_model).lower() for m in candidate_models):
+                    await self._skip(
+                        provider_pool, candidate, "model_not_offered", requested_model=str(requested_model)
+                    )
+                    continue
+
             reason = skip_reason(candidate, call.scope, now)
             if reason is not None:
                 await self._skip(provider_pool, candidate, reason, cooldown_until=candidate.cooldown_until)
@@ -600,11 +632,33 @@ class _Chain:
             capability=call.cap.default_strategy,
             provider=provider_pool.default_strategy,
         )
-        for candidate in order_candidates(eligible, resolved.name, call.pin):
-            settled = await self._try_connection(provider_pool, candidate, executor, resolved, budgets)
-            if settled is not None:
-                return settled
+        ordered = order_candidates(eligible, resolved.name, call.pin)
+        free_candidates = [
+            c
+            for c in ordered
+            if not self.ctx.connection_semaphores.setdefault(
+                c.id, asyncio.Semaphore(c.concurrency)
+            ).locked()
+        ]
+        candidate_order = free_candidates + [c for c in ordered if c not in free_candidates]
+        for candidate in candidate_order:
+            sem = self.ctx.connection_semaphores.setdefault(
+                candidate.id, asyncio.Semaphore(candidate.concurrency)
+            )
+            try:
+                async with asyncio.timeout(30.0):
+                    await sem.acquire()
+            except TimeoutError:
+                await self._skip(provider_pool, candidate, "concurrency_limit")
+                continue
+            try:
+                settled = await self._try_connection(provider_pool, candidate, executor, resolved, budgets)
+                if settled is not None:
+                    return settled
+            finally:
+                sem.release()
         return None
+
 
     async def _skip(
         self, provider_pool: ProviderPool, candidate: Candidate | None, reason: str, **detail: Any
@@ -699,6 +753,14 @@ class _Chain:
         if result.ok:
             return await self._answered(provider_pool, candidate, result)
         await self._on_failure(provider_pool, candidate, result)
+        if call.session_pinned:
+            error = _error(
+                (result.error_kind or ErrorKind.UNKNOWN).value,
+                result.error or "session account execution failed",
+                self.attempts,
+                retry_after_s=result.retry_after_s,
+            )
+            return self.settled_failure(error)
         return None
 
     async def _answered(
@@ -720,6 +782,9 @@ class _Chain:
             empty=empty,
             units_used=result.units_used,
             cost_usd=self.cost_usd,
+            account=candidate.id,
+            model=result.data.get("model") if result.data else call.params.get("model"),
+            session_id=result.data.get("session_id") if result.data else None,
         )
         settled = _Settled(
             ok=True,
@@ -731,6 +796,26 @@ class _Chain:
             cost_usd=self.cost_usd,
             units=dict(self.units),
         )
+        if settled.ok and result.data and result.data.get("session_id"):
+            sess_id = str(result.data["session_id"])
+            ai_name = str(result.data.get("ai") or provider_pool.id)
+            model_name = result.data.get("model") or call.params.get("model")
+            async with ctx.pool.connection() as conn:
+                await conn.execute(
+                    """
+                    insert into public.ai_sessions (
+                      session_id, connection_id, ai, model, created_at, last_used_at
+                    )
+                    values (%s, %s, %s, %s, now(), now())
+                    on conflict (session_id) do update set
+                      connection_id = excluded.connection_id,
+                      ai = excluded.ai,
+                      model = coalesce(excluded.model, ai_sessions.model),
+                      last_used_at = now()
+
+                    """,
+                    (sess_id, candidate.id, ai_name, model_name),
+                )
         if empty and falls_back_on_empty(call.capability):
             self.empty_answer = settled
             self.failed_from, self.fallback_reason = candidate.id, "empty"
@@ -763,6 +848,28 @@ class _Chain:
             ),
             "health.failure",
         )
+        if kind in (ErrorKind.AUTH, ErrorKind.NEEDS_LOGIN):
+            login_cmd = f"farm ai login {candidate.id}"
+            alert_msg = f"Account {candidate.id} authentication failed. Run: {login_cmd}"
+            from farm.manager.alerts import create_alert
+
+            await _best_effort(
+                create_alert(
+                    ctx.pool,
+                    kind="needs_login",
+                    severity="critical",
+                    message=alert_msg,
+                    ref=f"login:{candidate.id}",
+                    notify_telegram=False,
+                ),
+                "alert.needs_login",
+            )
+        if kind is ErrorKind.LIMIT_REACHED and result.reset_at is not None:
+            async with ctx.pool.connection() as conn:
+                await conn.execute(
+                    "update public.consumption_units set next_reset_at = %s where connection_id = %s",
+                    (result.reset_at, candidate.id),
+                )
         await self.traj.event(
             "failure",
             candidate.id,
@@ -774,6 +881,7 @@ class _Chain:
         )
         self.last_failure = result
         self.failed_from, self.fallback_reason = candidate.id, kind.value
+
         self.attempts.append(
             AttemptSummary(
                 provider=provider_pool.id,
@@ -899,6 +1007,16 @@ class _Chain:
 
     def _exhausted(self) -> _Settled:
         """No candidate produced a final answer."""
+        if self.call.session_pinned and self.last_failure is None:
+            sess_id_disp = self.call.params.get("session_id")
+            error = _error(
+                "session_account_unavailable",
+                f"session_account_unavailable: account '{self.call.pin}' for session '{sess_id_disp}' "
+                "is unavailable",
+                self.attempts,
+            )
+            return self.settled_failure(error)
+
         if self.last_failure is None and self.empty_answer is not None:
             # Every pool that could be asked said "nothing": that is the answer.
             return replace(self.empty_answer, cost_usd=self.cost_usd, units=dict(self.units))
@@ -980,6 +1098,11 @@ async def _abort(traj: Trajectory, exc: BaseException, *, owner: bool = False) -
     )
 
 
+async def _reject_kind(traj: Trajectory, kind: str, message: str) -> RouteOutcome:
+    await traj.event("failure", error_kind=kind, error=message)
+    return await _finish(traj, _settled_error(_error(kind, message)))
+
+
 async def _route(
     ctx: FarmContext,
     cap: CapabilityInfo,
@@ -1005,6 +1128,44 @@ async def _route(
     except ValueError as exc:
         return await _reject(traj, str(exc))
 
+    session_pinned = False
+    session_id = normalised.get("session_id")
+    if session_id:
+        async with ctx.pool.connection() as conn:
+            cur = await conn.execute(
+                "select connection_id, ai, model from public.ai_sessions where session_id = %s",
+                (str(session_id),),
+            )
+            sess_row = await cur.fetchone()
+        if sess_row is None:
+            return await _reject_kind(
+                traj,
+                "session_unknown",
+                f"session_unknown: session '{session_id}' not found",
+            )
+        pinned_conn_id = str(sess_row[0])
+        prov_id = sess_row[1] or await _provider_of(ctx.pool, pinned_conn_id)
+        candidates = await _load_candidates(ctx.pool, prov_id) if prov_id else []
+        cand = next((c for c in candidates if c.id == pinned_conn_id), None)
+        if cand is None:
+            return await _reject_kind(
+                traj,
+                "session_account_unavailable",
+                f"session_account_unavailable: account '{pinned_conn_id}' for session '{session_id}' "
+                "not found",
+            )
+        reason = skip_reason(cand, scope, ctx.clock())
+        if reason is not None:
+            return await _reject_kind(
+                traj,
+                "session_account_unavailable",
+                f"session_account_unavailable: account '{pinned_conn_id}' for session '{session_id}' "
+                f"is unavailable ({reason})",
+            )
+        pin = pinned_conn_id
+        session_pinned = True
+
+
     call = _Call(
         capability=cap.name,
         cap=cap,
@@ -1015,7 +1176,9 @@ async def _route(
         pin=pin,
         scope=scope,
         models=models,
+        session_pinned=session_pinned,
     )
+
 
     if pin is not None:
         return _outcome(traj.run_id, await _lead(ctx, call, traj, shared=False))
@@ -1172,18 +1335,20 @@ async def _publish(
     if settled.ok and settled.data is not None and settled.provider and settled.connection_id:
         # An inconclusive or empty answer (found = False) is not worth keeping: the next call asks again.
         ttl = 0 if settled.found is False else call.cap.cache_ttl_seconds
+        stored_data = {} if ttl <= 0 else settled.data
         await flight.finish_success(
             ctx.pool,
             request_id,
             traj.run_id,
             flight.StoredResult(
-                data=settled.data,
+                data=stored_data,
                 provider=settled.provider,
                 connection_id=settled.connection_id,
                 found=settled.found,
             ),
             now + timedelta(seconds=ttl),
         )
+
     elif settled.error is not None:
         await flight.finish_failure(
             ctx.pool, request_id, traj.run_id, settled.error.model_dump(mode="json"), now

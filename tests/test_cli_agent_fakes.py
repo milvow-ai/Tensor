@@ -17,6 +17,7 @@ class FakeCliHarness:
         else:
             self._temp_dir_obj = None
             self.bin_dir = tmp_dir
+        self.bin_dir.mkdir(parents=True, exist_ok=True)
 
         self.config_file = self.bin_dir / "fake_cli_config.json"
         self.calls_file = self.bin_dir / "fake_cli_calls.json"
@@ -69,8 +70,22 @@ if calls_file.exists():
 calls.append(call_info)
 calls_file.write_text(json.dumps(calls, indent=2), encoding="utf-8")
 
+# Determine active config (global or per_account)
+active_config = config
+claude_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
+codex_home = os.environ.get("CODEX_HOME", "")
+for acc_key, acc_cfg in config.get("per_account", {}).items():
+    if (claude_dir and acc_key in claude_dir) or (codex_home and acc_key in codex_home):
+        active_config = acc_cfg
+        break
+    if "-p" in sys.argv:
+        p_idx = sys.argv.index("-p")
+        if p_idx + 1 < len(sys.argv) and sys.argv[p_idx + 1] == acc_key:
+            active_config = acc_cfg
+            break
+
 # Check if delay requested
-delay = float(config.get("delay_s", 0))
+delay = float(active_config.get("delay_s", 0))
 if delay > 0:
     time.sleep(delay)
 
@@ -79,22 +94,22 @@ if "--usage-file" in sys.argv:
     idx = sys.argv.index("--usage-file")
     if idx + 1 < len(sys.argv):
         usage_path = Path(sys.argv[idx + 1])
-        usage_data = config.get("usage_file_data")
+        usage_data = active_config.get("usage_file_data")
         if usage_data is not None:
             usage_path.write_text(json.dumps(usage_data), encoding="utf-8")
 
 # Write stderr and stdout
-stderr = config.get("stderr", "")
+stderr = active_config.get("stderr", "")
 if stderr:
     sys.stderr.write(stderr)
     sys.stderr.flush()
 
-stdout = config.get("stdout", "")
+stdout = active_config.get("stdout", "")
 if stdout:
     sys.stdout.write(stdout)
     sys.stdout.flush()
 
-sys.exit(int(config.get("exit_code", 0)))
+sys.exit(int(active_config.get("exit_code", 0)))
 """
         self.runner_script.write_text(code.strip(), encoding="utf-8")
 
@@ -120,6 +135,7 @@ sys.exit(int(config.get("exit_code", 0)))
         exit_code: int = 0,
         delay_s: float = 0.0,
         usage_file_data: dict[str, Any] | None = None,
+        per_account: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """Configure what the fake CLI should output on next calls."""
         data = {
@@ -128,6 +144,7 @@ sys.exit(int(config.get("exit_code", 0)))
             "exit_code": exit_code,
             "delay_s": delay_s,
             "usage_file_data": usage_file_data,
+            "per_account": per_account or {},
         }
         self.config_file.write_text(json.dumps(data), encoding="utf-8")
 
