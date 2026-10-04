@@ -45,14 +45,15 @@ Routing: free model first → v4-flash fallback → v4-pro for important/judgmen
 ## Active workers (Phase 1 started 2026-10-04 ~05:00 on the user's "use whatever you can, final product" — user asleep; defaults taken for AI pool / Codex / keep-awake)
 | Worker | Agent | Model | Owns | Status | Output |
 |---|---|---|---|---|---|
-| M1a db+ledger | agy (cut off by quota) → Sonnet worker-build finishing, main tree | sonnet | farm/db, ledger, conftest, pyproject | Finishing | agent reply |
+| M1a db+ledger | agy (cut off by quota) → Sonnet worker-build finishing, main tree | sonnet | farm/db, ledger, conftest, pyproject | Resumed after rate limit | agent reply |
 uns\M1a-db-ledger |
 | M1b registry+adapters | worker-build (worktree) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | **Merged 932d7eb** (385 tests, gate green; deviations in commit msg) | — |
-| C1 console core | agy (cut off) → Sonnet worker-build finishing in D:/Harness Farm/wt-c1 (branch c1-console) | sonnet | console/**, console/sql/views.sql | Finishing | agent reply |
+| C1 console core | agy (cut off) → Sonnet worker-build finishing in D:/Harness Farm/wt-c1 (branch c1-console) | sonnet | console/**, console/sql/views.sql | Resumed after rate limit | agent reply |
 uns\C1-console-core |
 | M1c router+gateway | worker-build | sonnet | see briefs/M1c | Waiting for M1a+M1b | — |
-| M2c adapters+LLM | worker-build (worktree) | sonnet | adapters apollo/hunter/pagespeed/adzuna/ats_public, executors/llm.py, schemas, registry | Running | agent reply |
-| M3e-A AI executors | agy (worktree D:/Harness Farm/wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | Running | D:/dev-cache/runs/M3e-ai-pool |
+| M2c adapters+LLM | worker-build (worktree) | sonnet | adapters apollo/hunter/pagespeed/adzuna/ats_public, executors/llm.py, schemas, registry | Resumed after rate limit | agent reply |
+| M3e-A AI executors | agy (wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | **Merged fde1ce3** (32 tests; live agy+hermes OK $0.0003; Codex 0.160.0 installed) | — |
+| M3c-A MCP executor | agy (wt-m3c) | gemini-3.8-flash-high | farm/executors/mcp/*, token store, fake MCP server | Running | D:/dev-cache/runs/M3c-mcp-pools |
 Shared contract: `briefs/CONTEXT.md`. Keep-awake helper: D:\dev-cache\keep-awake.ps1 (14 h from 04:57).
 User approved (2026-10-04): Sonnet 5.5 subagents for coding as a second build lane.
 
