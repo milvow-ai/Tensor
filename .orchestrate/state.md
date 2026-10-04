@@ -7,7 +7,7 @@
 1. **C2** (Console Billing + Runs) — `wt-c2`, started 20:58. When done: `round.ps1 -Action merge -Name c2 -Message "C2: …"` (gate runs Console checks).
 2. **M2a** (circuit/ranking/strategies + M1c open issues) — `wt-m2a`, started ~21:12. When done: merge the same way.
 3. **M1 correctness review** — still not done; run as a Gemini review round (`-Model gemini-3.1-pro-high`) after M2a.
-**Next queue (keep 2 Gemini rounds in parallel when their files don't overlap; Sonnet worker-check only for security diffs; Opus lead for gates/decisions):** C2 + M2a → M3b-B + M5-B (`farm run` 24/7, router budget hook, CLI) ∥ C3 (+ Vercel deploy with owner OK) → M3a → M3c-B (Clay) → M2b (DBOS) → M4.
+**Next queue (owner 2026-10-05: Farm = general product, see HANDOFF scope update):** C2 + M2a (running) → **OPEN1** (any MCP pass-through, import from Claude/Codex, discovery, exact results) ∥ **AIP2** (AI jobs, fan-out, iteration, exact results/errors) → M3b-B + M5-B (`farm run` 24/7) ∥ C3 (Integrations + AI Pools as main screens; Vercel with owner OK) → M3a → M3c-B (Clay = plain OPEN1 MCP provider ×7) → M2b (DBOS) → M4. Keep 2 rounds in parallel only when their files do not overlap; Gemini quota ≈ 2 rounds per window.
 **Token rules (owner 2026-10-04: Claude quota is the constraint; the weekly limit was hit after ~1 day):**
 - Lead = plan, brief, merge, decide. Per round ≤ 3 tool calls: `round.ps1 start` → `round.ps1 status -Name` → `round.ps1 merge`. Never read builder transcripts, full diffs or big files — only status tails; grep for specifics.
 - **No Sonnet builders.** Builders: Gemini (agy, owner's Gemini Pro account) for all code; Hermes `-Builder hermes` (Bedrock Qwen3-Coder-Next, AWS cap $20) for docs/fixtures or when Gemini is out. Sonnet worker-check only for security-critical diffs, diff-only scope.
@@ -118,6 +118,7 @@ Blockers (user):
 - One writer per file; builders never commit; lead commits after checks pass.
 
 ## Decisions log
+- 2026-10-05: **Scope** — Harness Farm is a general product (one MCP for all MCP servers + AI CLIs); not narrowed to GTM. Briefs OPEN1 + AIP2 added; Clay becomes a config-only MCP provider — owner.
 - 2026-10-03: Build order = Harness Farm → Farm Console → (later) Tensor — user decision.
 - 2026-10-03: Stack = FastMCP 4 + DBOS + Postgres (Supabase) + Crawl4AI + Bifrost; Console = Next.js + shadcn starter on Vercel, controlled via Supabase command queue — previous session design.
 - 2026-10-03: Builders = Gemini 3.8 (Antigravity CLI) bulk, Qwen via Hermes mechanical, Sonnet checks — user decision for token efficiency.
