@@ -1,146 +1,60 @@
-# Next.js Admin Template with TypeScript & Shadcn UI
+# Harness Farm Console
 
-**Studio Admin** - Includes multiple dashboards, authentication layouts, customizable theme presets, and more.
+The control room for the Harness Farm: see every tool pool (Clay, Reoon, ZeroBounce, Apollo, Hunter) and AI pool (Claude, Codex, Gemini, Hermes), every account in it, its usage, limits, billing and health, and pause, resume, reprioritise, change strategy or add accounts.
 
-<img src="https://github.com/arhamkhnz/next-shadcn-admin-dashboard/blob/main/media/dashboard.png?version=5" alt="Dashboard Screenshot">
+## How it works
 
-Most admin templates I found, free or paid, felt cluttered, outdated, or too rigid. I built this as a cleaner alternative with features often missing in others, such as theme toggling and layout controls, while keeping the design modern, minimal, and flexible.
-
-> **View demo:** [studio admin](https://studio-admin.arhamkhnz.com)
-
-> [!NOTE]
-> Looking for the Base UI version? Check out [next-shadcn-admin-dashboard-baseui](https://github.com/arhamkhnz/next-shadcn-admin-dashboard-baseui).
->
-> Looking for the React Aria version? Check out [arhamkhnz/next-shadcn-admin-dashboard-aria](https://github.com/arhamkhnz/next-shadcn-admin-dashboard-aria).
->
-> Looking for the TanStack Start version? Check out [tanstack-shadcn-admin-dashboard](https://github.com/arhamkhnz/tanstack-shadcn-admin-dashboard).
-
-> [!TIP]
-> I’m also working on Nuxt.js and Svelte versions of this dashboard. They’ll be live soon.
-
-## Features
-
-- Built with Next.js 16, TypeScript, Tailwind CSS v4, and Shadcn UI  
-- Responsive and mobile-friendly  
-- Customizable theme presets (light/dark modes with color schemes like Tangerine, Brutalist, and more)  
-- Flexible layouts (collapsible sidebar, variable content widths)  
-- Authentication flows and screens  
-- Prebuilt dashboards (Default, CRM, Finance, Analytics, Productivity) plus legacy variants  
-- Role-Based Access Control (RBAC) with config-driven UI and multi-tenant support *(planned)*  
-
-> [!NOTE]
-> The default dashboard uses the **shadcn neutral** theme.  
-> It also includes additional color presets inspired by [Tweakcn](https://tweakcn.com):  
->
-> - Tangerine  
-> - Neo Brutalism  
-> - Soft Pop  
->
-> You can create more presets by following the same structure as the existing ones.
-
-> Looking for the **Next.js 15** version?  
-> Check out the [`archive/next15`](https://github.com/arhamkhnz/next-shadcn-admin-dashboard/tree/archive/next15) branch.  
-> This branch contains the setup prior to upgrading to Next 16 and the React Compiler.
-
-> Looking for the **Next.js 14 + Tailwind CSS v3** version?  
-> Check out the [`archive/next14-tailwindv3`](https://github.com/arhamkhnz/next-shadcn-admin-dashboard/tree/archive/next14-tailwindv3) branch.  
-> It has a different color theme and is not actively maintained, but I try to keep it updated with major changes.  
-
-## Tech Stack
-
-- **Framework**: Next.js 16 (App Router), TypeScript, Tailwind CSS v4  
-- **UI Components**: Shadcn UI  
-- **Validation**: Zod  
-- **Forms & State Management**: React Hook Form, Zustand  
-- **Tables & Data Handling**: TanStack Table  
-- **Tooling & DX**: Biome, Husky  
-
-## Screens
-
-### Available
-- Default Dashboard  
-- CRM Dashboard  
-- Finance Dashboard  
-- Analytics Dashboard  
-- Productivity Dashboard  
-- E-commerce Dashboard  
-- Academy Dashboard  
-- Logistics Dashboard  
-- Infrastructure Dashboard  
-- File Manager  
-- Patient Monitoring  
-- Chat Page  
-- Email Page  
-- Profile  
-- Users Management  
-- Roles Management  
-- Kanban Board  
-- Tasks Page  
-- Invoice Page  
-- Calendar Page  
-- Authentication (4 screens)  
-- Legacy: Default v1, CRM v1, Finance v1, Analytics v1
-
-### Planned
-I’ve added all the planned screens. Feel free to open an issue for requesting something specific.
-
-## Colocation File System Architecture
-
-This project follows a **colocation-based architecture** each feature keeps its own pages, components, and logic inside its route folder.  
-Shared UI, hooks, and configuration live at the top level, making the codebase modular, scalable, and easier to maintain as the app grows.
-
-For a full breakdown of the structure with examples, see the [Next Colocation Template](https://github.com/arhamkhnz/next-colocation-template).
-
-## Getting Started
-
-You can run this project locally, or deploy it instantly with Vercel.
-
-### Deploy with Vercel
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Farhamkhnz%2Fnext-shadcn-admin-dashboard)
-
-_Deploy your own copy with one click._
-
-### Run locally
-
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/arhamkhnz/next-shadcn-admin-dashboard.git
-   ```
-   
-2. **Navigate into the project**
-   ```bash
-    cd next-shadcn-admin-dashboard
-   ```
-   
-3. **Install dependencies**
-   ```bash
-    npm install
-   ```
-
-4. **Start the development server**
-   ```bash
-   npm run dev
-   ```
-
-Your app will be running at [http://localhost:3000](http://localhost:3000)
-
-### Formatting and Linting
-
-Format, lint, and organize imports
-```bash
-npx @biomejs/biome check --write
 ```
-> For more information on available rules, fixes, and CLI options, refer to the [Biome documentation](https://biomejs.dev/).
+Console (this app, Vercel)  --reads-->   Supabase Postgres: v_* views, alerts, farm_commands
+                            --inserts--> farm_commands (RLS: the owner may insert only there)
+Farm (the PC)               --polls-->   farm_commands, validates, executes, writes the result back
+```
 
----
+- **No inbound connection to the PC, no provider keys in the Console.** An account stores an `auth_ref` (`env:CLAY_KEY_08`, `cli:claude-02`); the secret itself lives in the PC's `.env` (`farm set-secret <NAME>`).
+- **Reads** go through five SQL views in `sql/views.sql` (`v_connection_status`, `v_pool_overview`, `v_spend_month`, `v_capability_capacity`, `v_recent_runs`). Aggregation happens in SQL, never in the browser.
+- **Writes** are commands. The UI shows each one as queued, running, then done or rejected (with the Farm's reason), and refreshes from the database when it settles.
 
-> [!IMPORTANT]  
-> This project is updated frequently. If you’re working from a fork or an older clone, pull the latest changes before syncing. Some updates may include breaking changes.
+### Command payloads
 
----
+| kind | payload |
+|---|---|
+| `pause`, `resume`, `test_connection`, `remove_connection` | `{ connection_id }` |
+| `set_priority` | `{ connection_id, priority }` |
+| `set_strategy` | `{ provider_id, strategy }` (failover, most_remaining, round_robin, parallel_split, sticky, fit_check) |
+| `add_connection` | `{ provider_id, connection: { id, label, auth_ref, scope, priority, concurrency, plan: { name, price_usd, billing_day }, meta, units: { <unit>: { limit, period, anchor, charged_on } } } }` |
+| `ack_alert` | `{ alert_id }` |
 
-Contributions are welcome. Feel free to open issues, feature requests, or start a discussion.
+The zod schemas are in `src/lib/farm/commands.ts`; the server action validates every payload again before it is queued.
 
+## Running it
 
-**Happy Vibe Coding!**
+```bash
+pnpm install
+cp .env.example .env.local   # or create it: see below
+pnpm dev
+```
+
+`.env.local` (public values only):
+
+```
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=...
+FARM_DATA_SOURCE=fixtures    # local development only; omit (or "supabase") for the real Farm
+```
+
+- **`supabase` (default):** magic-link sign-in at `/login`; after sign-in the server checks that the email equals `farm_settings.owner_email`, otherwise `/unauthorized`. Every server action checks it again.
+- **`fixtures`:** demo data built in memory (the real pools, a few unhealthy accounts, 40 runs) and a command queue that completes after 1.5 s. No login. A yellow "Fixtures" badge is always visible. The server refuses to start with fixtures when `NODE_ENV=production`.
+
+## Pages
+
+Overview, Tools & Pools (`/pools/tools`, `/pools/[id]`), AI Pools (`/pools/ai`, `/pools/ai/[id]`) are complete. Runs, Routing, Policies & Budgets, Billing, Memory & Evidence, Integrations and Settings are designed placeholders that say what they will do and when (C2 or C3). Pool pages refresh by polling every 5 seconds while the tab is visible.
+
+## Quality gates
+
+```bash
+pnpm check       # biome lint + tsc --noEmit + next build
+pnpm bundle      # fails if any route's first-load JS is over 250 kB gzip
+pnpm test:e2e    # Playwright, production build, fixtures mode (run pnpm check first)
+```
+
+The e2e run covers: every page without console errors at 1440 and 390 px (screenshots in `D:\dev-cache\shots\C1\`), no horizontal scroll, pause and resume through the queue, a Farm rejection, inline priority, strategy, pagination and sorting, the add-account forms (including a pasted-secret refusal and a duplicate id), alert acknowledgement, WCAG AA contrast in both themes (axe), and the production fixtures guard.

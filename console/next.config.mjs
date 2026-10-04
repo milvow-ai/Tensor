@@ -2,17 +2,10 @@
 const nextConfig = {
   reactCompiler: true,
   compiler: {
-    removeConsole: process.env.NODE_ENV === "production",
+    // Keep console.error and console.warn: they carry real failures (startup guard, render errors).
+    removeConsole: process.env.NODE_ENV === "production" ? { exclude: ["error", "warn"] } : false,
   },
-  async redirects() {
-    return [
-      {
-        source: "/dashboard",
-        destination: "/dashboard/default",
-        permanent: false,
-      },
-    ];
-  },
+  poweredByHeader: false,
 };
 
 export default nextConfig;
