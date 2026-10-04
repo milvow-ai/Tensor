@@ -48,7 +48,8 @@ Routing: free model first → v4-flash fallback → v4-pro for important/judgmen
 | M1a db+ledger | agy → Sonnet | sonnet | farm/db, ledger, conftest, pyproject | **Merged d71f738** (536 suite pass; crash recovery; 200-way race test) | — |
 uns\M1a-db-ledger |
 | M1b registry+adapters | worker-build (worktree) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | **Merged 932d7eb** (385 tests, gate green; deviations in commit msg) | — |
-| C1 console core | agy (cut off) → Sonnet worker-build finishing in D:/Harness Farm/wt-c1 (branch c1-console) | sonnet | console/**, console/sql/views.sql | Resumed after rate limit | agent reply |
+| C1 console core | agy → Sonnet | sonnet | console/** | **Merged 4bf6cf5** (e2e 68/68, axe AA, bundle ≤250 kB; SaaS-grade per lead visual review) | D:/dev-cache/shots/C1 |
+| INT1 command contract + views migration | (next: agy after M5-A) | gemini | commands.py schemas, console commands.ts, 0003 views | Queued | briefs/INT1-command-contract-views.md |
 uns\C1-console-core |
 | M1c router+gateway | worker-build (worktree) | sonnet | see briefs/M1c | Running | agent reply |
 | FIX1 loop+fsync | agy (wt-fix1) | gemini-3.8-flash-high | cli_agent thread runner; fsync only test DB | **Merged** (tree-kill + cancel tests under SelectorEventLoop) | — |
