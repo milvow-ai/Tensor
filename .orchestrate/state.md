@@ -45,12 +45,13 @@ Routing: free model first → v4-flash fallback → v4-pro for important/judgmen
 ## Active workers (Phase 1 started 2026-10-04 ~05:00 on the user's "use whatever you can, final product" — user asleep; defaults taken for AI pool / Codex / keep-awake)
 | Worker | Agent | Model | Owns | Status | Output |
 |---|---|---|---|---|---|
-| M1a db+ledger | agy (cut off by quota) → Sonnet worker-build finishing, main tree | sonnet | farm/db, ledger, conftest, pyproject | Resumed after rate limit | agent reply |
+| M1a db+ledger | agy → Sonnet | sonnet | farm/db, ledger, conftest, pyproject | **Merged d71f738** (536 suite pass; crash recovery; 200-way race test) | — |
 uns\M1a-db-ledger |
 | M1b registry+adapters | worker-build (worktree) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | **Merged 932d7eb** (385 tests, gate green; deviations in commit msg) | — |
 | C1 console core | agy (cut off) → Sonnet worker-build finishing in D:/Harness Farm/wt-c1 (branch c1-console) | sonnet | console/**, console/sql/views.sql | Resumed after rate limit | agent reply |
 uns\C1-console-core |
-| M1c router+gateway | worker-build | sonnet | see briefs/M1c | Waiting for M1a+M1b | — |
+| M1c router+gateway | worker-build (worktree) | sonnet | see briefs/M1c | Running | agent reply |
+| FIX1 loop+fsync | agy (wt-fix1) | gemini-3.8-flash-high | cli_agent/base.py thread runner; local.py fsync only for test DB | Running | D:/dev-cache/runs/FIX1-loop-fsync |
 | M2c adapters+LLM | worker-build (worktree) | sonnet | adapters apollo/hunter/pagespeed/adzuna/ats_public, executors/llm.py, schemas, registry | Resumed after rate limit | agent reply |
 | M3e-A AI executors | agy (wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | **Merged fde1ce3** (32 tests; live agy+hermes OK $0.0003; Codex 0.160.0 installed) | — |
 | M3c-A MCP executor | agy (wt-m3c) | gemini-3.8-flash-high | farm/executors/mcp/*, token store, fake MCP server | **Merged ff60d8d** (14 tests; Clay URL UNVERIFIED; notes: silent except on ACL, data_dir dup) | — |
