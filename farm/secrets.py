@@ -20,17 +20,20 @@ import logging
 import os
 import re
 import threading
+from pathlib import Path
 from urllib.parse import quote, quote_plus
 
 __all__ = [
     "AUTH_SCHEMES",
     "AuthRefError",
     "RedactingFilter",
+    "ensure_token_store_dir",
     "install_log_redaction",
     "parse_auth_ref",
     "redact",
     "register_secret",
     "resolve_auth",
+    "resolve_token_store",
 ]
 
 MASK = "***"
@@ -84,12 +87,14 @@ def parse_auth_ref(auth_ref: str) -> tuple[str, str]:
     return scheme, ref
 
 
-def resolve_auth(auth_ref: str) -> str:
-    """Return the secret an ``auth_ref`` points at (``env:NAME`` only, for now).
+def resolve_auth(auth_ref: str, *, allow_token_store: bool = False) -> str:
+    """Return the secret an ``auth_ref`` points at (or directory path for ``token-store:ID``).
 
     Raises :class:`AuthRefError` for anything missing, empty, malformed or not implemented yet.
     """
     scheme, ref = parse_auth_ref(auth_ref)
+    if scheme == "token-store" and allow_token_store:
+        return str(resolve_token_store(auth_ref))
     if scheme != "env":
         raise AuthRefError(f"auth_ref scheme '{scheme}:' is not supported yet")
     raw = os.environ.get(ref)
@@ -148,3 +153,39 @@ def install_log_redaction(logger_name: str) -> None:
     logger = logging.getLogger(logger_name)
     if not any(isinstance(f, RedactingFilter) for f in logger.filters):
         logger.addFilter(RedactingFilter())
+
+
+def resolve_token_store(auth_ref: str) -> Path:
+    """Resolve a ``token-store:<id>`` auth_ref to its token directory path.
+
+    Returns the directory path under FARM_DATA_DIR/tokens/<id>.
+    Never returns, logs, or stores secret token contents.
+    """
+    scheme, ref = parse_auth_ref(auth_ref)
+    if scheme != "token-store":
+        raise AuthRefError(f"expected 'token-store:' auth_ref, got '{scheme}:'")
+    data_dir = Path(os.environ.get("FARM_DATA_DIR", "D:/farm-data"))
+    store_dir = data_dir / "tokens" / ref
+    return ensure_token_store_dir(store_dir)
+
+
+def ensure_token_store_dir(store_dir: Path) -> Path:
+    """Create token store directory with restricted ACL (current user only) if feasible."""
+    store_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        if os.name == "nt":
+            import subprocess
+
+            user = os.environ.get("USERNAME")
+            if user:
+                subprocess.run(
+                    ["icacls", str(store_dir), "/inheritance:r", "/grant:r", f"{user}:(OI)(CI)F"],
+                    capture_output=True,
+                    check=False,
+                )
+        else:
+            os.chmod(store_dir, 0o700)
+    except Exception:
+        pass
+    return store_dir
+
