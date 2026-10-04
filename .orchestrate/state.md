@@ -49,9 +49,13 @@ Routing: free model first → v4-flash fallback → v4-pro for important/judgmen
 uns\M1a-db-ledger |
 | M1b registry+adapters | worker-build (worktree) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | **Merged 932d7eb** (385 tests, gate green; deviations in commit msg) | — |
 | C1 console core | agy → Sonnet | sonnet | console/** | **Merged 4bf6cf5** (e2e 68/68, axe AA, bundle ≤250 kB; SaaS-grade per lead visual review) | D:/dev-cache/shots/C1 |
-| INT1 command contract + views migration | agy (wt-int1) | gemini-3.8-flash-high | commands.py schemas, console commands.ts, 0003 views | Running | D:/dev-cache/runs/INT1-command-contract-views |
+| INT1 command contract + views migration | agy + lead | gemini | commands.py schemas, console commands.ts, 0003 views | **Merged 9e96f29** (extra=forbid; lead removed circular-shim hack; vitest 24, e2e 68/68) | — |
 uns\C1-console-core |
-| M1c router+gateway | worker-build (worktree) | sonnet | see briefs/M1c | Running | agent reply |
+| M1c router+gateway | worker-build (worktree) | sonnet | router, gateway, sync, CLI | **Merged 026379f** (200 tests; 11/11 router mutations caught) | — |
+| **M1 LIVE E2E** | lead | — | scripts/e2e_live.py | **PASS 2026-10-04 18:44**: MCP stdio → farm serve → router → llm-or-free (Qwen free via Bifrost vk-farm-llm $0.50) → classify "billing" 0.98, $0.00, 292 tokens; trajectory plan→skip(groq needs_login)→skip(bedrock paused)→candidate→reserve×2→execute→commit×2→success | — |
+| M1 GATE review: correctness (+test honesty) | worker-check | sonnet | read-only | Running | agent reply |
+| M1 GATE review: security | worker-check | sonnet | read-only | Running | agent reply |
+| M3e-B ask_ai wiring | agy (wt-m3e-b) | gemini-3.8-flash-high | schemas, router hooks, gateway ask_ai/batch/list_ais, CLI ai | Running | D:/dev-cache/runs/M3e-ai-pool |
 | FIX1 loop+fsync | agy (wt-fix1) | gemini-3.8-flash-high | cli_agent thread runner; fsync only test DB | **Merged** (tree-kill + cancel tests under SelectorEventLoop) | — |
 | M2c adapters+LLM | worker-build (worktree) | sonnet | 5 adapters + executors/llm.py + schemas + registry | **Merged 788f68d** (+923 tests; suite 1462; mutation 16/16) | — |
 | M3b-A manager core | agy (wt-m3b) | gemini-3.8-flash-high | farm/manager/*, control/commands.py | **Merged 051e8a0** (25 grouped tests; 2.0M Gemini tokens) | — |
