@@ -70,6 +70,12 @@ Add to the fixture world: MCP integrations `notion` (oauth, 2 accounts, discover
 a custom stdio server `local-tools`, one OpenAPI provider, and AI accounts `claude-01…04` (4 emails), `codex-01…02`, `gemini-01`, `hermes-01` with a few
 running/finished jobs and conversations. Keep every id/label realistic; keep existing ids that current e2e specs rely on.
 
+## Known bug to fix first (lead, 2026-10-05)
+In `pnpm dev` (fixtures), Overview and Billing log `Error: Primitive.button failed to slot onto its children. Expected a single React element
+child or Slottable` (Radix `asChild` trigger whose child is not a single element), caught by an error boundary. Find the root cause (check every
+Radix `*Trigger asChild` / `Button asChild` / `SidebarMenuButton asChild` incl. components rendered inside tooltips/popovers and the React Compiler
+interplay), fix it, and add an e2e assertion that the dev-only error does not appear (or a unit test rendering the offending component).
+
 ## Done when
 `pnpm check` + `pnpm test:e2e` green (routing reorder enqueues `set_route`; integrations form renders from schema, rejects a raw-key-looking value,
 enqueues `add_connection`; policies budget edit; facts freshness badges); secret grep clean; Lighthouse scores reported; screenshots in
