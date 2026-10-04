@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import Ajv from "ajv";
 import { describe, expect, it } from "vitest";
 
@@ -19,6 +17,8 @@ import {
   createContractExamplePayloads,
 } from "../commands";
 import type { CommandKind } from "../types";
+import fs from "node:fs";
+import path from "node:path";
 
 describe("Farm command contract validation", () => {
   const ajv = new Ajv({ allErrors: true, strict: false });

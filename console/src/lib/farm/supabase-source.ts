@@ -8,20 +8,28 @@ import { createClient } from "@/lib/supabase/server";
 import { groupConnectionRows, toNullableNumber, toNumber } from "./group";
 import type {
   AlertRow,
+  BillingOverview,
+  BudgetRow,
   CapabilityCapacityRow,
   CommandKind,
   Connection,
   ConnectionQuery,
   ConnectionStatusRow,
+  CostPerResultRow,
   FarmCommand,
   FarmData,
   FarmOverview,
+  IdlePaidRow,
   JsonObject,
   Page,
   PoolDetail,
   PoolOverviewRow,
   ProviderKind,
+  RenewalRow,
+  RunDetailRow,
+  RunQuery,
   RunRow,
+  SpendDailyRow,
   SpendMonthRow,
 } from "./types";
 
@@ -93,6 +101,63 @@ function normalizeRun(row: RunRow): RunRow {
     cost_usd: toNumber(row.cost_usd),
     duration_ms: toNullableNumber(row.duration_ms),
     attempts_count: toNumber(row.attempts_count),
+  };
+}
+
+function normalizeSpendDaily(row: SpendDailyRow): SpendDailyRow {
+  return {
+    ...row,
+    usage_usd: toNumber(row.usage_usd),
+    billing_usd: toNumber(row.billing_usd),
+    spend_usd: toNumber(row.spend_usd),
+  };
+}
+
+function normalizeCostPerResult(row: CostPerResultRow): CostPerResultRow {
+  return {
+    ...row,
+    spend_usd: toNumber(row.spend_usd),
+    successful_results: toNumber(row.successful_results),
+    cost_per_result: toNullableNumber(row.cost_per_result),
+  };
+}
+
+function normalizeRenewal(row: RenewalRow): RenewalRow {
+  return {
+    ...row,
+    price_usd: toNumber(row.price_usd),
+    billing_day: toNullableNumber(row.billing_day),
+    days_until_renewal: toNumber(row.days_until_renewal),
+    used: toNullableNumber(row.used),
+    limit_value: toNullableNumber(row.limit_value),
+    usage_pct: toNullableNumber(row.usage_pct),
+  };
+}
+
+function normalizeIdlePaid(row: IdlePaidRow): IdlePaidRow {
+  return {
+    ...row,
+    plan_price_usd: toNumber(row.plan_price_usd),
+    days_idle: toNumber(row.days_idle),
+  };
+}
+
+function normalizeBudget(row: BudgetRow): BudgetRow {
+  return {
+    ...row,
+    monthly_usd: toNumber(row.monthly_usd),
+    spent_usd: toNullableNumber(row.spent_usd) ?? undefined,
+    forecast_usd: toNullableNumber(row.forecast_usd) ?? undefined,
+  };
+}
+
+function normalizeRunDetail(row: RunDetailRow): RunDetailRow {
+  return {
+    ...normalizeRun(row),
+    params: row.params ?? null,
+    result: row.result ?? null,
+    events: row.events ?? [],
+    evidence_ids: row.evidence_ids ?? [],
   };
 }
 
@@ -220,5 +285,130 @@ export class SupabaseFarmData implements FarmData {
       .single();
     if (result.error) throw new FarmDataError("farm_commands insert", result.error);
     return result.data as FarmCommand;
+  }
+
+  async getBillingOverview(dailyDays = 90): Promise<BillingOverview> {
+    const supabase = await createClient();
+    const cutoff = new Date(Date.now() - dailyDays * 86_400_000).toISOString().slice(0, 10);
+    const [spendMonth, spendDaily, budgets, renewals, costPerResult, idlePaid, paidCount] = await Promise.all([
+      supabase.from("v_spend_month").select("*"),
+      supabase.from("v_spend_daily").select("*").gte("day", cutoff).order("day", { ascending: false }),
+      supabase.from("budgets").select("*"),
+      supabase.from("v_renewals").select("*").order("renews_on", { ascending: true }),
+      supabase.from("v_cost_per_result").select("*"),
+      supabase.from("v_idle_paid").select("*"),
+      supabase
+        .from("connections")
+        .select("id", { count: "exact", head: true })
+        .neq("status", "disabled")
+        .not("plan->price_usd", "is", null),
+    ]);
+
+    const spendMonthRows = rows<SpendMonthRow>(spendMonth, "v_spend_month").map(normalizeSpend);
+    const spendMonthMap = new Map(spendMonthRows.map((r) => [r.provider_id, r]));
+    const totalSpend = spendMonthMap.get("total");
+
+    const rawBudgets = rows<BudgetRow>(budgets, "budgets").map(normalizeBudget);
+    const enrichedBudgets: BudgetRow[] = rawBudgets.map((b) => {
+      const match = b.scope === "global" ? totalSpend : b.ref ? spendMonthMap.get(b.ref) : null;
+      return {
+        ...b,
+        spent_usd: match?.spend_usd ?? 0,
+        forecast_usd: match?.forecast_usd ?? 0,
+      };
+    });
+
+    const idlePaidRows = rows<IdlePaidRow>(idlePaid, "v_idle_paid").map(normalizeIdlePaid);
+
+    return {
+      spendMonth: spendMonthRows,
+      spendDaily: rows<SpendDailyRow>(spendDaily, "v_spend_daily").map(normalizeSpendDaily),
+      budgets: enrichedBudgets,
+      renewals: rows<RenewalRow>(renewals, "v_renewals").map(normalizeRenewal),
+      costPerResult: rows<CostPerResultRow>(costPerResult, "v_cost_per_result").map(normalizeCostPerResult),
+      idlePaid: idlePaidRows,
+      paidAccountsCount: paidCount.count ?? 0,
+      idlePaidCount: idlePaidRows.length,
+    };
+  }
+
+  async listSpendDaily(days = 90): Promise<SpendDailyRow[]> {
+    const supabase = await createClient();
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+    const result = await supabase
+      .from("v_spend_daily")
+      .select("*")
+      .gte("day", cutoff)
+      .order("day", { ascending: false });
+    return rows<SpendDailyRow>(result, "v_spend_daily").map(normalizeSpendDaily);
+  }
+
+  async listBudgets(): Promise<BudgetRow[]> {
+    const supabase = await createClient();
+    const [budgets, spendMonth] = await Promise.all([
+      supabase.from("budgets").select("*"),
+      supabase.from("v_spend_month").select("*"),
+    ]);
+    const spendMonthRows = rows<SpendMonthRow>(spendMonth, "v_spend_month").map(normalizeSpend);
+    const spendMonthMap = new Map(spendMonthRows.map((r) => [r.provider_id, r]));
+    const totalSpend = spendMonthMap.get("total");
+    return rows<BudgetRow>(budgets, "budgets").map((b) => {
+      const normalized = normalizeBudget(b);
+      const match =
+        normalized.scope === "global" ? totalSpend : normalized.ref ? spendMonthMap.get(normalized.ref) : null;
+      return {
+        ...normalized,
+        spent_usd: match?.spend_usd ?? 0,
+        forecast_usd: match?.forecast_usd ?? 0,
+      };
+    });
+  }
+
+  async listRenewals(days = 45): Promise<RenewalRow[]> {
+    const supabase = await createClient();
+    const result = await supabase.from("v_renewals").select("*").order("renews_on", { ascending: true });
+    return rows<RenewalRow>(result, "v_renewals").map(normalizeRenewal);
+  }
+
+  async listCostPerResult(): Promise<CostPerResultRow[]> {
+    const supabase = await createClient();
+    const result = await supabase.from("v_cost_per_result").select("*");
+    return rows<CostPerResultRow>(result, "v_cost_per_result").map(normalizeCostPerResult);
+  }
+
+  async listIdlePaid(): Promise<IdlePaidRow[]> {
+    const supabase = await createClient();
+    const result = await supabase.from("v_idle_paid").select("*");
+    return rows<IdlePaidRow>(result, "v_idle_paid").map(normalizeIdlePaid);
+  }
+
+  async listRuns(query: RunQuery = {}): Promise<Page<RunRow>> {
+    const { page = 1, pageSize = 20, capability, status, failuresOnly, caller, from, to } = query;
+    const supabase = await createClient();
+    let q = supabase.from("v_recent_runs").select("*", { count: "exact" });
+
+    if (capability) q = q.eq("capability", capability);
+    if (status) q = q.eq("status", status);
+    if (failuresOnly) q = q.in("status", ["failed", "blocked"]);
+    if (caller) q = q.eq("caller", caller);
+    if (from) q = q.gte("started_at", from);
+    if (to) q = q.lte("started_at", to);
+
+    const fromIdx = (page - 1) * pageSize;
+    q = q.order("started_at", { ascending: false }).range(fromIdx, fromIdx + pageSize - 1);
+    const result = await q;
+    return {
+      items: rows<RunRow>(result, "v_recent_runs").map(normalizeRun),
+      total: result.count ?? 0,
+      page,
+      pageSize,
+    };
+  }
+
+  async getRunDetail(id: string): Promise<RunDetailRow | null> {
+    const supabase = await createClient();
+    const result = await supabase.from("v_run_detail").select("*").eq("id", id).maybeSingle();
+    if (result.error) throw new FarmDataError("v_run_detail", result.error);
+    return result.data ? normalizeRunDetail(result.data as unknown as RunDetailRow) : null;
   }
 }
