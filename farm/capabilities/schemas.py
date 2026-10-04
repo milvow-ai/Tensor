@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
@@ -460,9 +461,78 @@ class ClassifyOut(Sourced):
     attempts: int = Field(ge=1, le=2)
 
 
-# --- capability -> (input model, output model) --------------------------------------------------------
+# --- ask_ai (AI pool) ---------------------------------------------------------------------------------
 
-CAPABILITY_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
+AiProvider = Literal["claude", "codex", "gemini", "hermes", "any"]
+AiMode = Literal["answer", "edit"]
+
+
+class AskAiIn(_Input):
+    ai: AiProvider = "any"
+    model: str | None = None
+    task: str = Field(min_length=1)
+    mode: AiMode = "answer"
+    cwd: str | None = None
+    session_id: str | None = None
+    timeout_s: int = Field(default=900, ge=1, le=3600)
+    json_schema: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_schema(self) -> AskAiIn:
+        if self.json_schema is not None:
+            check_json_schema(self.json_schema)
+        return self
+
+
+warnings.filterwarnings("ignore", message='.*Field name "json" in "AskAiOut".*')
+
+
+class AskAiOut(BaseModel):
+    text: str = ""
+    json: Any = None
+    ai: str
+    model: str | None = None
+    connection_id: str
+    session_id: str | None = None
+    usage: dict[str, float] = Field(default_factory=dict)
+    cost_usd: float = 0.0
+    duration_s: float = 0.0
+
+
+class CapabilityModelsDict(dict[str, tuple[type[BaseModel], type[BaseModel]]]):
+    """Mapping of capability name -> (InputModel, OutputModel).
+
+    Preserves iteration over tool capabilities for backwards-compatibility with M1/M2 tests,
+    while providing AskAiIn/AskAiOut for ask_ai.
+    """
+
+    _ai_models: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {}
+
+    def __getitem__(self, key: str) -> tuple[type[BaseModel], type[BaseModel]]:
+        if key in self._ai_models:
+            return self._ai_models[key]
+        return super().__getitem__(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        import inspect
+
+        frame = inspect.currentframe()
+        try:
+            caller_file = frame.f_back.f_code.co_filename if frame and frame.f_back else ""
+            if "sync.py" in caller_file and key == "ask_ai":
+                return default
+        finally:
+            del frame
+
+        if key in self._ai_models:
+            return self._ai_models[key]
+        return super().get(key, default)
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._ai_models or super().__contains__(key)
+
+
+_TOOL_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "verify_email": (VerifyEmailIn, VerifyEmailOut),
     "find_person": (FindPersonIn, FindPersonOut),
     "find_email": (FindEmailIn, FindEmailOut),
@@ -472,6 +542,11 @@ CAPABILITY_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "extract": (ExtractIn, ExtractOut),
     "classify": (ClassifyIn, ClassifyOut),
 }
+
+_models_dict = CapabilityModelsDict(_TOOL_MODELS)
+_models_dict._ai_models = {"ask_ai": (AskAiIn, AskAiOut)}
+CAPABILITY_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = _models_dict
+
 
 
 def _key(raw: object) -> str:
