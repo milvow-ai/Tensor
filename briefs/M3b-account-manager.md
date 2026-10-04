@@ -35,3 +35,9 @@ It also executes the Console's commands from `farm_commands`, so every Console c
 
 ## Reply (≤ 15 lines)
 Files changed; test count; check tail; deviations.
+
+## Phase A (run now, in parallel with M1c)
+Do ONLY: `farm/manager/{__init__,balance,pacing,budgets,renewals,alerts,telegram,scheduler}.py`, `farm/control/commands.py` (consumer + per-kind Pydantic validation + audit), `templates/accounts-inventory.csv`, and their tests (`tests/test_manager_*.py`, `tests/test_commands.py`) using the M1a conftest fixtures (`pool`, `seed_connection`, `registry`). Expose pure functions the router will call later: `budgets.check_paid_call(pool, connection_id, est_cost) -> PolicyDecision` and `pacing.pace_rank_penalty(...)`.
+Not in Phase A: edits to `farm/control/cli.py`, `farm/resources/router.py`, `farm/context.py` (M1c owns them now) — list the CLI commands and router hooks you would add in your reply instead.
+Windows: run asyncio on the SelectorEventLoop (psycopg); never use `asyncio.create_subprocess_*`.
+Done when: `scripts/check.ps1` → RESULT: all passed.
