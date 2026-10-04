@@ -147,7 +147,7 @@ async def test_run_cli_process_stdout_cap() -> None:
 
 
 def test_build_exec_result() -> None:
-    conn = ConnectionView(id="test-conn", provider_id="test-prov")
+    conn = ConnectionView(auth_ref="cli:test", id="test-conn", provider_id="test-prov")
     res = BaseCliAgentExecutor.build_exec_result(
         ok=True,
         text="All done",

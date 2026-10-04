@@ -31,6 +31,7 @@ async def test_claude_success_answer_mode(fake_harness: FakeCliHarness) -> None:
     fake_harness.set_response(stdout=json.dumps(payload))
 
     conn = ConnectionView(
+        auth_ref="cli:test",
         id="claude-02",
         provider_id="claude",
         meta={
@@ -82,6 +83,7 @@ async def test_claude_edit_mode_and_resume(fake_harness: FakeCliHarness) -> None
     fake_harness.set_response(stdout=json.dumps(payload))
 
     conn = ConnectionView(
+        auth_ref="cli:test",
         id="claude-03",
         provider_id="claude",
         meta={"cli_path": str(bin_path)},
@@ -122,7 +124,9 @@ async def test_claude_limit_reached_with_reset(fake_harness: FakeCliHarness) -> 
     }
     fake_harness.set_response(stdout=json.dumps(payload), exit_code=1)
 
-    conn = ConnectionView(id="claude-02", provider_id="claude", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="claude-02", provider_id="claude", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -147,7 +151,9 @@ async def test_claude_needs_login(fake_harness: FakeCliHarness) -> None:
         exit_code=1,
     )
 
-    conn = ConnectionView(id="claude-02", provider_id="claude", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="claude-02", provider_id="claude", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -167,7 +173,9 @@ async def test_claude_timeout(fake_harness: FakeCliHarness) -> None:
     bin_path = fake_harness.register_cli("claude")
     fake_harness.set_response(stdout="Too slow", delay_s=2.0)
 
-    conn = ConnectionView(id="claude-02", provider_id="claude", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="claude-02", provider_id="claude", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -194,7 +202,9 @@ async def test_claude_json_schema(fake_harness: FakeCliHarness) -> None:
     }
     fake_harness.set_response(stdout=json.dumps(payload))
 
-    conn = ConnectionView(id="claude-02", provider_id="claude", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="claude-02", provider_id="claude", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",

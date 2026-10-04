@@ -24,6 +24,7 @@ live_only = pytest.mark.skipif(
 @pytest.mark.asyncio
 async def test_live_agy_executor() -> None:
     conn = ConnectionView(
+        auth_ref="cli:test",
         id="agy-01",
         provider_id="gemini",
         meta={"model": "gemini-3.8-flash-low"},
@@ -50,6 +51,7 @@ async def test_live_agy_executor() -> None:
 @pytest.mark.asyncio
 async def test_live_hermes_executor() -> None:
     conn = ConnectionView(
+        auth_ref="cli:test",
         id="hermes-01",
         provider_id="hermes",
         meta={"profile": "farm-agent"},

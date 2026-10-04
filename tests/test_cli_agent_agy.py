@@ -35,6 +35,7 @@ async def test_agy_success_answer_mode(fake_harness: FakeCliHarness) -> None:
     fake_harness.set_response(stdout=json.dumps(payload))
 
     conn = ConnectionView(
+        auth_ref="cli:test",
         id="agy-01",
         provider_id="gemini",
         meta={
@@ -84,7 +85,9 @@ async def test_agy_edit_mode_and_resume(fake_harness: FakeCliHarness) -> None:
     }
     fake_harness.set_response(stdout=json.dumps(payload))
 
-    conn = ConnectionView(id="agy-01", provider_id="gemini", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="agy-01", provider_id="gemini", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -118,7 +121,9 @@ async def test_agy_limit_reached(fake_harness: FakeCliHarness) -> None:
     }
     fake_harness.set_response(stdout=json.dumps(payload), exit_code=1)
 
-    conn = ConnectionView(id="agy-01", provider_id="gemini", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="agy-01", provider_id="gemini", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -143,7 +148,9 @@ async def test_agy_needs_login(fake_harness: FakeCliHarness) -> None:
         exit_code=1,
     )
 
-    conn = ConnectionView(id="agy-01", provider_id="gemini", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="agy-01", provider_id="gemini", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -163,7 +170,9 @@ async def test_agy_timeout(fake_harness: FakeCliHarness) -> None:
     bin_path = fake_harness.register_cli("agy")
     fake_harness.set_response(stdout="Delayed response", delay_s=2.0)
 
-    conn = ConnectionView(id="agy-01", provider_id="gemini", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="agy-01", provider_id="gemini", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",

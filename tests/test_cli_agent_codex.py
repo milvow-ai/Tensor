@@ -29,6 +29,7 @@ async def test_codex_success_answer_mode_jsonl(fake_harness: FakeCliHarness) -> 
     fake_harness.set_response(stdout=stdout_lines)
 
     conn = ConnectionView(
+        auth_ref="cli:test",
         id="codex-01",
         provider_id="codex",
         meta={
@@ -79,7 +80,9 @@ async def test_codex_edit_mode_and_resume(fake_harness: FakeCliHarness) -> None:
     stdout_lines = "\n".join(json.dumps(ev) for ev in events)
     fake_harness.set_response(stdout=stdout_lines)
 
-    conn = ConnectionView(id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -118,7 +121,9 @@ async def test_codex_single_json_response(fake_harness: FakeCliHarness) -> None:
     }
     fake_harness.set_response(stdout=json.dumps(payload))
 
-    conn = ConnectionView(id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -143,7 +148,9 @@ async def test_codex_limit_reached(fake_harness: FakeCliHarness) -> None:
         exit_code=1,
     )
 
-    conn = ConnectionView(id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -168,7 +175,9 @@ async def test_codex_needs_login(fake_harness: FakeCliHarness) -> None:
         exit_code=1,
     )
 
-    conn = ConnectionView(id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -188,7 +197,9 @@ async def test_codex_timeout(fake_harness: FakeCliHarness) -> None:
     bin_path = fake_harness.register_cli("codex")
     fake_harness.set_response(stdout="Hanging", delay_s=2.0)
 
-    conn = ConnectionView(id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",

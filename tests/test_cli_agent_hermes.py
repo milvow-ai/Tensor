@@ -38,6 +38,7 @@ async def test_hermes_success_basic(fake_harness: FakeCliHarness) -> None:
     )
 
     conn = ConnectionView(
+        auth_ref="cli:test",
         id="hermes-01",
         provider_id="hermes",
         meta={
@@ -91,7 +92,9 @@ async def test_hermes_resume_and_model(fake_harness: FakeCliHarness) -> None:
         usage_file_data=usage_data,
     )
 
-    conn = ConnectionView(id="hermes-01", provider_id="hermes", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="hermes-01", provider_id="hermes", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -127,7 +130,9 @@ async def test_hermes_limit_reached(fake_harness: FakeCliHarness) -> None:
         exit_code=1,
     )
 
-    conn = ConnectionView(id="hermes-01", provider_id="hermes", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="hermes-01", provider_id="hermes", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -152,7 +157,9 @@ async def test_hermes_needs_login(fake_harness: FakeCliHarness) -> None:
         exit_code=1,
     )
 
-    conn = ConnectionView(id="hermes-01", provider_id="hermes", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="hermes-01", provider_id="hermes", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
@@ -172,7 +179,9 @@ async def test_hermes_timeout(fake_harness: FakeCliHarness) -> None:
     bin_path = fake_harness.register_cli("hermes")
     fake_harness.set_response(stdout="Late output", delay_s=2.0)
 
-    conn = ConnectionView(id="hermes-01", provider_id="hermes", meta={"cli_path": str(bin_path)})
+    conn = ConnectionView(
+        auth_ref="cli:test", id="hermes-01", provider_id="hermes", meta={"cli_path": str(bin_path)}
+    )
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
