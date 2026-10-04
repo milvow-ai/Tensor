@@ -29,3 +29,9 @@ runs one watchdog iteration in test mode, asserts restart within 60 s and an ale
 
 ## Reply (≤ 15 lines)
 Files changed; test count; check tail; `farm doctor` output; deviations.
+
+## Phase A (run now, in parallel with M1c)
+Do ONLY: `farm/control/{doctor,heartbeat,keepawake,backup}.py` as importable modules with pure check functions (each check returns `CheckResult(name, status PASS|WARN|FAIL, detail, fix_hint)`), `scripts/farm-watchdog.ps1` and `scripts/install-farm-service.ps1` (with a `-TestMode` single-iteration switch; do not run the installer), and tests `tests/test_doctor.py`, `tests/test_backup.py`, `tests/test_heartbeat.py`. The watchdog acceptance test that spawns `farm run` is Phase B (after `farm run` exists).
+Not in Phase A: `farm/control/cli.py`, `docs/FARM-OPERATIONS.md`.
+Windows: asyncio on the SelectorEventLoop; subprocesses via threads (see `farm/executors/cli_agent/base.py`), never `asyncio.create_subprocess_*`. pg_dump: use the binary bundled with pgserver in local mode; for a remote URL, require `pg_dump` on PATH and report clearly if missing.
+Done when: `scripts/check.ps1` → RESULT: all passed.
