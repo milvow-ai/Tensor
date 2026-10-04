@@ -47,8 +47,9 @@ def test_pin_without_an_id_is_a_caller_error() -> None:
 
 
 def test_unimplemented_strategies_refuse_loudly() -> None:
-    with pytest.raises(ValueError, match="not implemented"):
-        order_candidates(POOL, "round_robin")
+    # round_robin is built in M2a; parallel_split is reserved for M3 and raises NotImplementedError
+    with pytest.raises(NotImplementedError, match="not implemented"):
+        order_candidates(POOL, "parallel_split")
 
 
 def test_empty_pool_orders_to_empty() -> None:
