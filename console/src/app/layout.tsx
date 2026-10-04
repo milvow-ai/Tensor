@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 
-import { Toaster } from "@/components/ui/sonner";
+import { FarmToaster } from "@/components/farm/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { APP_CONFIG } from "@/config/app-config";
 import { fontVars } from "@/lib/fonts/registry";
@@ -13,12 +13,16 @@ import { PreferencesStoreProvider } from "@/stores/preferences/preferences-provi
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://studio-admin.arhamkhnz.com"),
-  title: APP_CONFIG.meta.title,
+  title: { default: APP_CONFIG.meta.title, template: `%s · ${APP_CONFIG.name}` },
   description: APP_CONFIG.meta.description,
-  twitter: {
-    card: "summary_large_image",
-  },
+  applicationName: APP_CONFIG.name,
+  // A private control room: never indexed.
+  robots: { index: false, follow: false },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
@@ -44,7 +48,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         <TooltipProvider>
           <PreferencesStoreProvider initialValues={PREFERENCE_DEFAULTS}>
             {children}
-            <Toaster />
+            <FarmToaster />
           </PreferencesStoreProvider>
         </TooltipProvider>
       </body>

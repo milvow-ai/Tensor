@@ -575,7 +575,7 @@ def crash_dir() -> Iterator[Path]:
     import shutil
     import uuid
 
-    from farm.db.local import stop_local
+    from farm.db.local import _log_path, stop_local
     from farm.settings import data_dir
 
     pgdata = data_dir() / f"pgcrash_{uuid.uuid4().hex[:8]}"
@@ -584,16 +584,23 @@ def crash_dir() -> Iterator[Path]:
     shutil.rmtree(pgdata, ignore_errors=True)
     for debris in pgdata.parent.glob(f"{pgdata.name}.init-*"):
         shutil.rmtree(debris, ignore_errors=True)
+    for logfile in _log_path(pgdata).parent.glob(f"{pgdata.name}.*"):
+        logfile.unlink(missing_ok=True)
 
 
-def test_local_server_restarts_after_a_hard_kill(crash_dir: Path) -> None:
-    """Regression: after the postmaster was killed, the restart timed out on Windows (crash recovery retried
-    the locked server log for 30 s, pgserver gives up after 10 s). Also covers what a crash or PC shutdown
-    leaves around: a stale (here also torn) postmaster.pid and a corrupt pgserver handle list."""
-    from farm.db.local import get_local_server
+@pytest.mark.parametrize("durable", [True, False], ids=["fsync-on", "fsync-off"])
+def test_local_server_restarts_after_a_hard_kill(crash_dir: Path, durable: bool) -> None:
+    """Regression: after the postmaster was killed, the restart timed out on Windows. Crash recovery fsyncs
+    every file in the data directory and the new postmaster held the server log, which then lived inside it,
+    open without write sharing: ``could not open file "./log": sharing violation``, retried for 30 s while
+    pgserver gives up after 10 s. Must work with ``fsync = on`` (the owner's runtime database) as well as
+    ``off`` (throwaway test databases). Also covers what a crash or PC shutdown leaves around: a stale, torn
+    postmaster.pid and a corrupt pgserver handle list."""
+    from farm.db.local import _log_path, get_local_server
 
-    server = get_local_server(crash_dir)
+    server = get_local_server(crash_dir, durable=durable)
     with psycopg.connect(server.get_uri(), autocommit=True) as conn:
+        assert conn.execute("show fsync").fetchone() == ("on" if durable else "off",)
         conn.execute("create table survivor (n int)")
         conn.execute("insert into survivor values (42)")
     postmaster_pid = server.get_postmaster_info().pid
@@ -604,10 +611,33 @@ def test_local_server_restarts_after_a_hard_kill(crash_dir: Path) -> None:
     pid_file.write_text("\n".join(pid_file.read_text(encoding="utf-8").splitlines()[:3]), encoding="utf-8")
     (crash_dir / ".handle_pids.json").write_text("", encoding="utf-8")  # torn write
 
-    restarted = get_local_server(crash_dir)  # must recover instead of raising
+    restarted = get_local_server(crash_dir, durable=durable)  # must recover instead of raising
     assert restarted.get_postmaster_info().pid != postmaster_pid
     with psycopg.connect(restarted.get_uri(), autocommit=True) as conn:
+        assert conn.execute("show fsync").fetchone() == ("on" if durable else "off",)
         assert conn.execute("select n from survivor").fetchall() == [(42,)]
+
+    server_log = _log_path(crash_dir).read_text(encoding="utf-8", errors="replace")
+    assert "automatic recovery in progress" in server_log  # the restart really went through crash recovery
+    assert "sharing violation" not in server_log
+    assert not (crash_dir / "log").exists()  # the log is not inside the data directory
+
+
+def test_legacy_log_inside_the_data_directory_is_moved_out(crash_dir: Path) -> None:
+    """Data directories created before the fix hold their log inside; it must not stay there."""
+    from farm.db.local import _log_path, get_local_server, stop_local
+
+    get_local_server(crash_dir, durable=True)
+    assert stop_local(crash_dir) is True
+    (crash_dir / "log").write_text("old history\n", encoding="utf-8")
+
+    server = get_local_server(crash_dir, durable=True)
+    with psycopg.connect(server.get_uri(), autocommit=True) as conn:
+        assert conn.execute("select 1").fetchone() == (1,)
+    assert not (crash_dir / "log").exists()
+    assert (_log_path(crash_dir).with_name(f"{crash_dir.name}.legacy.log")).read_text(
+        encoding="utf-8"
+    ) == "old history\n"
 
 
 def test_local_server_recovers_from_an_interrupted_initdb(crash_dir: Path) -> None:

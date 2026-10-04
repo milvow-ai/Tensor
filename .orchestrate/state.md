@@ -48,13 +48,15 @@ Routing: free model first → v4-flash fallback → v4-pro for important/judgmen
 | M1a db+ledger | agy → Sonnet | sonnet | farm/db, ledger, conftest, pyproject | **Merged d71f738** (536 suite pass; crash recovery; 200-way race test) | — |
 uns\M1a-db-ledger |
 | M1b registry+adapters | worker-build (worktree) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | **Merged 932d7eb** (385 tests, gate green; deviations in commit msg) | — |
-| C1 console core | agy (cut off) → Sonnet worker-build finishing in D:/Harness Farm/wt-c1 (branch c1-console) | sonnet | console/**, console/sql/views.sql | Resumed after rate limit | agent reply |
+| C1 console core | agy → Sonnet | sonnet | console/** | **Merged 4bf6cf5** (e2e 68/68, axe AA, bundle ≤250 kB; SaaS-grade per lead visual review) | D:/dev-cache/shots/C1 |
+| INT1 command contract + views migration | agy (wt-int1) | gemini-3.8-flash-high | commands.py schemas, console commands.ts, 0003 views | Running | D:/dev-cache/runs/INT1-command-contract-views |
 uns\C1-console-core |
 | M1c router+gateway | worker-build (worktree) | sonnet | see briefs/M1c | Running | agent reply |
 | FIX1 loop+fsync | agy (wt-fix1) | gemini-3.8-flash-high | cli_agent thread runner; fsync only test DB | **Merged** (tree-kill + cancel tests under SelectorEventLoop) | — |
 | M2c adapters+LLM | worker-build (worktree) | sonnet | 5 adapters + executors/llm.py + schemas + registry | **Merged 788f68d** (+923 tests; suite 1462; mutation 16/16) | — |
-| M3b-A manager core | agy (wt-m3b) | gemini-3.8-flash-high | farm/manager/*, control/commands.py | Running | D:/dev-cache/runs/M3b-account-manager |
-| FIX2 fsync vs crash recovery | M1a Sonnet (resumed) | sonnet | farm/db/local.py | Running (hard-kill test fails since FIX1) | agent reply |
+| M3b-A manager core | agy (wt-m3b) | gemini-3.8-flash-high | farm/manager/*, control/commands.py | **Merged 051e8a0** (25 grouped tests; 2.0M Gemini tokens) | — |
+| M5-A 24/7 core | agy (wt-m5) | gemini-3.8-flash-high | control/{doctor,heartbeat,keepawake,backup}.py, watchdog/install scripts | **Merged** (27 tests; real doctor 8 pass/4 warn/1 fail-expected; 2.1M Gemini tokens) | — |
+| FIX2 fsync vs crash recovery | M1a Sonnet (resumed) | sonnet | farm/db/local.py | **Merged** (root cause: log inside pgdata; durable restart after kill verified) | — |
 | M3e-A AI executors | agy (wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | **Merged fde1ce3** (32 tests; live agy+hermes OK $0.0003; Codex 0.160.0 installed) | — |
 | M3c-A MCP executor | agy (wt-m3c) | gemini-3.8-flash-high | farm/executors/mcp/*, token store, fake MCP server | **Merged ff60d8d** (14 tests; Clay URL UNVERIFIED; notes: silent except on ACL, data_dir dup) | — |
 Shared contract: `briefs/CONTEXT.md`. Keep-awake helper: D:\dev-cache\keep-awake.ps1 (14 h from 04:57).
