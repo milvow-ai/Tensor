@@ -53,7 +53,10 @@ Already in the Console: shadcn/ui (Radix), `@tanstack/react-table`, `recharts` (
 - Schema forms: `@rjsf/core` 6.11 (Apache-2.0) + `@rjsf/shadcn` 6.11 (MIT), validator wired to the generated registry schema.
 - JSON / schema viewer (tool schemas, run payloads): `react-json-view-lite` 2.5 (MIT) — not `@uiw/react-json-view` (alpha).
 - Evidence image viewer: `yet-another-react-lightbox` 3.32 (MIT). Dates: shadcn calendar on `react-day-picker` (MIT).
-- Patterns only (do not copy code): Langfuse / Trigger.dev trace & run timelines for the AI job + conversation views.
+- Licences verified 2026-10-05 (GitHub API): `sadmann7/tablecn` MIT, `openstatusHQ/data-table-filters` MIT, `sadmann7/diceui` MIT (accessible
+  shadcn components, e.g. Sortable) — code may be copied in with attribution in a header comment.
+- **Do NOT copy code from** `cosscom/coss` (formerly Origin UI) and `openstatusHQ/openstatus` — both **AGPL-3.0**; Langfuse (mixed licence with `ee`).
+  Patterns only: Langfuse / Trigger.dev trace & run timelines for the AI job + conversation views. `haydenbleasel/kibo` moved — unverified, skip.
 Every new dependency: lazy-load where heavy (xyflow, rjsf, lightbox), keep the bundle limit, and say in the reply what each one replaced.
 
 ## Production readiness
