@@ -1,0 +1,56 @@
+{
+  "_source": "'ok' follows the example and field table of https://developers.ashbyhq.com/docs/public-job-posting-api (GET https://api.ashbyhq.com/posting-api/job-board/{JOB_BOARD_NAME}?includeCompensation=true), fetched 2026-10-04: the first job is the docs' 'Product Manager' with its compensation block (trimmed); the other jobs are invented to exercise isListed=false, a job without compensation and a non-annual salary. The documented fields have no job id, so the adapter uses the last segment of jobUrl. Not recorded provider output.",
+  "cases": {
+    "ok": {
+      "apiVersion": "1",
+      "jobs": [
+        {
+          "title": "Product Manager",
+          "location": "Houston, TX",
+          "secondaryLocations": [{"location": "San Francisco", "address": {"addressLocality": "San Francisco", "addressRegion": "California", "addressCountry": "USA"}}],
+          "department": "Product",
+          "team": "Growth",
+          "isListed": true,
+          "isRemote": true,
+          "workplaceType": "Remote",
+          "descriptionHtml": "<p>Join our team</p>",
+          "descriptionPlain": "Join our team",
+          "publishedAt": "2021-04-30T16:21:55.393+00:00",
+          "employmentType": "FullTime",
+          "address": {"postalAddress": {"addressLocality": "Houston", "addressRegion": "Texas", "addressCountry": "USA"}},
+          "jobUrl": "https://jobs.ashbyhq.com/example/4d2f1c9e-1111-4aaa-8bbb-000000000001",
+          "applyUrl": "https://jobs.ashbyhq.com/example/4d2f1c9e-1111-4aaa-8bbb-000000000001/apply",
+          "compensation": {
+            "compensationTierSummary": "$81K – $87K • 0.5% – 1.75% • Offers Bonus",
+            "summaryComponents": [
+              {"compensationType": "EquityPercentage", "interval": "NONE", "currencyCode": null, "minValue": 0.5, "maxValue": 1.75},
+              {"compensationType": "Salary", "interval": "1 YEAR", "currencyCode": "USD", "minValue": 81000, "maxValue": 87000},
+              {"compensationType": "Bonus", "interval": "1 YEAR", "currencyCode": "USD", "minValue": null, "maxValue": null}
+            ]
+          }
+        },
+        {
+          "title": "Support Specialist",
+          "location": "Remote",
+          "department": "Support",
+          "isListed": true,
+          "isRemote": false,
+          "workplaceType": "Hybrid",
+          "publishedAt": "2026-09-01T10:00:00Z",
+          "employmentType": "Contract",
+          "jobUrl": "https://jobs.ashbyhq.com/example/4d2f1c9e-2222-4aaa-8bbb-000000000002",
+          "compensation": {"summaryComponents": [{"compensationType": "Salary", "interval": "1 HOUR", "currencyCode": "USD", "minValue": 30, "maxValue": 40}]}
+        },
+        {
+          "title": "Hidden Role",
+          "location": "Remote",
+          "isListed": false,
+          "jobUrl": "https://jobs.ashbyhq.com/example/4d2f1c9e-3333-4aaa-8bbb-000000000003"
+        },
+        {"title": "No url", "isListed": true}
+      ]
+    },
+    "empty": {"apiVersion": "1", "jobs": []},
+    "wrong_shape": {"apiVersion": "1"}
+  }
+}

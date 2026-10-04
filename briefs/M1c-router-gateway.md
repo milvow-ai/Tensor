@@ -40,3 +40,7 @@ so the router must be generic (no `verify_email` special cases outside the capab
 
 ## Reply (≤ 15 lines)
 Files changed; test count; last 6 lines of check.ps1; mcp_smoke output; deviations from CONTEXT and why; open issues.
+
+## Added 2026-10-04 (after M1a)
+- **Windows event loop:** psycopg async requires a `SelectorEventLoop`; the Farm process (`farm serve`, `farm call`, tests) must run on it (set the policy once at process start in the CLI entry points; the test conftest already handles the DB loop). Do not use `asyncio.create_subprocess_*` anywhere in your code (it needs the Proactor loop on Windows); the cli_agent runner is being moved to thread-based subprocesses by a parallel fix brief.
+- The test fixtures are in `tests/conftest.py` (M1a): `db_url`, `pool`, `registry`, `seed_connection` — reuse them.

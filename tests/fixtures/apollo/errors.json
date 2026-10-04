@@ -1,0 +1,42 @@
+{
+  "_source": "'rate_limit', 'forbidden_scope', 'validation_org' and 'unauthorized_text' are RECORDED FROM THE DOCS (not live output): the 429, 403, 422 and 401 examples of https://docs.apollo.io/reference/organization-enrichment and /people-enrichment, plus https://docs.apollo.io/reference/status-codes (error_details shape) and https://docs.apollo.io/reference/rate-limits (retry-after header), fetched 2026-10-04. 'out_of_credits_code', 'out_of_credits_message' and 'echoes_key' are UNVERIFIED: Apollo does not document its out-of-credits response. '{KEY}' is replaced with the test's sentinel key.",
+  "cases": {
+    "rate_limit": {
+      "message": "The maximum number of api calls allowed for api/v1/people/match is 600 times per hour. Please upgrade your plan from https://app.apollo.io/#/settings/plans/upgrade.",
+      "error_details": {
+        "code": "USAGE.RATE_LIMIT.API_RATE_LIMIT_EXCEEDED",
+        "message": "You have made more API requests than your plan allows in this time window.",
+        "suggestions": [
+          {"label": "Wait until the rate limit resets, then retry the API request."},
+          {"label": "Check the Apollo Docs to understand API rate limits.", "url": "https://docs.apollo.io/reference/rate-limits", "retry_after_seconds": 41}
+        ],
+        "context": {"window": {"value": "hour", "description": "The rate limit window that was exhausted"}}
+      }
+    },
+    "forbidden_scope": {
+      "error": "This API key is not authorized to access api/v1/organizations/enrich. Request an API key from your administrator that includes this endpoint in its configured scope.",
+      "error_code": "API_INACCESSIBLE",
+      "error_details": {
+        "code": "AUTH.AUTHORIZATION.ENDPOINT_ACCESS_DENIED",
+        "message": "Your team is not permitted to call this endpoint.",
+        "suggestions": [{"label": "Contact support@apollo.io if you need access to this endpoint"}],
+        "context": {"endpoint": {"value": "api/v1/organizations/enrich", "description": "The endpoint your request named"}}
+      }
+    },
+    "validation_org": {
+      "error_details": {
+        "code": "ORGANIZATION.VALIDATION.ORGANIZATION_IDENTIFIER_REQUIRED",
+        "message": "Include a company name, domain, website URL, or LinkedIn URL to find a match.",
+        "suggestions": [{"label": "Retry the request with a name, domain, website_url, or linkedin_url parameter included"}],
+        "context": {}
+      }
+    },
+    "out_of_credits_code": {
+      "error": "You have run out of credits.",
+      "error_details": {"code": "USAGE.CREDITS.INSUFFICIENT_CREDITS", "message": "Your team has no credits left for this request.", "suggestions": [], "context": {}}
+    },
+    "out_of_credits_message": {"error": "Insufficient credits to complete this request. Please upgrade your plan."},
+    "unauthorized_text": "Invalid API key. See https://docs.apollo.io/reference/authentication for how to authenticate.",
+    "echoes_key": {"error": "Invalid access credentials for key {KEY}", "error_details": {"code": "AUTH.AUTHENTICATION.CREDENTIALS_INVALID", "message": "The credential {KEY} could not be authenticated."}}
+  }
+}

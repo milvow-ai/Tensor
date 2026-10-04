@@ -1,0 +1,11 @@
+{
+  "_source": "UNVERIFIED: https://developer.adzuna.com/overview (fetched 2026-10-04) says only that 'an HTTP response code other than 200 will be returned and the error will be serialised in the serialisation format requested'; the interactive endpoint docs that show the body are behind a login. The {exception, display, description} shape and the texts below are plausible, not recorded. '{KEY}' is replaced with the test's sentinel app key.",
+  "cases": {
+    "auth_fail": {"__CLASS__": "Adzuna::API::Response::APIException", "exception": "AUTH_FAIL", "display": "Authorisation failed", "description": "Authorisation failed, please check your app_id and app_key", "doc": "https://developer.adzuna.com/overview"},
+    "daily_limit": {"exception": "USAGE_LIMIT", "display": "Usage limit exceeded", "description": "You have exceeded your allowed 250 hits per day"},
+    "minute_limit": {"exception": "USAGE_LIMIT", "display": "Too many requests", "description": "Please slow down: 25 hits per minute"},
+    "bad_country": {"exception": "INVALID_REQUEST", "display": "Unknown country", "description": "The country code is not supported"},
+    "no_exception": {"error": "something"},
+    "echoes_key": {"exception": "AUTH_FAIL", "display": "Authorisation failed", "description": "The app_key {KEY} was rejected"}
+  }
+}

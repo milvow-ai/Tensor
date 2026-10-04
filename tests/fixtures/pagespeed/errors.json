@@ -1,0 +1,16 @@
+{
+  "_source": "UNVERIFIED: the envelope {\"error\": {\"code\", \"message\", \"status\", \"errors\": [{\"reason\"}], \"details\": [{\"@type\", \"reason\", \"metadata\"}]}} is Google's general error model (https://cloud.google.com/apis/design/errors, fetched 2026-10-04); the PageSpeed-specific reasons, quota names and the 'Lighthouse returned error: ...' wording are plausible texts from public reports, not recorded provider output. '{KEY}' is replaced with the test's sentinel key.",
+  "cases": {
+    "api_key_invalid": {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT", "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "API_KEY_INVALID", "domain": "googleapis.com"}]}},
+    "permission_denied": {"error": {"code": 403, "message": "PageSpeed Insights API has not been used in project 123 before or it is disabled.", "status": "PERMISSION_DENIED", "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "SERVICE_DISABLED"}]}},
+    "quota_daily": {"error": {"code": 429, "message": "Quota exceeded for quota metric 'Queries' and limit 'Queries per day' of service 'pagespeedonline.googleapis.com'.", "status": "RESOURCE_EXHAUSTED", "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "RATE_LIMIT_EXCEEDED", "metadata": {"quota_limit": "defaultPerDayPerProject"}}]}},
+    "quota_per_minute": {"error": {"code": 429, "message": "Quota exceeded for quota metric 'Queries' and limit 'Queries per minute' of service 'pagespeedonline.googleapis.com'.", "status": "RESOURCE_EXHAUSTED", "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "RATE_LIMIT_EXCEEDED", "metadata": {"quota_limit": "defaultPerMinutePerProject"}}]}},
+    "daily_limit_legacy": {"error": {"code": 403, "message": "Daily Limit Exceeded", "errors": [{"message": "Daily Limit Exceeded", "domain": "usageLimits", "reason": "dailyLimitExceeded"}]}},
+    "rate_limit_legacy": {"error": {"code": 403, "message": "Rate Limit Exceeded", "errors": [{"message": "Rate Limit Exceeded", "domain": "usageLimits", "reason": "rateLimitExceeded"}]}},
+    "invalid_url": {"error": {"code": 400, "message": "Invalid value 'nonsense'. Values must match the following regular expression: '(?i)(url:|origin:)?http(s)?://.*'", "status": "INVALID_ARGUMENT", "errors": [{"reason": "badRequest"}]}},
+    "lighthouse_dns": {"error": {"code": 500, "message": "Lighthouse returned error: FAILED_DOCUMENT_REQUEST. Lighthouse was unable to reliably load the page you requested. (Details: net::ERR_NAME_NOT_RESOLVED)", "status": "INTERNAL", "errors": [{"reason": "lighthouseError"}]}},
+    "lighthouse_not_html": {"error": {"code": 500, "message": "Lighthouse returned error: NOT_HTML. The page provided is not HTML (served as MIME type application/pdf).", "status": "INTERNAL"}},
+    "lighthouse_other": {"error": {"code": 500, "message": "Lighthouse returned error: PROTOCOL_TIMEOUT. Waiting for DevTools protocol response has exceeded the allotted time.", "status": "INTERNAL"}},
+    "echoes_key": {"error": {"code": 400, "message": "API key not valid: {KEY}. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}}
+  }
+}

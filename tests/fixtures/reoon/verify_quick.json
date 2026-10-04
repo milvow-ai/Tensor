@@ -1,0 +1,67 @@
+{
+  "_source": "https://www.reoon.com/articles/api-documentation-of-reoon-email-verifier/ (quick-mode response shape: status is one of valid, invalid, disposable, spamtrap), fetched 2026-10-04. Quick mode does not check the individual inbox.",
+  "cases": {
+    "valid": {
+      "email": "jane.doe@example.com",
+      "status": "valid",
+      "username": "jane.doe",
+      "domain": "example.com",
+      "is_valid_syntax": true,
+      "is_disposable": false,
+      "is_role_account": false,
+      "mx_accepts_mail": true,
+      "is_spamtrap": false,
+      "is_free_email": false,
+      "mx_records": [
+        "mx1.example.com"
+      ],
+      "verification_mode": "quick"
+    },
+    "invalid": {
+      "email": "jane.doe@example.com",
+      "status": "invalid",
+      "username": "jane.doe",
+      "domain": "example.com",
+      "is_valid_syntax": false,
+      "is_disposable": false,
+      "is_role_account": false,
+      "mx_accepts_mail": false,
+      "is_spamtrap": false,
+      "is_free_email": false,
+      "mx_records": [],
+      "verification_mode": "quick"
+    },
+    "disposable": {
+      "email": "jane.doe@example.com",
+      "status": "disposable",
+      "username": "jane.doe",
+      "domain": "example.com",
+      "is_valid_syntax": true,
+      "is_disposable": true,
+      "is_role_account": false,
+      "mx_accepts_mail": true,
+      "is_spamtrap": false,
+      "is_free_email": false,
+      "mx_records": [
+        "mx1.example.com"
+      ],
+      "verification_mode": "quick"
+    },
+    "spamtrap": {
+      "email": "jane.doe@example.com",
+      "status": "spamtrap",
+      "username": "jane.doe",
+      "domain": "example.com",
+      "is_valid_syntax": true,
+      "is_disposable": false,
+      "is_role_account": false,
+      "mx_accepts_mail": true,
+      "is_spamtrap": true,
+      "is_free_email": false,
+      "mx_records": [
+        "mx1.example.com"
+      ],
+      "verification_mode": "quick"
+    }
+  }
+}

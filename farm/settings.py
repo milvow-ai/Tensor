@@ -30,3 +30,11 @@ def require(name: str) -> str:
     if not val:
         raise RuntimeError(f"missing env var {name}")
     return val
+
+
+def data_dir() -> Path:
+    """Return the Farm data directory (env FARM_DATA_DIR, default D:/farm-data), created on demand."""
+    load_env()
+    path = Path(os.environ.get("FARM_DATA_DIR") or "D:/farm-data")
+    path.mkdir(parents=True, exist_ok=True)
+    return path

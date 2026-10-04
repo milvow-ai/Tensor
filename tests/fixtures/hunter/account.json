@@ -1,0 +1,27 @@
+{
+  "_source": "'ok' is RECORDED FROM THE DOCS (not live output): the 200 example of https://hunter.io/api-documentation/v2#account-information (GET /v2/account), fetched 2026-10-04. The docs say requests.credits is 'only present when the team is on a unified credits bucket', so 'split_only' (no credits) is that documented case; 'no_fields' and 'bad_numbers' are UNVERIFIED malformed variations.",
+  "cases": {
+    "ok": {
+      "data": {
+        "first_name": "Antoine",
+        "last_name": "Finkelstein",
+        "email": "antoine@hunter.io",
+        "plan_name": "Growth",
+        "plan_level": 2,
+        "reset_date": "2026-10-12",
+        "team_id": 1,
+        "requests": {
+          "credits": {"used": 550.0, "available": 10000.0, "remaining": 9450.0},
+          "searches": {"used": 500, "available": 10000, "remaining": 9500},
+          "verifications": {"used": 100, "available": 20000, "remaining": 19900}
+        },
+        "calls": {"_deprecation_notice": "Sums the searches and the verifications", "used": 18526, "available": 20000}
+      }
+    },
+    "split_only": {
+      "data": {"plan_name": "Free", "requests": {"searches": {"used": 3, "available": 25, "remaining": 22}, "verifications": {"used": 0, "available": 50, "remaining": 50}}}
+    },
+    "no_fields": {"data": {"plan_name": "Free", "requests": {}}},
+    "bad_numbers": {"data": {"requests": {"searches": {"remaining": "lots"}, "verifications": {"remaining": null}}}}
+  }
+}

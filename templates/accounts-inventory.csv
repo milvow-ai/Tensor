@@ -1,0 +1,9 @@
+provider,id,label,kind,executor,auth_ref,scope,priority,strategy,concurrency,rate_per_min,status,plan_name,price_usd,billing_day,renews_on,unit,unit_limit,unit_period,unit_anchor,unit_cost_usd,meta
+reoon,reoon-01,Reoon Primary,tool,api,env:REOON_API_KEY,internal,100,failover,2,60,active,daily_lifetime,0.00,1,,credits,500,day,1,0.000000,"{""mode"": ""power""}"
+clay,clay-01,Clay Workspace 1,tool,mcp,token-store:clay-01,internal,100,sticky,1,,active,launch,185.00,14,2026-10-14,credits,2500,month,14,0.074000,"{""workspace_id"": ""ws_01""}"
+groq,groq-01,Groq Fast LLM,ai,llm,env:GROQ_API_KEY,internal,100,round_robin,5,120,active,payg,0.00,,,tokens,,minute,,0.000001,"{""model"": ""llama-3.3-70b""}"
+claude,claude-01,Claude Code Profile 1,ai,cli_agent,cli:claude-01,internal,100,failover,1,,active,team,30.00,5,2026-10-05,session_turns,100,rolling_5h,,0.000000,"{""cli"": ""claude"", ""config_dir"": ""D:/farm-data/ai/claude-01""}"
+crawl4ai,crawl4ai-01,Crawl4AI Local Browser,tool,browser,cli:local,internal,100,round_robin,3,,active,local_free,0.00,,,pages,,minute,,0.000000,"{""headless"": true}"
+hermes,hermes-01,Hermes Sub-Agent,ai,agent,cli:hermes-01,internal,100,failover,1,,active,local_agent,0.00,,,iterations,50,day,,0.000000,"{""profile"": ""farm-agent""}"
+local_worker,local-01,Local Python Sandbox,tool,local,cli:local,internal,100,round_robin,2,,active,free,0.00,,,jobs,,day,,0.000000,"{""workdir"": ""D:/farm-data/local""}"
+human_ops,human-01,Manual Task Queue,tool,human,cli:local,internal,100,failover,1,,active,human,0.00,,,tasks,,day,,0.000000,"{""assigned_to"": ""owner""}"

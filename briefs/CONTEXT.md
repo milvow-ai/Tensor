@@ -2,6 +2,16 @@
 
 Owner: lead. Builders read it, never edit it. If something here is wrong or missing, say so in your reply instead of guessing.
 
+## 0. Quality bar (the owner's words: "real engineering, a real builder/developer product — not average, not vibe-coded")
+Single owner, single workspace — no multi-tenant or scale-for-others work. But every line is production engineering:
+- **Correct under failure first.** Concurrency, crashes, timeouts, partial failures, retries and restarts are designed and tested, not hoped for. Every money/quota path is atomic and idempotent.
+- **Tests prove behaviour, not lines.** Each acceptance test reproduces the real failure it guards (kill the process, exhaust the account, race 200 tasks). No test that cannot fail. No mocking the thing under test.
+- **Typed, explicit, small.** mypy strict, Pydantic at every boundary, no `Any` leaking out of adapters, no dead code, no TODOs left behind, no copy-paste between adapters (shared code lives in the template/base).
+- **Observable.** Every decision the Farm makes is visible in `run_events`/logs with a reason; errors carry a kind, a cause and what the owner should do.
+- **Safe by construction.** Secrets never cross a log, an error string, a DB row, a test output or the Console. Inputs validated; SQL parameterised; subprocesses with argv lists, timeouts and kill-on-timeout.
+- **Real, not demo.** Real data paths, real CLIs, real Postgres. Fixtures exist only for tests and clearly marked local dev. Every UI state (loading, empty, error, needs-login, exhausted) designed. No lorem ipsum, no placeholder screens pretending to work.
+- **Report honestly.** If something is not done, unverified or a deviation, say so in the reply. A smaller true result beats a bigger claimed one.
+
 ## 1. What we build
 One MCP server ("Harness Farm") that Claude calls for **capabilities** (verify an email, enrich a company, ask another AI…).
 The Farm picks a **provider pool** (a tool such as Clay, or an AI such as Claude) and an **account/connection** inside it, reserves quota,
@@ -86,3 +96,10 @@ The Farm makes no AI decisions itself: routing is deterministic code. Design sou
 ## 6. Builder rules (every brief)
 Touch only the files your brief owns. Never `git add/commit/push`, deploy, delete outside the repo, or send data off the machine. Never read or print `.env`. Do not change `pyproject.toml` unless your brief owns it.
 Finish by running `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1` and include its last lines in your reply.
+
+## 7. AI CLI facts (discovered by M3e-A, 2026-10-04; fake-CLI tests in `tests/test_cli_agent_*.py`)
+- **Claude Code:** `claude -p <task> --output-format json [--model m] [--resume id] [--allowedTools ""] [--permission-mode acceptEdits]`; JSON `result, session_id, total_cost_usd, usage, is_error`; limit text `usage limit`/`rate limit` + reset time; auth `not logged in`/`please log in`. **One account per `CLAUDE_CONFIG_DIR`.**
+- **Codex 0.160.0:** `codex exec [--sandbox read-only|workspace-write] [-m m] --json --skip-git-repo-check <task>`, resume `codex exec resume <id>`; JSONL events (`message`, `turn.finished` usage, `thread_id`); limit `insufficient_quota`/`rate limit exceeded`; auth `Not logged in`. **One account per `CODEX_HOME`.**
+- **Antigravity (agy):** `agy -p <task> --output-format json [--model m] [--conversation id]`; JSON `conversation_id, status, response, usage`; limit `RESOURCE_EXHAUSTED`/`Individual quota reached`; **single account only** (global config; no per-account dir) — must be the owner's Gemini Pro account.
+- **Hermes:** `hermes -p <profile> -z <task> --usage-file f [-m m] [--resume id]`, cwd via `TERMINAL_CWD`; usage JSON `estimated_cost_usd, session_id, input/output_tokens, failed`. **One account per profile.**
+- Claude/Codex limit + reset formats are from docs and fakes, not yet observed live — verify on the first real limit and adjust the parsers.

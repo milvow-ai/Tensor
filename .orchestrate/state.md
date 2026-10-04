@@ -1,8 +1,15 @@
 # Orchestrate state
 
 ## Current state
-Effort: Harness Farm + Farm Console (see HANDOFF.md). Phase: **0 — pre-setup DONE 2026-10-04 except user blockers; plan v2 written; waiting for "go"**.
-Next action: on "go" → start Bifrost (`scripts/start-bifrost.ps1`), write briefs M1a–M1d, run M1.
+Effort: Harness Farm + Farm Console. Phase: **1 — building**. 2026-10-04 ~07:00 paused (Claude usage limit) → resumed; later the PC shut down (all builders killed) → resumed 07:52 with partial work intact; keep-awake now via the app (session_idle).
+Done + merged: Phase 0; briefs for M1a–M5, C1 (briefs/); CONTEXT.md (§0 quality bar); **M1b merged 932d7eb**.
+**RESUME HERE (next session):**
+1. Main tree `D:\Harness Farm\Tensor` has UNCOMMITTED M1a work (Gemini partial + Sonnet finisher, may be cut off): farm/db/**, farm/resources/ledger.py, tests/conftest.py, tests/test_ledger.py, test_db_schema.py, test_accept_m1_ledger_concurrency.py, pyproject/uv.lock, cli.py, settings.py. Run `powershell -File scripts/check.ps1`; finish/fix per briefs/M1a-db-ledger.md; then commit.
+2. `D:\Harness Farm\wt-c1` (branch c1-console): C1 Console partial (Gemini stripped starter, Sonnet finisher possibly cut off). Check `pnpm check` + `pnpm test:e2e` in console/; finish per briefs/C1-console-core.md; then merge; wrap console/sql/views.sql into Alembic 0003.
+3. `D:\Harness Farm\wt-m3e` (branch m3e-ai-pool): M3e phase A (Gemini) FINISHED but UNREVIEWED — read D:/dev-cache/runs/M3e-ai-pool/agy.json reply, run its tests, review, merge (keep M1b's farm/executors/base.py on conflict).
+4. M2c (Sonnet, worktree under .claude/worktrees/agent-*): possibly partial — inspect `git worktree list`, run checks, finish or relaunch from briefs/M2c-adapters-llm.md.
+5. Then: M1c (Sonnet) → M1 milestone gate (adversarial review workflow + real e2e) → M2a/M2b → M3a/M3b/M3c/M3e-B → M4 → M5 → C2/C3.
+Services: Bifrost via scripts/start-bifrost.ps1 (127.0.0.1:8080); keep-awake helper until ~19:00; agy on owner's Gemini Pro account (works); Hermes profiles farm-builder (Bifrost), farm-builder-bedrock (AWS, cap $20).
 
 ## Phase 0 findings (2026-10-04, PC: Windows 11, 15.3 GB RAM)
 - Repo cloned from bundle to `C:\Users\Amaan\Harness Farm\Tensor`. Push as GitHub user `Mr-amaanx` → 403 (no write access to milvow-ai/Tensor).
@@ -29,19 +36,35 @@ Next action: on "go" → start Bifrost (`scripts/start-bifrost.ps1`), write brie
 | farm-builder | bifrost → openrouter/deepseek/deepseek-v4-flash (VK $1.50) | terminal, file, code_execution, todo | local (cwd pinned per run) | 60 turns, 1800 s | keyless off, memory off, aux = v4-flash, .env = BIFROST_VK only (no provider key), no MCP |
 | farm-agent | same, via Bifrost VK $0.50 | todo (+ Farm MCP at M4, sampling off) — no terminal | n/a | 25 turns, 600 s | same |
 
+- **farm-builder-bedrock** (2026-10-04 05:55): Hermes on AWS Bedrock `qwen.qwen3-coder-next` (custom:bedrock-mantle, us-east-1), toolsets terminal/file/code_execution/todo, 120 turns / 3600 s, keyless off, memory off, .env = AWS_BEARER_TOKEN_BEDROCK only. Smoke OK (37.9k tokens). Hermes reports cost 0.0 for this model → track tokens; owner's AWS cap $20 is the hard limit. Run: `scripts/run-hermes.ps1 -Profile farm-builder-bedrock -Model qwen.qwen3-coder-next`.
+
 ## Model eval (2026-10-04, same Farm-util coding task, hidden 15-case check)
 v4-flash 15/15 $0.0016 · v4-pro 15/15 $0.0084 · qwen3.8-27b:free 15/15 $0 (429s when run in parallel) · nemotron-3-super:free 15/15 $0 · cohere/north-mini-code:free 14/15 (missed Feb clamp; 16 calls). Pinned-cwd rerun left 0 stray files.
 Routing: free model first → v4-flash fallback → v4-pro for important/judgment steps. OpenRouter spend so far ≈ $0.02 of $3.
 
-## Active workers
-| Worker | Agent | Model | Owns | Status | Output file |
+## Active workers (Phase 1 started 2026-10-04 ~05:00 on the user's "use whatever you can, final product" — user asleep; defaults taken for AI pool / Codex / keep-awake)
+| Worker | Agent | Model | Owns | Status | Output |
 |---|---|---|---|---|---|
-| (none yet) | | | | | |
+| M1a db+ledger | agy → Sonnet | sonnet | farm/db, ledger, conftest, pyproject | **Merged d71f738** (536 suite pass; crash recovery; 200-way race test) | — |
+uns\M1a-db-ledger |
+| M1b registry+adapters | worker-build (worktree) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | **Merged 932d7eb** (385 tests, gate green; deviations in commit msg) | — |
+| C1 console core | agy (cut off) → Sonnet worker-build finishing in D:/Harness Farm/wt-c1 (branch c1-console) | sonnet | console/**, console/sql/views.sql | Resumed after rate limit | agent reply |
+uns\C1-console-core |
+| M1c router+gateway | worker-build (worktree) | sonnet | see briefs/M1c | Running | agent reply |
+| FIX1 loop+fsync | agy (wt-fix1) | gemini-3.8-flash-high | cli_agent thread runner; fsync only test DB | **Merged** (tree-kill + cancel tests under SelectorEventLoop) | — |
+| M2c adapters+LLM | worker-build (worktree) | sonnet | 5 adapters + executors/llm.py + schemas + registry | **Merged 788f68d** (+923 tests; suite 1462; mutation 16/16) | — |
+| M3b-A manager core | agy (wt-m3b) | gemini-3.8-flash-high | farm/manager/*, control/commands.py | **Merged 051e8a0** (25 grouped tests; 2.0M Gemini tokens) | — |
+| M5-A 24/7 core | agy (wt-m5) | gemini-3.8-flash-high | control/{doctor,heartbeat,keepawake,backup}.py, watchdog/install scripts | Running | D:/dev-cache/runs/M5-247-hardening |
+| FIX2 fsync vs crash recovery | M1a Sonnet (resumed) | sonnet | farm/db/local.py | **Merged** (root cause: log inside pgdata; durable restart after kill verified) | — |
+| M3e-A AI executors | agy (wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | **Merged fde1ce3** (32 tests; live agy+hermes OK $0.0003; Codex 0.160.0 installed) | — |
+| M3c-A MCP executor | agy (wt-m3c) | gemini-3.8-flash-high | farm/executors/mcp/*, token store, fake MCP server | **Merged ff60d8d** (14 tests; Clay URL UNVERIFIED; notes: silent except on ACL, data_dir dup) | — |
+Shared contract: `briefs/CONTEXT.md`. Keep-awake helper: D:\dev-cache\keep-awake.ps1 (14 h from 04:57).
+User approved (2026-10-04): Sonnet 5.5 subagents for coding as a second build lane.
 
 ## Plan — Phase 1 (Farm) + Phase 2 (Console)  [v3.1 2026-10-04: v2 review fixes + AI pool (M3) + 24/7; waiting for user "go"]
 
 Owners: **G** = Gemini 3.8 Flash High via `scripts/run-agy.ps1` (bulk code; quota fallback → gemini-3.1-pro-high → lead writes small pieces) · **H** = Hermes `farm-builder` via `scripts/run-hermes.ps1` (Bifrost VK $1.50 cap; v4-flash default, free models one at a time, v4-pro for judgment) — fixtures, docs, repetitive edits · **S** = `scripts/check.ps1` (ruff, mypy, pytest, secret grep, expected files; zero tokens) · **WC** = worker-check (Sonnet), once per milestone · **L** = lead (briefs, diff review, commit, push, state).
-Round = brief → G/H → S (fix loop ≤ 2) → WC at milestone end → L reviews `git diff --stat` + key hunks → commit → push → state + token/cost tally (`D:\dev-cache\runs\ledger.tsv`).
+Round = brief → builder (Gemini / Sonnet / Hermes) → S (fix loop ≤ 2) → **milestone gate: adversarial review workflow (2–3 verifier agents with distinct lenses: correctness-under-failure, security/secret-safety, test-honesty — each tries to break the milestone; confirmed findings go back to the builder)** → real end-to-end run (real Postgres, real MCP client, real CLIs where logged in) → L reviews diff → commit → push → state + cost tally (D:/dev-cache/runs/ledger.tsv). Quality bar = `briefs/CONTEXT.md` §0 (owner 2026-10-04: real engineering, single-owner SaaS quality, no vibe code).
 Tests never spend credits: respx/vcrpy, network blocked in pytest. Exception: once keys exist, L records ONE happy-path cassette per adapter from a free-tier call (redacted) — fault cases stay doc-derived. Test DB = `pgserver` (PG 16, data in FARM_DATA_DIR=D:/farm-data); runtime DB = Supabase `harness-farm` (PG 17) — SQL kept PG16-compatible.
 
 | # | Scope | Briefs (owner) | Done when (S, then WC) | Box |
@@ -84,6 +107,8 @@ Blockers (user):
 - 2026-10-04: Vercel = user's Hobby account; Console must be a real SaaS-style dashboard to see and adjust the Farm (not an artifact) — user.
 - 2026-10-04: Test Postgres = pgserver (no Docker); Docker Desktop off the critical path — lead.
 - 2026-10-04: Vision confirmed by user: one mega-MCP for Claude; tools in pools of accounts; manager watches billing/usage and fails over so the machine never stops; runs 24/7; also runs agentic work on a pool of AI accounts (user's 3 unused Claude Pro accounts + other AIs). Plan v3 adds the AI pool (M3; corrected 2026-10-04: it is main Claude delegating to other Claude/Codex/Antigravity/Hermes accounts via CLI through the Farm MCP, each AI keeping its own memory) and 24/7 auto-start/watchdog (M5); Console 'Accounts' becomes 'Tools & Pools' — user.
+- 2026-10-04 06:10: agy was signed into a different Google account; owner switched agy to their **Gemini Pro** account (/logout → /login). Re-test: gemini-3.8-flash-high and 3.1-pro-high SUCCESS. Gemini lane back; Sonnet lane continues in parallel. If agy quota errors again, first check the signed-in account (agy startup banner).
+- 2026-10-04 05:50: **Gemini (agy) weekly quota exhausted** (on the wrong account) after scaffold + M1a + C1 (~1.36M tokens total): "Individual quota reached… resets in 166h" for every agy model (3.8 flash, 3.1 pro, 3.7). Bulk lane switched to **Sonnet 5.5 worker-build subagents** (user approved 2026-10-04); Hermes for mechanical side jobs. M1a and C1 were cut off mid-way; Sonnet builders finish them from the partial work.
 - 2026-10-04 (later): **AWS Bedrock allowed again, cap $20** — user fixed the AWS warning. Enforce via a Bifrost VK on the bedrock provider (to add at M2 with the LLM route); until then only Hermes' default profile uses Bedrock.
 - 2026-10-04: GitHub push fixed: origin = `https://milvow-ai@github.com/milvow-ai/Tensor.git` (per-repo user; Mr-amaanx untouched elsewhere). Branch pushed; history now on GitHub.
 - 2026-10-04: Hermes limits seen: its secret redaction turned `milvow-ai@` in a URL into `***` (command silently wrong), and it probed credentials beyond its brief. Rule: never give Hermes commands containing user@host URLs or credentials; check its actual effect, not its report.
