@@ -6,14 +6,19 @@ between processes (``cleanup_mode=None``) and every function here is idempotent.
 Crash recovery (why this module does more than call ``pgserver.get_server``). Every case below was hit or is
 reproduced in ``tests/test_db_schema.py``:
 
-* pgserver starts postgres with ``-l <pgdata>/log``, so the log file lives inside the data directory and is
-  held open by the server. After an unclean stop (killed process, power loss, PC shutdown) the next start runs
-  crash recovery, which fsyncs every file in the data directory. On Windows opening the held ``log`` fails
-  with a sharing violation that PostgreSQL retries for 30 s, longer than pgserver's 10 s ``pg_ctl`` timeout,
-  so startup fails with ``TimeoutExpired`` and leaves a half-started postmaster behind. ``fsync = off`` skips
-  that directory sync (``SyncDataDirectory`` returns early). A killed *process* loses no committed data with
-  it (commits still reach the OS); only an OS crash or power loss could corrupt this dev/test database, whose
-  durable counterpart is Supabase. The setting lives in a managed block of ``postgresql.conf``.
+* **Server log outside the data directory (Windows).** pgserver starts postgres with ``-l <pgdata>/log``.
+  After an unclean stop (killed process, power loss, PC shutdown) the next start runs crash recovery, which
+  fsyncs every file under the data directory (``SyncDataDirectory``; skipped only when ``fsync = off``). The
+  *new* postmaster itself holds ``<pgdata>/log`` open (its stdout/stderr redirect is opened without write
+  sharing), so the startup process cannot open it: ``could not open file "./log": sharing violation``,
+  retried for 30 s. pgserver's ``pg_ctl`` gives up after 10 s (``TimeoutExpired``) and leaves a half-started
+  postmaster behind, so a durable (``fsync = on``) database could not restart after a hard kill. Neither
+  killing leftovers nor waiting helps: the holder is the server being started. The cure is not to put the log
+  inside the data directory: on Windows this module starts the postmaster itself with
+  ``pg_ctl -l <FARM_DATA_DIR>/logs/<name>.log`` and lets pgserver attach to the running server. Crash
+  recovery then works with ``fsync = on`` (the owner's runtime database) and ``fsync = off`` (throwaway test
+  databases, where the skipped fsyncs only make tests faster). Reproduced and guarded by
+  ``tests/test_db_schema.py::test_local_server_restarts_after_a_hard_kill`` (both modes).
 * A ``postmaster.pid`` left by a dead server (or by a torn write, or naming a recycled PID) is removed.
 * A server that is still starting (``status`` not yet ``ready``) is waited for instead of asserted on.
 * pgserver's ``.handle_pids.json`` is rewritten when a crash left it empty or corrupt (it would otherwise
@@ -32,6 +37,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -39,6 +46,7 @@ import psutil
 import structlog
 from pgserver._commands import POSTGRES_BIN_PATH
 from pgserver.postgres_server import PostgresServer, get_server
+from pgserver.utils import find_suitable_port
 
 from farm.settings import data_dir
 
@@ -59,6 +67,8 @@ def _conf_block(durable: bool) -> str:
 _INITDB_ARGS = ("--auth=trust", "--auth-local=trust", "--encoding=utf8", "-U", "postgres")  # as pgserver
 _MAX_LOG_BYTES = 8 * 1024 * 1024
 _READY_TIMEOUT_S = 90.0
+_START_TIMEOUT_S = 180  # crash recovery of a durable cluster fsyncs every file
+_LISTEN_HOST = "127.0.0.1"
 
 
 def get_local_pgdata(pgdata: Path | None = None) -> Path:
@@ -138,15 +148,39 @@ def _repair_handle_list(pgdata: Path) -> None:
         path.write_text(json.dumps(live), encoding="utf-8")
 
 
-def _rotate_log(pgdata: Path) -> None:
-    """Truncate an oversized server log (only called while the server is down, so the file is free)."""
-    log_file = pgdata / "log"
+def _log_path(pgdata: Path) -> Path:
+    """Server log of ``pgdata``: next to it (``<FARM_DATA_DIR>/logs/<name>.log``), never inside it."""
+    return pgdata.parent / "logs" / f"{pgdata.name}.log"
+
+
+def _log_tail(pgdata: Path, lines: int = 12) -> str:
     try:
-        if log_file.exists() and log_file.stat().st_size > _MAX_LOG_BYTES:
-            log_file.write_text("", encoding="utf-8")
-            log.info("local_pg.server_log_truncated", pgdata=str(pgdata))
+        text = _log_path(pgdata).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "(no server log)"
+    return "\n".join(text.splitlines()[-lines:])
+
+
+def _prepare_log(pgdata: Path) -> Path:
+    """Create the log directory, move a legacy ``<pgdata>/log`` out of the data directory, cap the size.
+
+    Only called while the server is down, so the files are free.
+    """
+    logfile = _log_path(pgdata)
+    logfile.parent.mkdir(parents=True, exist_ok=True)
+    legacy = pgdata / "log"
+    try:
+        if legacy.is_file():
+            target = logfile.with_name(f"{pgdata.name}.legacy.log")
+            shutil.move(str(legacy), str(target))
+            log.info("local_pg.legacy_log_moved", pgdata=str(pgdata), to=str(target))
+        for candidate in (logfile, logfile.with_name(f"{pgdata.name}.legacy.log")):
+            if candidate.exists() and candidate.stat().st_size > _MAX_LOG_BYTES:
+                candidate.write_text("", encoding="utf-8")
+                log.info("local_pg.server_log_truncated", path=str(candidate))
     except OSError as exc:
-        log.warning("local_pg.server_log_truncate_failed", pgdata=str(pgdata), error=exc.__class__.__name__)
+        log.warning("local_pg.server_log_prepare_failed", pgdata=str(pgdata), error=exc.__class__.__name__)
+    return logfile
 
 
 def _is_runtime_dir(target: Path) -> bool:
@@ -190,16 +224,24 @@ def _apply_local_conf(pgdata: Path, *, durable: bool | None = None) -> bool:
 
 
 def _run_tool(tool: str, *args: str, timeout: float) -> None:
-    """Run a bundled PostgreSQL executable (argv list, captured output, killed when the timeout expires)."""
-    done = subprocess.run(
-        [str(POSTGRES_BIN_PATH / tool), *args],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
+    """Run a bundled PostgreSQL executable (argv list, killed when the timeout expires).
+
+    Output goes to temporary files, not pipes: ``pg_ctl start`` leaves a daemon that inherits the pipes and
+    ``subprocess.run`` would wait for them to close.
+    """
+    with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as err:
+        done = subprocess.run(
+            [str(POSTGRES_BIN_PATH / tool), *args],
+            stdin=subprocess.DEVNULL,
+            stdout=out,
+            stderr=err,
+            text=True,
+            timeout=timeout,
+        )
+        out.seek(0)
+        err.seek(0)
+        detail = (err.read() or out.read()).strip()[-400:]
     if done.returncode != 0:
-        detail = (done.stderr or done.stdout).strip()[-400:]
         raise RuntimeError(f"{tool} {args[-1]} failed (exit {done.returncode}): {detail}")
 
 
@@ -242,21 +284,51 @@ def _initialise(target: Path) -> None:
 
 
 def _prepare_pgdata(target: Path) -> None:
-    """Bring ``target`` into a state pgserver can start from, whatever a crash left behind."""
+    """Bring ``target`` into a state pgserver can start from, whatever a crash left behind.
+
+    Callers hold pgserver's inter-process lock, so no two processes initialise or start at once.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
-    with PostgresServer._lock:  # pgserver's own inter-process lock: no two processes initialise at once
-        for debris in target.parent.glob(f"{target.name}.init-*"):
-            log.warning("local_pg.interrupted_initdb_removed", path=str(debris))
-            _rmtree(debris)
-        initialised = (target / "PG_VERSION").exists() and (target / "global" / "pg_control").exists()
-        if not initialised:
-            if target.exists() and any(target.iterdir()):
-                if not any((target / marker).exists() for marker in ("PG_VERSION", "base", "global")):
-                    raise RuntimeError(f"{target} is not empty and is not a PostgreSQL data directory")
-                log.warning("local_pg.incomplete_cluster_discarded", pgdata=str(target))
-                _rmtree(target)
-            _initialise(target)
-        _repair_handle_list(target)
+    for debris in target.parent.glob(f"{target.name}.init-*"):
+        log.warning("local_pg.interrupted_initdb_removed", path=str(debris))
+        _rmtree(debris)
+    initialised = (target / "PG_VERSION").exists() and (target / "global" / "pg_control").exists()
+    if not initialised:
+        if target.exists() and any(target.iterdir()):
+            if not any((target / marker).exists() for marker in ("PG_VERSION", "base", "global")):
+                raise RuntimeError(f"{target} is not empty and is not a PostgreSQL data directory")
+            log.warning("local_pg.incomplete_cluster_discarded", pgdata=str(target))
+            _rmtree(target)
+        _initialise(target)
+    _repair_handle_list(target)
+
+
+def _start_postmaster(target: Path) -> None:
+    """Start postgres with its log outside the data directory (see the module docstring), wait until ready."""
+    logfile = _prepare_log(target)
+    port = find_suitable_port(_LISTEN_HOST)
+    try:
+        _pg_ctl(
+            target,
+            "-w",
+            "-t",
+            str(_START_TIMEOUT_S),
+            "-o",
+            f'-h "{_LISTEN_HOST}"',
+            "-o",
+            f"-p {port}",
+            "-l",
+            str(logfile),
+            "start",
+            timeout=_START_TIMEOUT_S + 30,
+        )
+    except (RuntimeError, subprocess.TimeoutExpired) as exc:
+        reason = exc.__class__.__name__
+        raise RuntimeError(
+            f"local postgres failed to start ({reason}); server log tail:\n{_log_tail(target)}"
+        ) from None
+    _wait_ready(target)
+    log.info("local_pg.started", pgdata=str(target), port=port, log=str(logfile))
 
 
 def _wait_ready(pgdata: Path, timeout: float = _READY_TIMEOUT_S) -> None:
@@ -284,18 +356,20 @@ def get_local_server(
     if target in PostgresServer._instances and not _postmaster_alive(target):
         PostgresServer._instances.pop(target, None)  # server died or was stopped behind our back
 
-    running = _postmaster_alive(target)
-    if running:
-        _wait_ready(target)
+    with PostgresServer._lock:  # pgserver's inter-process lock: one process initialises/starts at a time
         running = _postmaster_alive(target)
-    if not running:
-        _clear_stale_pid(target)
-    _prepare_pgdata(target)
-    if not running:
-        _rotate_log(target)
-    conf_changed = _apply_local_conf(target, durable=durable)
+        if running:
+            _wait_ready(target)
+            running = _postmaster_alive(target)
+        if not running:
+            _clear_stale_pid(target)
+        _prepare_pgdata(target)
+        conf_changed = _apply_local_conf(target, durable=durable)
+        if not running and sys.platform == "win32":
+            _start_postmaster(target)
+        # elsewhere pgserver starts the server itself below (no log/crash-recovery clash outside Windows)
 
-    server = get_server(target, cleanup_mode=None)
+    server = get_server(target, cleanup_mode=None)  # attaches to the running server (or starts it)
 
     if conf_changed and running:  # a live server picks the new settings up on reload
         _pg_ctl(target, "reload")
