@@ -52,7 +52,9 @@ uns\M1a-db-ledger |
 uns\C1-console-core |
 | M1c router+gateway | worker-build (worktree) | sonnet | see briefs/M1c | Running | agent reply |
 | FIX1 loop+fsync | agy (wt-fix1) | gemini-3.8-flash-high | cli_agent thread runner; fsync only test DB | **Merged** (tree-kill + cancel tests under SelectorEventLoop) | — |
-| M2c adapters+LLM | worker-build (worktree) | sonnet | adapters apollo/hunter/pagespeed/adzuna/ats_public, executors/llm.py, schemas, registry | Resumed after rate limit | agent reply |
+| M2c adapters+LLM | worker-build (worktree) | sonnet | 5 adapters + executors/llm.py + schemas + registry | **Merged 788f68d** (+923 tests; suite 1462; mutation 16/16) | — |
+| M3b-A manager core | agy (wt-m3b) | gemini-3.8-flash-high | farm/manager/*, control/commands.py | Running | D:/dev-cache/runs/M3b-account-manager |
+| FIX2 fsync vs crash recovery | M1a Sonnet (resumed) | sonnet | farm/db/local.py | Running (hard-kill test fails since FIX1) | agent reply |
 | M3e-A AI executors | agy (wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | **Merged fde1ce3** (32 tests; live agy+hermes OK $0.0003; Codex 0.160.0 installed) | — |
 | M3c-A MCP executor | agy (wt-m3c) | gemini-3.8-flash-high | farm/executors/mcp/*, token store, fake MCP server | **Merged ff60d8d** (14 tests; Clay URL UNVERIFIED; notes: silent except on ACL, data_dir dup) | — |
 Shared contract: `briefs/CONTEXT.md`. Keep-awake helper: D:\dev-cache\keep-awake.ps1 (14 h from 04:57).
