@@ -35,3 +35,9 @@ tests `tests/test_health.py`, `tests/test_ranking.py`, `tests/test_strategies.py
 
 ## Reply (≤ 15 lines)
 Files changed; test count; check tail; deviations and open issues.
+
+## Added 2026-10-04 (open issues from M1c — also in scope)
+1. **Capability → unit reservation map:** today the router reserves every unit with `estimate_per_call > 0`, so a Hunter `find_email` also reserves `verifications`. Add a per-capability unit map (CapabilitySpec or connection `meta.units_by_capability`, e.g. `{find_email: {searches: 1}, verify_email: {verifications: 1}}`); reserve only mapped units; fall back to all units only when no map exists. Test with Hunter's two units.
+2. **Per-connection timeouts from config:** honour `connection.meta.timeout_s` / provider `config.timeout_s`; set Reoon to 90 s in `config/registry.yaml` (power mode can exceed a minute).
+3. **Crash hygiene:** runs left `running` by a crashed process are finalised as `failed` with `error_kind=interrupted` at startup (and their reservations released via `farm_expire_reservations`); expired `capability_requests` cache rows are purged by a periodic job (wire into the manager scheduler).
+4. **Cost bookkeeping:** an executor's own `cost_usd` must land in `usage_events.cost_usd` (not only `runs.cost_usd`), so Billing/budgets see it.

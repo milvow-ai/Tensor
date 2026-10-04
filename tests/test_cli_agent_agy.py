@@ -86,7 +86,10 @@ async def test_agy_edit_mode_and_resume(fake_harness: FakeCliHarness) -> None:
     fake_harness.set_response(stdout=json.dumps(payload))
 
     conn = ConnectionView(
-        auth_ref="cli:test", id="agy-01", provider_id="gemini", meta={"cli_path": str(bin_path)}
+        auth_ref="cli:test",
+        id="agy-01",
+        provider_id="gemini",
+        meta={"cli_path": str(bin_path), "allow_edit": True, "edit_roots": [str(fake_harness.bin_dir)]},
     )
     req = ExecRequest(
         request_id=uuid4(),
@@ -95,6 +98,7 @@ async def test_agy_edit_mode_and_resume(fake_harness: FakeCliHarness) -> None:
             "task": "refactor function",
             "mode": "edit",
             "session_id": "conv-agy-resume",
+            "cwd": str(fake_harness.bin_dir / "workdir"),
         },
         connection=conn,
     )

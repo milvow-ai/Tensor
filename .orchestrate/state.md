@@ -1,5 +1,22 @@
 # Orchestrate state
 
+## ▶ RESUME HERE — new lead session (written 2026-10-04 20:45 IST). Read ONLY this block first.
+**Status:** Phase 1 ≈ 40 % by build-days. All work merged is pushed (`git log -1`). 1,723 Python tests + 68 Console e2e + 24 vitest, all green.
+**Merged:** M1a db+ledger · M1b registry+adapters · M1c router + MCP gateway (12 tools) · M1 live e2e PASS (`scripts/e2e_live.py`) · M2c 5 adapters + LLM via Bifrost · M3e-A AI-CLI executors · M3c-A MCP executor · M3b-A manager core + command consumer · M5-A doctor/backup/watchdog scripts · C1 Console core · INT1 command contract + views 0003 · FIX1/FIX2 (Windows loop, durable local PG).
+**In flight (check first with `powershell -File scripts/round.ps1 -Action status`):**
+1. **SEC1 (critical)** — Gemini started 20:35 in `D:\Harness Farm\wt-sec1` (branch `sec1`) via run-agy, NOT via round.ps1. Finished when `D:\dev-cache\runs\SEC1-cli-isolation-ids\agy.json` is newer than 20:35. If it died: `round.ps1 -Action start -Brief briefs/SEC1-cli-isolation-ids.md -Name sec1` (adds a resume note). Then ONE Sonnet worker-check reviews only `git -C "D:\Harness Farm\wt-sec1" diff` (security lens, ≤ 10 findings), then `round.ps1 -Action merge -Name sec1 -Message "SEC1: …"`.
+2. **M3e-B** (`ask_ai`, owner's top feature) — partial Gemini work in `wt-m3e-b` (branch `m3e-b`). Merge ONLY after SEC1: `round.ps1 -Action start -Brief briefs/M3e-ai-pool.md -Name m3e-b` (resume note; merge main first if it conflicts), then live smoke `uv run farm ai test agy-01 --local` / `hermes-01`.
+3. **M1 correctness review** — not done (quota). Run as a Gemini review round (agy with `-Model gemini-3.1-pro-high`, brief = review lens in the 2026-10-04 M1-gate prompt in git history), Sonnet only if it reports criticals.
+**Next queue (one Gemini round at a time via round.ps1):** SEC1 → M3e-B → M2a → M3b-B + M5-B (`farm run` 24/7, router budget hook, CLI) → C2 → C3 (+ Vercel deploy with owner OK) → M3a → M3c-B (Clay) → M2b (DBOS) → M4.
+**Token rules (owner 2026-10-04: Claude quota is the constraint; the weekly limit was hit after ~1 day):**
+- Lead = plan, brief, merge, decide. Per round ≤ 3 tool calls: `round.ps1 start` → `round.ps1 status -Name` → `round.ps1 merge`. Never read builder transcripts, full diffs or big files — only status tails; grep for specifics.
+- **No Sonnet builders.** Builders: Gemini (agy, owner's Gemini Pro account) for all code; Hermes `-Builder hermes` (Bedrock Qwen3-Coder-Next, AWS cap $20) for docs/fixtures or when Gemini is out. Sonnet worker-check only for security-critical diffs, diff-only scope.
+- Lead model: Sonnet 5.5 for routine rounds; ask the owner to switch to Opus for milestone gates and design decisions.
+- Fresh lead session per milestone or when the context gets long; keep this block ≤ 40 lines and current; no images unless a UI round just finished (one max).
+**Rules learned:** SEC1 before any AI-pool wiring · Windows: Farm runs on SelectorEventLoop; subprocesses via threads; never `asyncio.create_subprocess_*` · Bifrost must be started detached (`Start-Process powershell … scripts\start-bifrost.ps1`), it dies with the session otherwise · agy must be signed into the owner's Gemini Pro account (quota errors → check its banner) · Hermes redacts user@ URLs and strays beyond briefs: check effects, not reports · write config files without BOM.
+**Owner to-do:** `claude` → /login (later `farm ai login claude-02..04`) · fill `.env` (Supabase URL / service key / DB URL, provider keys; BIFROST_FARM_VK = contents of `D:\dev-cache\bifrost\farm-vk.secret`) · list the 7 Clay accounts · OK the Vercel deploy at C3.
+
+
 ## Current state
 Effort: Harness Farm + Farm Console. Phase: **1 — building**. 2026-10-04 ~07:00 paused (Claude usage limit) → resumed; later the PC shut down (all builders killed) → resumed 07:52 with partial work intact; keep-awake now via the app (session_idle).
 Done + merged: Phase 0; briefs for M1a–M5, C1 (briefs/); CONTEXT.md (§0 quality bar); **M1b merged 932d7eb**.
@@ -49,9 +66,14 @@ Routing: free model first → v4-flash fallback → v4-pro for important/judgmen
 uns\M1a-db-ledger |
 | M1b registry+adapters | worker-build (worktree) | sonnet | registry, executors/base, secrets, adapters, config/registry.yaml | **Merged 932d7eb** (385 tests, gate green; deviations in commit msg) | — |
 | C1 console core | agy → Sonnet | sonnet | console/** | **Merged 4bf6cf5** (e2e 68/68, axe AA, bundle ≤250 kB; SaaS-grade per lead visual review) | D:/dev-cache/shots/C1 |
-| INT1 command contract + views migration | agy (wt-int1) | gemini-3.8-flash-high | commands.py schemas, console commands.ts, 0003 views | Running | D:/dev-cache/runs/INT1-command-contract-views |
+| INT1 command contract + views migration | agy + lead | gemini | commands.py schemas, console commands.ts, 0003 views | **Merged 9e96f29** (extra=forbid; lead removed circular-shim hack; vitest 24, e2e 68/68) | — |
 uns\C1-console-core |
-| M1c router+gateway | worker-build (worktree) | sonnet | see briefs/M1c | Running | agent reply |
+| M1c router+gateway | worker-build (worktree) | sonnet | router, gateway, sync, CLI | **Merged 026379f** (200 tests; 11/11 router mutations caught) | — |
+| **M1 LIVE E2E** | lead | — | scripts/e2e_live.py | **PASS 2026-10-04 18:44**: MCP stdio → farm serve → router → llm-or-free (Qwen free via Bifrost vk-farm-llm $0.50) → classify "billing" 0.98, $0.00, 292 tokens; trajectory plan→skip(groq needs_login)→skip(bedrock paused)→candidate→reserve×2→execute→commit×2→success | — |
+| M1 GATE review: correctness (+test honesty) | worker-check | sonnet | read-only | Running | agent reply |
+| M1 GATE review: security | worker-check | sonnet | read-only | **Done**: CRITICAL child-CLI env leak (os.environ.copy → DB pw, service key, provider keys, VK) + unconfined edit mode; MAJOR connection-id path traversal (token store). Clean: RLS, MCP bearer (compare_digest), no admin tools, Console owner checks, fixtures guard, bundle. | agent reply |
+| SEC1 security fixes | worker-build (worktree) | sonnet | cli_agent env allow-list, env-secret redaction, stdin prompts/no cmd.exe, edit-mode confinement, safe ids (0004) | Running | agent reply |
+| M3e-B ask_ai wiring | agy (wt-m3e-b) | gemini-3.8-flash-high | schemas, router hooks, gateway ask_ai/batch/list_ais, CLI ai | Running | D:/dev-cache/runs/M3e-ai-pool |
 | FIX1 loop+fsync | agy (wt-fix1) | gemini-3.8-flash-high | cli_agent thread runner; fsync only test DB | **Merged** (tree-kill + cancel tests under SelectorEventLoop) | — |
 | M2c adapters+LLM | worker-build (worktree) | sonnet | 5 adapters + executors/llm.py + schemas + registry | **Merged 788f68d** (+923 tests; suite 1462; mutation 16/16) | — |
 | M3b-A manager core | agy (wt-m3b) | gemini-3.8-flash-high | farm/manager/*, control/commands.py | **Merged 051e8a0** (25 grouped tests; 2.0M Gemini tokens) | — |
@@ -108,6 +130,7 @@ Blockers (user):
 - 2026-10-04: Vercel = user's Hobby account; Console must be a real SaaS-style dashboard to see and adjust the Farm (not an artifact) — user.
 - 2026-10-04: Test Postgres = pgserver (no Docker); Docker Desktop off the critical path — lead.
 - 2026-10-04: Vision confirmed by user: one mega-MCP for Claude; tools in pools of accounts; manager watches billing/usage and fails over so the machine never stops; runs 24/7; also runs agentic work on a pool of AI accounts (user's 3 unused Claude Pro accounts + other AIs). Plan v3 adds the AI pool (M3; corrected 2026-10-04: it is main Claude delegating to other Claude/Codex/Antigravity/Hermes accounts via CLI through the Farm MCP, each AI keeping its own memory) and 24/7 auto-start/watchdog (M5); Console 'Accounts' becomes 'Tools & Pools' — user.
+- 2026-10-04 19:10: **Merge order rule:** SEC1 merges before M3e-B; no AI-pool wiring is merged while child CLIs can inherit Farm secrets. M3e-B is rebased onto SEC1 and re-gated — lead, after M1 security review.
 - 2026-10-04 06:10: agy was signed into a different Google account; owner switched agy to their **Gemini Pro** account (/logout → /login). Re-test: gemini-3.8-flash-high and 3.1-pro-high SUCCESS. Gemini lane back; Sonnet lane continues in parallel. If agy quota errors again, first check the signed-in account (agy startup banner).
 - 2026-10-04 05:50: **Gemini (agy) weekly quota exhausted** (on the wrong account) after scaffold + M1a + C1 (~1.36M tokens total): "Individual quota reached… resets in 166h" for every agy model (3.8 flash, 3.1 pro, 3.7). Bulk lane switched to **Sonnet 5.5 worker-build subagents** (user approved 2026-10-04); Hermes for mechanical side jobs. M1a and C1 were cut off mid-way; Sonnet builders finish them from the partial work.
 - 2026-10-04 (later): **AWS Bedrock allowed again, cap $20** — user fixed the AWS warning. Enforce via a Bifrost VK on the bedrock provider (to add at M2 with the LLM route); until then only Hermes' default profile uses Bedrock.

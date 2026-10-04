@@ -21,6 +21,7 @@ class FakeCliHarness:
 
         self.config_file = self.bin_dir / "fake_cli_config.json"
         self.calls_file = self.bin_dir / "fake_cli_calls.json"
+        (self.bin_dir / "workdir").mkdir(parents=True, exist_ok=True)
 
         # Create the fake CLI runner script
         self.runner_script = self.bin_dir / "fake_runner.py"
@@ -50,16 +51,32 @@ if config_file.exists():
     except Exception:
         pass
 
+# Read stdin if available
+stdin_data = ""
+try:
+    if not sys.stdin.isatty():
+        stdin_data = sys.stdin.read()
+except Exception:
+    pass
+
+raw_argv = sys.argv[1:]
+argv_for_compat = list(raw_argv)
+if stdin_data and stdin_data.strip() and stdin_data.strip() not in argv_for_compat:
+    argv_for_compat.append(stdin_data.strip())
+
 # Record call
 call_info = {
-    "argv": sys.argv[1:],
+    "argv": argv_for_compat,
+    "raw_argv": raw_argv,
+    "stdin": stdin_data,
     "cwd": os.getcwd(),
     "env": {
         "CLAUDE_CONFIG_DIR": os.environ.get("CLAUDE_CONFIG_DIR"),
         "CODEX_HOME": os.environ.get("CODEX_HOME"),
         "TERMINAL_CWD": os.environ.get("TERMINAL_CWD"),
         "FAKE_TEST_MARKER": os.environ.get("FAKE_TEST_MARKER"),
-    }
+    },
+    "full_env": dict(os.environ),
 }
 calls = []
 if calls_file.exists():

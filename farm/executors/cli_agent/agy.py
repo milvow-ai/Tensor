@@ -9,6 +9,7 @@ Therefore, only a single global Antigravity account is supported at this time.
 
 import json
 import re
+import subprocess
 from typing import Any
 
 from farm.executors.base import ErrorKind, ExecRequest, ExecResult
@@ -36,7 +37,30 @@ class AgyCliExecutor(BaseCliAgentExecutor):
         timeout_s = float(req.params.get("timeout_s", req.timeout_s))
         json_schema = req.params.get("json_schema")
 
-        argv: list[str] = [cli_bin, "-p", str(task), "--output-format", "json"]
+        ok, err_msg = self.validate_cli_identifiers(session_id=session_id, model=model)
+        if not ok:
+            return self.build_exec_result(
+                ok=False,
+                ai="gemini",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=err_msg or "Invalid session_id or model",
+            )
+
+        ok, err_msg, resolved_cwd = self.validate_confinement(req, mode, cwd)
+        if not ok:
+            return self.build_exec_result(
+                ok=False,
+                ai="gemini",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=err_msg or "Confinement violation",
+            )
+
+        task_str = str(task)
+        argv: list[str] = [cli_bin, "-p", task_str, "--output-format", "json"]
 
         if model:
             argv.extend(["--model", str(model)])
@@ -50,6 +74,20 @@ class AgyCliExecutor(BaseCliAgentExecutor):
             schema_str = json.dumps(json_schema) if isinstance(json_schema, dict) else str(json_schema)
             argv.extend(["--json-schema", schema_str])
 
+        cmdline_len = len(subprocess.list2cmdline(argv))
+        if cmdline_len > 32000:
+            return self.build_exec_result(
+                ok=False,
+                ai="gemini",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=(
+                    f"Command line length ({cmdline_len} chars) exceeds command-line length limit "
+                    "(32000 chars) and agy does not support plain text stdin"
+                ),
+            )
+
         env: dict[str, str] = {}
         if "env" in meta and isinstance(meta["env"], dict):
             for k, v in meta["env"].items():
@@ -57,7 +95,7 @@ class AgyCliExecutor(BaseCliAgentExecutor):
 
         out = await run_cli_process(
             argv,
-            cwd=cwd,
+            cwd=resolved_cwd or cwd,
             env=env,
             timeout_s=timeout_s,
         )

@@ -2,6 +2,7 @@
 
 import json
 import re
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -32,17 +33,40 @@ class HermesCliExecutor(BaseCliAgentExecutor):
         timeout_s = float(req.params.get("timeout_s", req.timeout_s))
         json_schema = req.params.get("json_schema")
 
+        ok, err_msg = self.validate_cli_identifiers(session_id=session_id, model=model)
+        if not ok:
+            return self.build_exec_result(
+                ok=False,
+                ai="hermes",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=err_msg or "Invalid session_id or model",
+            )
+
+        ok, err_msg, resolved_cwd = self.validate_confinement(req, mode, cwd)
+        if not ok:
+            return self.build_exec_result(
+                ok=False,
+                ai="hermes",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=err_msg or "Confinement violation",
+            )
+
         # Create temporary file for usage output
         temp_usage = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
         temp_usage.close()
         usage_path = Path(temp_usage.name)
 
+        task_str = str(task)
         argv: list[str] = [
             cli_bin,
             "-p",
             str(profile),
             "-z",
-            str(task),
+            task_str,
             "--usage-file",
             str(usage_path),
         ]
@@ -51,15 +75,35 @@ class HermesCliExecutor(BaseCliAgentExecutor):
             argv.extend(["-m", str(model)])
         if session_id:
             argv.extend(["--resume", str(session_id)])
-        if cwd:
-            argv.extend(["--in", str(cwd)])
+        effective_cwd = resolved_cwd or cwd
+        if effective_cwd:
+            argv.extend(["--in", str(effective_cwd)])
         if mode == "answer":
-            # For answer mode, can specify empty toolsets to restrict actions
+            # For answer mode, specify empty toolsets to restrict actions
             argv.extend(["--toolsets", ""])
+
+        cmdline_len = len(subprocess.list2cmdline(argv))
+        if cmdline_len > 32000:
+            if usage_path.exists():
+                try:
+                    usage_path.unlink()
+                except Exception:
+                    pass
+            return self.build_exec_result(
+                ok=False,
+                ai="hermes",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=(
+                    f"Command line length ({cmdline_len} chars) exceeds command-line length limit "
+                    "(32000 chars) and hermes oneshot does not support stdin"
+                ),
+            )
 
         env: dict[str, str] = {}
         # Pin TERMINAL_CWD to prevent subprocess escaping cwd
-        pinned_cwd = str(cwd) if cwd else str(Path.cwd())
+        pinned_cwd = str(effective_cwd) if effective_cwd else str(Path.cwd())
         env["TERMINAL_CWD"] = pinned_cwd
 
         if "env" in meta and isinstance(meta["env"], dict):
@@ -69,7 +113,7 @@ class HermesCliExecutor(BaseCliAgentExecutor):
         try:
             out = await run_cli_process(
                 argv,
-                cwd=cwd,
+                cwd=effective_cwd,
                 env=env,
                 timeout_s=timeout_s,
             )
