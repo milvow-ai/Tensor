@@ -46,9 +46,15 @@ log = structlog.get_logger(__name__)
 
 _CONF_BEGIN = "# >>> farm-local (managed by farm.db.local, do not edit) >>>"
 _CONF_END = "# <<< farm-local <<<"
-_CONF_SETTINGS = ("fsync = off",)
-_CONF_BLOCK = "\n".join([_CONF_BEGIN, *_CONF_SETTINGS, _CONF_END]) + "\n"
+_CONF_SETTINGS_DURABLE = ("fsync = on",)
+_CONF_SETTINGS_EPHEMERAL = ("fsync = off",)
 _CONF_RE = re.compile(re.escape(_CONF_BEGIN) + r".*?" + re.escape(_CONF_END) + r"\n?", re.DOTALL)
+
+
+def _conf_block(durable: bool) -> str:
+    settings = _CONF_SETTINGS_DURABLE if durable else _CONF_SETTINGS_EPHEMERAL
+    return "\n".join([_CONF_BEGIN, *settings, _CONF_END]) + "\n"
+
 
 _INITDB_ARGS = ("--auth=trust", "--auth-local=trust", "--encoding=utf8", "-U", "postgres")  # as pgserver
 _MAX_LOG_BYTES = 8 * 1024 * 1024
@@ -143,21 +149,43 @@ def _rotate_log(pgdata: Path) -> None:
         log.warning("local_pg.server_log_truncate_failed", pgdata=str(pgdata), error=exc.__class__.__name__)
 
 
-def _apply_local_conf(pgdata: Path) -> bool:
+def _is_runtime_dir(target: Path) -> bool:
+    try:
+        return _same_path(str(target), data_dir() / "pg")
+    except Exception:
+        return False
+
+
+def _is_test_dir(target: Path) -> bool:
+    return not _is_runtime_dir(target)
+
+
+def _apply_local_conf(pgdata: Path, *, durable: bool | None = None) -> bool:
     """Make sure ``postgresql.conf`` ends with the managed settings block. Returns True when it changed."""
     conf = pgdata / "postgresql.conf"
     if not conf.exists():
         return False
+    target = pgdata.expanduser().resolve()
+    if _is_runtime_dir(target):
+        # Never disable durability for the owner's runtime data dir
+        effective_durable = True
+    elif durable is not None:
+        effective_durable = durable
+    else:
+        effective_durable = not _is_test_dir(target)
+
+    block = _conf_block(effective_durable)
     text = conf.read_text(encoding="utf-8")
     if _CONF_RE.search(text):
-        new = _CONF_RE.sub(lambda _m: _CONF_BLOCK, text, count=1)
+        new = _CONF_RE.sub(lambda _m: block, text, count=1)
     else:
         new = text if text.endswith("\n") or not text else text + "\n"
-        new += _CONF_BLOCK
+        new += block
     if new == text:
         return False
     conf.write_text(new, encoding="utf-8", newline="\n")
-    log.info("local_pg.conf_updated", pgdata=str(pgdata), settings=list(_CONF_SETTINGS))
+    settings = _CONF_SETTINGS_DURABLE if effective_durable else _CONF_SETTINGS_EPHEMERAL
+    log.info("local_pg.conf_updated", pgdata=str(pgdata), settings=list(settings))
     return True
 
 
@@ -244,7 +272,11 @@ def _wait_ready(pgdata: Path, timeout: float = _READY_TIMEOUT_S) -> None:
         time.sleep(0.5)
 
 
-def get_local_server(pgdata: Path | None = None) -> PostgresServer:
+def get_local_server(
+    pgdata: Path | None = None,
+    *,
+    durable: bool | None = None,
+) -> PostgresServer:
     """Get the embedded PostgreSQL server for ``pgdata``, starting (and initialising) it when needed."""
     target = get_local_pgdata(pgdata)
 
@@ -261,7 +293,7 @@ def get_local_server(pgdata: Path | None = None) -> PostgresServer:
     _prepare_pgdata(target)
     if not running:
         _rotate_log(target)
-    conf_changed = _apply_local_conf(target)
+    conf_changed = _apply_local_conf(target, durable=durable)
 
     server = get_server(target, cleanup_mode=None)
 
@@ -270,17 +302,22 @@ def get_local_server(pgdata: Path | None = None) -> PostgresServer:
     return server
 
 
-def get_local_port(pgdata: Path | None = None) -> int:
+def get_local_port(pgdata: Path | None = None, *, durable: bool | None = None) -> int:
     """Port of the running embedded server (starts it if needed)."""
-    port = get_local_server(pgdata).get_postmaster_info().port
+    port = get_local_server(pgdata, durable=durable).get_postmaster_info().port
     if port is None:
         raise RuntimeError("local postgres exposes no TCP port")
     return int(port)
 
 
-def start_local(pgdata: Path | None = None, database: str = "postgres") -> str:
+def start_local(
+    pgdata: Path | None = None,
+    database: str = "postgres",
+    *,
+    durable: bool | None = None,
+) -> str:
     """Start (or reuse) the embedded server; return a URI for ``database`` (trust auth: no password)."""
-    return str(get_local_server(pgdata).get_uri(database=database))
+    return str(get_local_server(pgdata, durable=durable).get_uri(database=database))
 
 
 def stop_local(pgdata: Path | None = None) -> bool:
@@ -296,11 +333,16 @@ def stop_local(pgdata: Path | None = None) -> bool:
     return True
 
 
-def reset_local(pgdata: Path | None = None, database: str = "postgres") -> str:
+def reset_local(
+    pgdata: Path | None = None,
+    database: str = "postgres",
+    *,
+    durable: bool | None = None,
+) -> str:
     """Stop the embedded server, delete its data directory and start a fresh one."""
     target = get_local_pgdata(pgdata)
     if target.exists() and any(target.iterdir()) and not (target / "PG_VERSION").exists():
         raise RuntimeError(f"{target} is not a PostgreSQL data directory; refusing to delete it")
     stop_local(target)
     _rmtree(target)
-    return start_local(pgdata=target, database=database)
+    return start_local(pgdata=target, database=database, durable=durable)

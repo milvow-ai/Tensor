@@ -5,13 +5,15 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult
 
@@ -27,51 +29,59 @@ class SubprocessOutput:
     timed_out: bool = False
 
 
-async def _read_stream(stream: asyncio.StreamReader | None, max_bytes: int) -> str:
+def _read_stream(stream: IO[bytes] | None, max_bytes: int) -> str:
     """Read stream up to max_bytes, draining remainder if exceeded."""
     if stream is None:
         return ""
     chunks: list[bytes] = []
     total = 0
-    while True:
-        chunk = await stream.read(64 * 1024)
-        if not chunk:
-            break
-        if total + len(chunk) > max_bytes:
-            allowed = max_bytes - total
-            if allowed > 0:
-                chunks.append(chunk[:allowed])
-            chunks.append(b"\n[OUTPUT TRUNCATED]")
-            try:
-                while await stream.read(64 * 1024):
+    try:
+        while True:
+            chunk = stream.read(64 * 1024)
+            if not chunk:
+                break
+            if total + len(chunk) > max_bytes:
+                allowed = max_bytes - total
+                if allowed > 0:
+                    chunks.append(chunk[:allowed])
+                chunks.append(b"\n[OUTPUT TRUNCATED]")
+                try:
+                    while stream.read(64 * 1024):
+                        pass
+                except Exception:
                     pass
-            except Exception:
-                pass
-            break
-        chunks.append(chunk)
-        total += len(chunk)
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+    except Exception:
+        pass
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
-async def _kill_process_tree(pid: int) -> None:
+def _kill_process_tree(pid: int) -> None:
     """Kill process and all child processes recursively."""
     try:
         if sys.platform == "win32":
-            proc = await asyncio.create_subprocess_exec(
-                "taskkill",
-                "/F",
-                "/T",
-                "/PID",
-                str(pid),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
             )
-            await proc.wait()
         else:
             try:
                 os.killpg(os.getpgid(pid), 9)
             except Exception:
-                os.kill(pid, 9)
+                try:
+                    os.killpg(pid, 9)
+                except Exception:
+                    os.kill(pid, 9)
     except Exception:
         pass
 
@@ -212,6 +222,108 @@ def extract_cost_usd(data: dict[str, Any] | None) -> Decimal:
     return Decimal(0)
 
 
+class _ProcessState:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.proc: subprocess.Popen[bytes] | None = None
+        self.cancelled = False
+
+
+def _run_sync_worker(
+    state: _ProcessState,
+    cmd_name: str,
+    cmd_args: list[str],
+    work_dir: str | None,
+    merged_env: dict[str, str],
+    timeout_s: float,
+    max_bytes: int,
+) -> SubprocessOutput:
+    start_time = time.monotonic()
+    popen_kwargs: dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "cwd": work_dir,
+        "env": merged_env,
+    }
+    if sys.platform != "win32":
+        popen_kwargs["start_new_session"] = True
+
+    with state.lock:
+        if state.cancelled:
+            return SubprocessOutput(
+                exit_code=-1,
+                stdout="",
+                stderr="Process cancelled before start",
+                duration_s=0.0,
+                timed_out=False,
+            )
+        try:
+            proc = subprocess.Popen(cmd_args, **popen_kwargs)
+            state.proc = proc
+        except Exception as exc:
+            duration_s = time.monotonic() - start_time
+            return SubprocessOutput(
+                exit_code=127,
+                stdout="",
+                stderr=f"Failed to start process {cmd_name}: {exc}",
+                duration_s=duration_s,
+            )
+
+    stdout_result: list[str] = [""]
+    stderr_result: list[str] = [""]
+
+    def read_stdout() -> None:
+        stdout_result[0] = _read_stream(proc.stdout, max_bytes)
+
+    def read_stderr() -> None:
+        stderr_result[0] = _read_stream(proc.stderr, max_bytes)
+
+    t_out = threading.Thread(target=read_stdout, daemon=True)
+    t_err = threading.Thread(target=read_stderr, daemon=True)
+    t_out.start()
+    t_err.start()
+
+    timed_out = False
+    try:
+        proc.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+
+    if timed_out:
+        duration_s = time.monotonic() - start_time
+        if proc.pid is not None:
+            _kill_process_tree(proc.pid)
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=5.0)
+            except Exception:
+                pass
+        t_out.join(timeout=1.0)
+        t_err.join(timeout=1.0)
+        return SubprocessOutput(
+            exit_code=-1,
+            stdout="",
+            stderr=f"Process timed out after {timeout_s}s",
+            duration_s=duration_s,
+            timed_out=True,
+        )
+
+    duration_s = time.monotonic() - start_time
+    t_out.join(timeout=5.0)
+    t_err.join(timeout=5.0)
+    return SubprocessOutput(
+        exit_code=proc.returncode if proc.returncode is not None else 0,
+        stdout=stdout_result[0],
+        stderr=stderr_result[0],
+        duration_s=duration_s,
+        timed_out=False,
+    )
+
+
 async def run_cli_process(
     argv: list[str],
     *,
@@ -223,6 +335,7 @@ async def run_cli_process(
     """Run a CLI subprocess with timeout, process tree termination, and output caps.
 
     Does NOT use shell=True. Resolves the executable path using shutil.which.
+    Runs via a worker thread (asyncio.to_thread) around subprocess.Popen.
     """
     if not argv:
         return SubprocessOutput(
@@ -259,57 +372,34 @@ async def run_cli_process(
             work_dir = str(p)
         except Exception:
             work_dir = str(cwd)
-    start_time = time.monotonic()
 
+    state = _ProcessState()
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd_args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=work_dir,
-            env=merged_env,
+        return await asyncio.to_thread(
+            _run_sync_worker,
+            state,
+            cmd_name,
+            cmd_args,
+            work_dir,
+            merged_env,
+            timeout_s,
+            max_bytes,
         )
-    except Exception as exc:
-        duration_s = time.monotonic() - start_time
-        return SubprocessOutput(
-            exit_code=127,
-            stdout="",
-            stderr=f"Failed to start process {cmd_name}: {exc}",
-            duration_s=duration_s,
-        )
-
-    stdout_task = asyncio.create_task(_read_stream(proc.stdout, max_bytes))
-    stderr_task = asyncio.create_task(_read_stream(proc.stderr, max_bytes))
-
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=timeout_s)
-        duration_s = time.monotonic() - start_time
-        stdout = await stdout_task
-        stderr = await stderr_task
-        return SubprocessOutput(
-            exit_code=proc.returncode if proc.returncode is not None else 0,
-            stdout=stdout,
-            stderr=stderr,
-            duration_s=duration_s,
-            timed_out=False,
-        )
-    except TimeoutError:
-        duration_s = time.monotonic() - start_time
-        if proc.pid is not None:
-            await _kill_process_tree(proc.pid)
+    except asyncio.CancelledError:
+        with state.lock:
+            state.cancelled = True
+            proc = state.proc
+        if proc is not None and proc.pid is not None:
+            _kill_process_tree(proc.pid)
             try:
                 proc.kill()
             except Exception:
                 pass
-        stdout_task.cancel()
-        stderr_task.cancel()
-        return SubprocessOutput(
-            exit_code=-1,
-            stdout="",
-            stderr=f"Process timed out after {timeout_s}s",
-            duration_s=duration_s,
-            timed_out=True,
-        )
+            try:
+                proc.wait(timeout=5.0)
+            except Exception:
+                pass
+        raise
 
 
 class BaseCliAgentExecutor:

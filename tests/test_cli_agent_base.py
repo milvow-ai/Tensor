@@ -1,11 +1,14 @@
 """Tests for base CLI agent executor utilities and subprocess runner."""
 
+import asyncio
 import sys
 import tempfile
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import psutil
 import pytest
 
 from farm.executors.base import ConnectionView
@@ -165,3 +168,118 @@ def test_build_exec_result() -> None:
     assert res.cost_usd == Decimal("0.01")
     assert res.units_used["input_tokens"] == 10.0
     assert res.latency_ms == 1500
+
+
+def test_selector_loop_cli_runner() -> None:
+    """Run CLI runner under an explicit SelectorEventLoop on Windows (and default elsewhere).
+
+    Asserts:
+    1. A fake CLI succeeds.
+    2. A fake CLI that sleeps beyond timeout is killed together with a spawned child (child PID is gone).
+    3. Cancellation of the awaiting task kills the process tree (child PID is gone).
+    """
+    loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
+
+    async def _test() -> None:
+        current_loop = asyncio.get_running_loop()
+        if sys.platform == "win32":
+            assert isinstance(current_loop, asyncio.SelectorEventLoop)
+
+        # 1. Fake CLI succeeds
+        out = await run_cli_process([sys.executable, "-c", "print('fake CLI success')"])
+        assert out.exit_code == 0
+        assert "fake CLI success" in out.stdout
+        assert not out.timed_out
+
+        # 2. Fake CLI that sleeps beyond timeout is killed together with its spawned child
+        with tempfile.TemporaryDirectory() as td:
+            pid_file = Path(td) / "timeout_child.pid"
+            parent_script = (
+                "import subprocess, sys, time; "
+                f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                f"open('{pid_file.as_posix()}', 'w').write(str(p.pid)); "
+                "time.sleep(60)"
+            )
+            out_timeout = await run_cli_process(
+                [sys.executable, "-c", parent_script],
+                timeout_s=1.0,
+            )
+            assert out_timeout.timed_out
+            assert out_timeout.exit_code == -1
+            assert "timed out" in out_timeout.stderr
+
+            assert pid_file.exists(), "Child PID file was not created"
+            child_pid = int(pid_file.read_text().strip())
+
+            # Assert the child PID is gone
+            deadline = time.monotonic() + 5.0
+            child_alive = True
+            while time.monotonic() < deadline:
+                if not psutil.pid_exists(child_pid):
+                    child_alive = False
+                    break
+                try:
+                    proc = psutil.Process(child_pid)
+                    if not proc.is_running() or proc.status() == psutil.STATUS_ZOMBIE:
+                        child_alive = False
+                        break
+                except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                    child_alive = False
+                    break
+                await asyncio.sleep(0.1)
+
+            assert not child_alive, f"Child PID {child_pid} was not killed on timeout"
+
+        # 3. Cancellation kills the process tree
+        with tempfile.TemporaryDirectory() as td:
+            pid_file = Path(td) / "cancel_child.pid"
+            parent_script = (
+                "import subprocess, sys, time; "
+                f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                f"open('{pid_file.as_posix()}', 'w').write(str(p.pid)); "
+                "time.sleep(60)"
+            )
+            task = asyncio.create_task(
+                run_cli_process([sys.executable, "-c", parent_script], timeout_s=30.0)
+            )
+
+            # Wait until child process is running and PID is written
+            deadline = time.monotonic() + 5.0
+            child_pid = None
+            while time.monotonic() < deadline:
+                if pid_file.exists():
+                    text = pid_file.read_text().strip()
+                    if text.isdigit():
+                        child_pid = int(text)
+                        break
+                await asyncio.sleep(0.05)
+
+            assert child_pid is not None, "Child PID was not written in time"
+            assert psutil.pid_exists(child_pid), f"Child PID {child_pid} should be alive initially"
+
+            # Cancel the awaiting task
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+            # Assert the child PID is gone
+            deadline = time.monotonic() + 5.0
+            child_alive = True
+            while time.monotonic() < deadline:
+                if not psutil.pid_exists(child_pid):
+                    child_alive = False
+                    break
+                try:
+                    proc = psutil.Process(child_pid)
+                    if not proc.is_running() or proc.status() == psutil.STATUS_ZOMBIE:
+                        child_alive = False
+                        break
+                except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                    child_alive = False
+                    break
+                await asyncio.sleep(0.1)
+
+            assert not child_alive, f"Child PID {child_pid} was not killed on task cancellation"
+
+    asyncio.run(_test(), loop_factory=loop_factory)
+
