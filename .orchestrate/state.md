@@ -51,7 +51,7 @@ uns\M1a-db-ledger |
 | C1 console core | agy (cut off) → Sonnet worker-build finishing in D:/Harness Farm/wt-c1 (branch c1-console) | sonnet | console/**, console/sql/views.sql | Resumed after rate limit | agent reply |
 uns\C1-console-core |
 | M1c router+gateway | worker-build (worktree) | sonnet | see briefs/M1c | Running | agent reply |
-| FIX1 loop+fsync | agy (wt-fix1) | gemini-3.8-flash-high | cli_agent/base.py thread runner; local.py fsync only for test DB | Running | D:/dev-cache/runs/FIX1-loop-fsync |
+| FIX1 loop+fsync | agy (wt-fix1) | gemini-3.8-flash-high | cli_agent thread runner; fsync only test DB | **Merged** (tree-kill + cancel tests under SelectorEventLoop) | — |
 | M2c adapters+LLM | worker-build (worktree) | sonnet | adapters apollo/hunter/pagespeed/adzuna/ats_public, executors/llm.py, schemas, registry | Resumed after rate limit | agent reply |
 | M3e-A AI executors | agy (wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | **Merged fde1ce3** (32 tests; live agy+hermes OK $0.0003; Codex 0.160.0 installed) | — |
 | M3c-A MCP executor | agy (wt-m3c) | gemini-3.8-flash-high | farm/executors/mcp/*, token store, fake MCP server | **Merged ff60d8d** (14 tests; Clay URL UNVERIFIED; notes: silent except on ACL, data_dir dup) | — |
