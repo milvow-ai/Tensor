@@ -21,7 +21,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, unquote
 
 __all__ = [
     "AUTH_SCHEMES",
@@ -31,6 +31,7 @@ __all__ = [
     "install_log_redaction",
     "parse_auth_ref",
     "redact",
+    "register_env_secrets",
     "register_secret",
     "resolve_auth",
     "resolve_token_store",
@@ -155,17 +156,28 @@ def install_log_redaction(logger_name: str) -> None:
         logger.addFilter(RedactingFilter())
 
 
-def resolve_token_store(auth_ref: str) -> Path:
+def resolve_token_store(auth_ref: str, *, data_dir: Path | None = None) -> Path:
     """Resolve a ``token-store:<id>`` auth_ref to its token directory path.
 
-    Returns the directory path under FARM_DATA_DIR/tokens/<id>.
+    Returns the directory path under FARM_DATA_DIR/tokens/<id> (or data_dir/tokens/<id>).
     Never returns, logs, or stores secret token contents.
     """
     scheme, ref = parse_auth_ref(auth_ref)
     if scheme != "token-store":
         raise AuthRefError(f"expected 'token-store:' auth_ref, got '{scheme}:'")
-    data_dir = Path(os.environ.get("FARM_DATA_DIR", "D:/farm-data"))
-    store_dir = data_dir / "tokens" / ref
+    base_data_dir = (
+        data_dir if data_dir is not None else Path(os.environ.get("FARM_DATA_DIR", "D:/farm-data"))
+    )
+    tokens_root = (base_data_dir / "tokens").resolve()
+    store_dir = (tokens_root / ref).resolve()
+    try:
+        store_dir.relative_to(tokens_root)
+    except ValueError:
+        raise AuthRefError(
+            "Path traversal detected in auth_ref: token-store path escapes tokens root"
+        ) from None
+    if store_dir == tokens_root:
+        raise AuthRefError("Invalid auth_ref: token-store points to tokens root")
     return ensure_token_store_dir(store_dir)
 
 
@@ -188,4 +200,34 @@ def ensure_token_store_dir(store_dir: Path) -> Path:
     except Exception:
         pass
     return store_dir
+
+
+_SECRET_ENV_NAME = re.compile(
+    r"(?:KEY|TOKEN|SECRET|PASSWORD|_VK\b|\bVK\b|AUTH|CREDENTIAL)",
+    re.IGNORECASE,
+)
+_DB_URL_PW = re.compile(
+    r"^[a-z][a-z0-9+.-]*://[^:/\s]*:([^@\s]+)@",
+    re.IGNORECASE,
+)
+
+
+def register_env_secrets() -> None:
+    """Inspect environment variables and register all secret-looking values for redaction."""
+    for key, value in os.environ.items():
+        if not value:
+            continue
+        if _SECRET_ENV_NAME.search(key):
+            register_secret(value)
+
+        val = value.strip()
+        match = _DB_URL_PW.search(val)
+        if match:
+            pw = match.group(1)
+            register_secret(pw)
+            unquoted = unquote(pw)
+            if unquoted != pw:
+                register_secret(unquoted)
+
+
 

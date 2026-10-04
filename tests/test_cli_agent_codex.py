@@ -81,7 +81,10 @@ async def test_codex_edit_mode_and_resume(fake_harness: FakeCliHarness) -> None:
     fake_harness.set_response(stdout=stdout_lines)
 
     conn = ConnectionView(
-        auth_ref="cli:test", id="codex-01", provider_id="codex", meta={"cli_path": str(bin_path)}
+        auth_ref="cli:test",
+        id="codex-01",
+        provider_id="codex",
+        meta={"cli_path": str(bin_path), "allow_edit": True, "edit_roots": [str(fake_harness.bin_dir)]},
     )
     req = ExecRequest(
         request_id=uuid4(),
@@ -90,6 +93,7 @@ async def test_codex_edit_mode_and_resume(fake_harness: FakeCliHarness) -> None:
             "task": "apply fixes",
             "mode": "edit",
             "session_id": "thread-resume-789",
+            "cwd": str(fake_harness.bin_dir / "workdir"),
         },
         connection=conn,
     )

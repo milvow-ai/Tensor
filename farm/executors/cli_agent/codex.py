@@ -33,6 +33,28 @@ class CodexCliExecutor(BaseCliAgentExecutor):
         timeout_s = float(req.params.get("timeout_s", req.timeout_s))
         json_schema = req.params.get("json_schema")
 
+        ok, err_msg = self.validate_cli_identifiers(session_id=session_id, model=model)
+        if not ok:
+            return self.build_exec_result(
+                ok=False,
+                ai="codex",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=err_msg or "Invalid session_id or model",
+            )
+
+        ok, err_msg, resolved_cwd = self.validate_confinement(req, mode, cwd)
+        if not ok:
+            return self.build_exec_result(
+                ok=False,
+                ai="codex",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=err_msg or "Confinement violation",
+            )
+
         # Handle optional json_schema via a temporary schema file
         temp_schema_file: Path | None = None
         schema_path_str: str | None = None
@@ -48,7 +70,7 @@ class CodexCliExecutor(BaseCliAgentExecutor):
 
         argv: list[str] = [cli_bin, "exec"]
         if session_id:
-            argv.extend(["resume", str(session_id)])
+            argv.extend(["resume", "--", str(session_id)])
 
         argv.extend(["--json", "--skip-git-repo-check"])
 
@@ -60,13 +82,15 @@ class CodexCliExecutor(BaseCliAgentExecutor):
         else:
             argv.extend(["--sandbox", "read-only"])
 
-        if cwd:
-            argv.extend(["-C", str(cwd)])
+        effective_cwd = resolved_cwd or cwd
+        if effective_cwd:
+            argv.extend(["-C", str(effective_cwd)])
 
         if schema_path_str:
             argv.extend(["--output-schema", schema_path_str])
 
-        argv.append(task)
+        # Codex reads prompt from stdin when '-' is specified
+        argv.append("-")
 
         env: dict[str, str] = {}
         if config_dir:
@@ -78,7 +102,8 @@ class CodexCliExecutor(BaseCliAgentExecutor):
         try:
             out = await run_cli_process(
                 argv,
-                cwd=cwd,
+                input_text=task,
+                cwd=effective_cwd,
                 env=env,
                 timeout_s=timeout_s,
             )

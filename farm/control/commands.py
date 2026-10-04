@@ -11,12 +11,20 @@ from __future__ import annotations
 import asyncio
 import re
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import structlog
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from farm.db.pool import DbPool
 from farm.executors.base import ConnectionView
@@ -24,6 +32,9 @@ from farm.registry.models import Strategy
 from farm.secrets import AuthRefError, resolve_auth
 
 log = structlog.get_logger(__name__)
+
+SLUG_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,62}$"
+Slug = Annotated[str, StringConstraints(pattern=SLUG_PATTERN, max_length=63)]
 
 Period = Literal["minute", "hour", "day", "week", "month", "rolling_5h", "total", "none"]
 ChargedOn = Literal["attempt", "success", "found"]
@@ -87,34 +98,34 @@ def validate_auth_ref(val: str) -> str:
 
 class PausePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    connection_id: str
+    connection_id: Slug
     reason: str | None = None
 
 
 class ResumePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    connection_id: str
+    connection_id: Slug
 
 
 class SetPriorityPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    connection_id: str
+    connection_id: Slug
     priority: int = Field(ge=0)
 
 
 class SetStrategyPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     strategy: Strategy
-    provider_id: str | None = None
-    connection_id: str | None = None
-    capability: str | None = None
+    provider_id: Slug | None = None
+    connection_id: Slug | None = None
+    capability: Slug | None = None
 
 
 class SetBudgetPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scope: Literal["global", "provider", "connection"]
     monthly_usd: Decimal = Field(ge=0)
-    ref: str | None = None
+    ref: Slug | None = None
     hard_stop: bool = True
 
     @field_validator("ref")
@@ -128,8 +139,8 @@ class SetBudgetPayload(BaseModel):
 
 class AddConnectionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    provider_id: str
-    id: str
+    provider_id: Slug
+    id: Slug
     auth_ref: str
     label: str | None = None
     scope: list[str] = Field(default_factory=lambda: ["internal"])
@@ -140,7 +151,7 @@ class AddConnectionPayload(BaseModel):
     status: Literal["active", "paused", "needs_login", "exhausted", "disabled"] = "active"
     plan: dict[str, Any] = Field(default_factory=dict)
     meta: dict[str, Any] = Field(default_factory=dict)
-    units: dict[str, CommandUnitSpec] = Field(default_factory=dict)
+    units: dict[Slug, CommandUnitSpec] = Field(default_factory=dict)
 
     @field_validator("auth_ref")
     @classmethod
@@ -150,7 +161,7 @@ class AddConnectionPayload(BaseModel):
 
 class UpdateConnectionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    connection_id: str
+    connection_id: Slug
     label: str | None = None
     auth_ref: str | None = None
     scope: list[str] | None = None
@@ -172,21 +183,22 @@ class UpdateConnectionPayload(BaseModel):
 
 class RemoveConnectionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    connection_id: str
+    connection_id: Slug
 
 
 class SetRoutePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    capability: str
-    provider_id: str
+    capability: Slug
+    provider_id: Slug
     position: int = 0
     enabled: bool = True
 
 
 class TestConnectionPayload(BaseModel):
+    __test__ = False
     model_config = ConfigDict(extra="forbid")
-    connection_id: str
-    capability: str | None = None
+    connection_id: Slug
+    capability: Slug | None = None
 
 
 class AckAlertPayload(BaseModel):
