@@ -55,7 +55,7 @@ uns\C1-console-core |
 | M2c adapters+LLM | worker-build (worktree) | sonnet | 5 adapters + executors/llm.py + schemas + registry | **Merged 788f68d** (+923 tests; suite 1462; mutation 16/16) | — |
 | M3b-A manager core | agy (wt-m3b) | gemini-3.8-flash-high | farm/manager/*, control/commands.py | **Merged 051e8a0** (25 grouped tests; 2.0M Gemini tokens) | — |
 | M5-A 24/7 core | agy (wt-m5) | gemini-3.8-flash-high | control/{doctor,heartbeat,keepawake,backup}.py, watchdog/install scripts | Running | D:/dev-cache/runs/M5-247-hardening |
-| FIX2 fsync vs crash recovery | M1a Sonnet (resumed) | sonnet | farm/db/local.py | Running (hard-kill test fails since FIX1) | agent reply |
+| FIX2 fsync vs crash recovery | M1a Sonnet (resumed) | sonnet | farm/db/local.py | **Merged** (root cause: log inside pgdata; durable restart after kill verified) | — |
 | M3e-A AI executors | agy (wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | **Merged fde1ce3** (32 tests; live agy+hermes OK $0.0003; Codex 0.160.0 installed) | — |
 | M3c-A MCP executor | agy (wt-m3c) | gemini-3.8-flash-high | farm/executors/mcp/*, token store, fake MCP server | **Merged ff60d8d** (14 tests; Clay URL UNVERIFIED; notes: silent except on ACL, data_dir dup) | — |
 Shared contract: `briefs/CONTEXT.md`. Keep-awake helper: D:\dev-cache\keep-awake.ps1 (14 h from 04:57).
