@@ -18,7 +18,8 @@ export async function submitCommand(kind: CommandKind, payload: JsonObject): Pro
       return { ok: false, error: parsed.error.issues[0]?.message ?? "The command payload is not valid." };
     }
     const data = await getFarmData();
-    return { ok: true, data: await data.enqueueCommand(kind, parsed.data as JsonObject) };
+    const cleanPayload = JSON.parse(JSON.stringify(parsed.data)) as JsonObject;
+    return { ok: true, data: await data.enqueueCommand(kind, cleanPayload) };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "Could not queue the command." };
   }

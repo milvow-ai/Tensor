@@ -16,14 +16,43 @@ from uuid import UUID
 
 import structlog
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from farm.db.pool import DbPool
 from farm.executors.base import ConnectionView
-from farm.registry.models import STRATEGIES
+from farm.registry.models import Strategy
 from farm.secrets import AuthRefError, resolve_auth
 
 log = structlog.get_logger(__name__)
+
+Period = Literal["minute", "hour", "day", "week", "month", "rolling_5h", "total", "none"]
+ChargedOn = Literal["attempt", "success", "found"]
+
+
+class CommandUnitSpec(BaseModel):
+    """Specification of a consumption unit for a connection."""
+
+    model_config = ConfigDict(extra="forbid")
+    limit: float | None = Field(default=None, ge=0)
+    period: Period = "month"
+    anchor: int | None = Field(default=None, ge=1, le=31)
+    charged_on: ChargedOn = "attempt"
+    unit_cost_usd: float = Field(default=0.0, ge=0)
+    estimate_per_call: float = Field(default=1.0, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_primitive(cls, data: Any) -> Any:
+        if isinstance(data, (int, float, Decimal)):
+            return {"limit": float(data)}
+        return data
+
+    @model_validator(mode="after")
+    def _check_anchor(self) -> CommandUnitSpec:
+        if self.anchor is not None and self.period != "month":
+            raise ValueError("anchor (day of month) only applies to period 'month'")
+        return self
+
 
 # Pattern to detect raw secret keys or tokens in auth_ref
 _SECRET_PATTERNS = re.compile(
@@ -38,9 +67,7 @@ def validate_auth_ref(val: str) -> str:
     text = val.strip()
     valid_prefixes = ("env:", "token-store:", "cli:")
     if not any(text.startswith(p) for p in valid_prefixes):
-        raise ValueError(
-            f"auth_ref must start with one of {valid_prefixes}, got '{text[:20]}...'"
-        )
+        raise ValueError(f"auth_ref must start with one of {valid_prefixes}, got '{text[:20]}...'")
 
     # Check for raw secret shapes or suspicious characters
     rest = text.split(":", 1)[1]
@@ -59,39 +86,32 @@ def validate_auth_ref(val: str) -> str:
 
 
 class PausePayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     connection_id: str
     reason: str | None = None
 
 
 class ResumePayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     connection_id: str
 
 
 class SetPriorityPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     connection_id: str
     priority: int = Field(ge=0)
 
 
 class SetStrategyPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    strategy: str
+    model_config = ConfigDict(extra="forbid")
+    strategy: Strategy
     provider_id: str | None = None
     connection_id: str | None = None
     capability: str | None = None
 
-    @field_validator("strategy")
-    @classmethod
-    def check_strategy(cls, v: str) -> str:
-        if v not in STRATEGIES:
-            raise ValueError(f"Unknown strategy '{v}'. Allowed: {STRATEGIES}")
-        return v
-
 
 class SetBudgetPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     scope: Literal["global", "provider", "connection"]
     monthly_usd: Decimal = Field(ge=0)
     ref: str | None = None
@@ -107,20 +127,20 @@ class SetBudgetPayload(BaseModel):
 
 
 class AddConnectionPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     provider_id: str
     id: str
     auth_ref: str
     label: str | None = None
     scope: list[str] = Field(default_factory=lambda: ["internal"])
-    priority: int = 100
-    strategy: str | None = None
-    concurrency: int = 1
-    rate_per_min: int | None = None
+    priority: int = Field(default=100, ge=0)
+    strategy: Strategy | None = None
+    concurrency: int = Field(default=1, ge=1)
+    rate_per_min: int | None = Field(default=None, ge=1)
     status: Literal["active", "paused", "needs_login", "exhausted", "disabled"] = "active"
     plan: dict[str, Any] = Field(default_factory=dict)
     meta: dict[str, Any] = Field(default_factory=dict)
-    units: dict[str, Any] = Field(default_factory=dict)
+    units: dict[str, CommandUnitSpec] = Field(default_factory=dict)
 
     @field_validator("auth_ref")
     @classmethod
@@ -129,15 +149,15 @@ class AddConnectionPayload(BaseModel):
 
 
 class UpdateConnectionPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     connection_id: str
     label: str | None = None
     auth_ref: str | None = None
     scope: list[str] | None = None
-    priority: int | None = None
-    strategy: str | None = None
-    concurrency: int | None = None
-    rate_per_min: int | None = None
+    priority: int | None = Field(default=None, ge=0)
+    strategy: Strategy | None = None
+    concurrency: int | None = Field(default=None, ge=1)
+    rate_per_min: int | None = Field(default=None, ge=1)
     status: Literal["active", "paused", "needs_login", "exhausted", "disabled"] | None = None
     plan: dict[str, Any] | None = None
     meta: dict[str, Any] | None = None
@@ -151,12 +171,12 @@ class UpdateConnectionPayload(BaseModel):
 
 
 class RemoveConnectionPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     connection_id: str
 
 
 class SetRoutePayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     capability: str
     provider_id: str
     position: int = 0
@@ -164,13 +184,13 @@ class SetRoutePayload(BaseModel):
 
 
 class TestConnectionPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     connection_id: str
     capability: str | None = None
 
 
 class AckAlertPayload(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     alert_id: UUID | str
 
 
@@ -187,6 +207,11 @@ PAYLOAD_VALIDATORS: dict[str, type[BaseModel]] = {
     "test_connection": TestConnectionPayload,
     "ack_alert": AckAlertPayload,
 }
+
+
+def export_command_schemas() -> dict[str, dict[str, Any]]:
+    """Export JSON Schema for each command payload kind."""
+    return {kind: validator.model_json_schema() for kind, validator in PAYLOAD_VALIDATORS.items()}
 
 
 async def _emit_audit(
@@ -429,7 +454,6 @@ async def execute_command(
                 )
 
                 for unit_name, unit_spec in payload.units.items():
-                    spec = unit_spec if isinstance(unit_spec, dict) else {"limit": unit_spec}
                     await conn.execute(
                         "insert into public.consumption_units "
                         "(connection_id, unit, limit_value, period, reset_anchor, "
@@ -438,12 +462,12 @@ async def execute_command(
                         (
                             payload.id,
                             unit_name,
-                            spec.get("limit"),
-                            spec.get("period", "month"),
-                            spec.get("anchor"),
-                            spec.get("charged_on", "attempt"),
-                            spec.get("unit_cost_usd", 0),
-                            spec.get("estimate_per_call", 1),
+                            unit_spec.limit,
+                            unit_spec.period,
+                            unit_spec.anchor,
+                            unit_spec.charged_on,
+                            unit_spec.unit_cost_usd,
+                            unit_spec.estimate_per_call,
                         ),
                     )
 

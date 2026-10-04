@@ -13,6 +13,8 @@ from farm.db.pool import get_db_url, is_local_db
 app = typer.Typer()
 db_app = typer.Typer(help="Database: local Postgres, migrations, checks.")
 app.add_typer(db_app, name="db")
+commands_app = typer.Typer(help="Command contracts and schemas.")
+app.add_typer(commands_app, name="commands")
 
 ALEMBIC_INI = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
 
@@ -90,3 +92,25 @@ def db_reset_local() -> None:
     except Exception as exc:
         print(f"db reset-local FAIL: {_safe(exc)}")
         raise typer.Exit(code=1) from None
+
+
+@commands_app.command(name="schema")
+def commands_schema(
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Path to write the exported command schemas JSON."),
+    ] = None,
+) -> None:
+    """Export JSON Schemas for all Farm commands."""
+    import json
+
+    from farm.control.commands import export_command_schemas
+
+    schemas = export_command_schemas()
+    payload = json.dumps(schemas, indent=2)
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(payload + "\n", encoding="utf-8")
+        print(f"Wrote command schemas to {out}")
+    else:
+        print(payload)

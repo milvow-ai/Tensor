@@ -1,0 +1,30 @@
+{
+  "provider_id": "p_contract",
+  "id": "c_contract_added",
+  "auth_ref": "env:CONTRACT_KEY_NEW",
+  "label": "Contract Test Account",
+  "scope": [
+    "internal"
+  ],
+  "priority": 75,
+  "concurrency": 2,
+  "status": "active",
+  "plan": {
+    "name": "Growth",
+    "price_usd": 49.0,
+    "billing_day": 15
+  },
+  "meta": {
+    "region": "us-east"
+  },
+  "units": {
+    "credits": {
+      "limit": 5000.0,
+      "period": "month",
+      "anchor": 15,
+      "charged_on": "attempt",
+      "unit_cost_usd": 0.01,
+      "estimate_per_call": 1.0
+    }
+  }
+}

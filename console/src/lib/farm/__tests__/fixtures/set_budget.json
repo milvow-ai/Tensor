@@ -1,0 +1,6 @@
+{
+  "scope": "provider",
+  "monthly_usd": 150.0,
+  "ref": "p_contract",
+  "hard_stop": true
+}

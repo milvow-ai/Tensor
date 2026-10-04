@@ -52,18 +52,16 @@ export const COMMAND_LABELS: Record<CommandKind, string> = {
 
 /** True when a command concerns this pool: its provider, one of its accounts, or an account being added to it. */
 export function commandConcernsPool(command: { payload: Record<string, unknown> }, poolId: string): boolean {
+  // add_connection is flat (Farm contract): its provider_id names the pool, so the first check covers it.
   const { provider_id: provider, connection_id: connectionId } = command.payload;
   if (provider === poolId) return true;
-  if (typeof connectionId === "string" && connectionId.startsWith(`${poolId}-`)) return true;
-  const connection = command.payload.connection;
-  const newId = typeof connection === "object" && connection ? (connection as { id?: unknown }).id : null;
-  return typeof newId === "string" && newId.startsWith(`${poolId}-`);
+  return typeof connectionId === "string" && connectionId.startsWith(`${poolId}-`);
 }
 
 /** The id of the thing a command acts on, for display in feeds (a new account's own id, not its pool's). */
 export function commandTarget(kind: CommandKind, payload: Record<string, unknown>): string {
-  const created = typeof payload.connection === "object" && payload.connection ? payload.connection : null;
-  const value =
-    payload.connection_id ?? (created as { id?: unknown } | null)?.id ?? payload.alert_id ?? payload.provider_id;
+  // add_connection carries the new account's own id at the top level (flat Farm contract).
+  const created = kind === "add_connection" ? payload.id : undefined;
+  const value = payload.connection_id ?? created ?? payload.alert_id ?? payload.provider_id;
   return typeof value === "string" ? value : kind;
 }

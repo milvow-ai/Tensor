@@ -95,7 +95,8 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
       return { ok: true, strategy };
     }
     case "add_connection": {
-      const { provider_id, connection: spec } = commandPayloadSchemas.add_connection.parse(rawPayload);
+      const spec = commandPayloadSchemas.add_connection.parse(rawPayload);
+      const { provider_id } = spec;
       if (!w.providers.some((p) => p.id === provider_id)) throw new Rejection(`No pool with id "${provider_id}".`);
       if (w.connections.some((c) => c.id === spec.id))
         throw new Rejection(`An account with id "${spec.id}" already exists.`);
