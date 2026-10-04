@@ -1,5 +1,22 @@
 # Orchestrate state
 
+## ▶ RESUME HERE — new lead session (written 2026-10-04 20:45 IST). Read ONLY this block first.
+**Status:** Phase 1 ≈ 40 % by build-days. All work merged is pushed (`git log -1`). 1,723 Python tests + 68 Console e2e + 24 vitest, all green.
+**Merged:** M1a db+ledger · M1b registry+adapters · M1c router + MCP gateway (12 tools) · M1 live e2e PASS (`scripts/e2e_live.py`) · M2c 5 adapters + LLM via Bifrost · M3e-A AI-CLI executors · M3c-A MCP executor · M3b-A manager core + command consumer · M5-A doctor/backup/watchdog scripts · C1 Console core · INT1 command contract + views 0003 · FIX1/FIX2 (Windows loop, durable local PG).
+**In flight (check first with `powershell -File scripts/round.ps1 -Action status`):**
+1. **SEC1 (critical)** — Gemini started 20:35 in `D:\Harness Farm\wt-sec1` (branch `sec1`) via run-agy, NOT via round.ps1. Finished when `D:\dev-cache\runs\SEC1-cli-isolation-ids\agy.json` is newer than 20:35. If it died: `round.ps1 -Action start -Brief briefs/SEC1-cli-isolation-ids.md -Name sec1` (adds a resume note). Then ONE Sonnet worker-check reviews only `git -C "D:\Harness Farm\wt-sec1" diff` (security lens, ≤ 10 findings), then `round.ps1 -Action merge -Name sec1 -Message "SEC1: …"`.
+2. **M3e-B** (`ask_ai`, owner's top feature) — partial Gemini work in `wt-m3e-b` (branch `m3e-b`). Merge ONLY after SEC1: `round.ps1 -Action start -Brief briefs/M3e-ai-pool.md -Name m3e-b` (resume note; merge main first if it conflicts), then live smoke `uv run farm ai test agy-01 --local` / `hermes-01`.
+3. **M1 correctness review** — not done (quota). Run as a Gemini review round (agy with `-Model gemini-3.1-pro-high`, brief = review lens in the 2026-10-04 M1-gate prompt in git history), Sonnet only if it reports criticals.
+**Next queue (one Gemini round at a time via round.ps1):** SEC1 → M3e-B → M2a → M3b-B + M5-B (`farm run` 24/7, router budget hook, CLI) → C2 → C3 (+ Vercel deploy with owner OK) → M3a → M3c-B (Clay) → M2b (DBOS) → M4.
+**Token rules (owner 2026-10-04: Claude quota is the constraint; the weekly limit was hit after ~1 day):**
+- Lead = plan, brief, merge, decide. Per round ≤ 3 tool calls: `round.ps1 start` → `round.ps1 status -Name` → `round.ps1 merge`. Never read builder transcripts, full diffs or big files — only status tails; grep for specifics.
+- **No Sonnet builders.** Builders: Gemini (agy, owner's Gemini Pro account) for all code; Hermes `-Builder hermes` (Bedrock Qwen3-Coder-Next, AWS cap $20) for docs/fixtures or when Gemini is out. Sonnet worker-check only for security-critical diffs, diff-only scope.
+- Lead model: Sonnet 5.5 for routine rounds; ask the owner to switch to Opus for milestone gates and design decisions.
+- Fresh lead session per milestone or when the context gets long; keep this block ≤ 40 lines and current; no images unless a UI round just finished (one max).
+**Rules learned:** SEC1 before any AI-pool wiring · Windows: Farm runs on SelectorEventLoop; subprocesses via threads; never `asyncio.create_subprocess_*` · Bifrost must be started detached (`Start-Process powershell … scripts\start-bifrost.ps1`), it dies with the session otherwise · agy must be signed into the owner's Gemini Pro account (quota errors → check its banner) · Hermes redacts user@ URLs and strays beyond briefs: check effects, not reports · write config files without BOM.
+**Owner to-do:** `claude` → /login (later `farm ai login claude-02..04`) · fill `.env` (Supabase URL / service key / DB URL, provider keys; BIFROST_FARM_VK = contents of `D:\dev-cache\bifrost\farm-vk.secret`) · list the 7 Clay accounts · OK the Vercel deploy at C3.
+
+
 ## Current state
 Effort: Harness Farm + Farm Console. Phase: **1 — building**. 2026-10-04 ~07:00 paused (Claude usage limit) → resumed; later the PC shut down (all builders killed) → resumed 07:52 with partial work intact; keep-awake now via the app (session_idle).
 Done + merged: Phase 0; briefs for M1a–M5, C1 (briefs/); CONTEXT.md (§0 quality bar); **M1b merged 932d7eb**.
