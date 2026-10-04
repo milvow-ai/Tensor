@@ -30,7 +30,30 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
         timeout_s = float(req.params.get("timeout_s", req.timeout_s))
         json_schema = req.params.get("json_schema")
 
-        argv: list[str] = [cli_bin, "-p", str(task), "--output-format", "json"]
+        ok, err_msg = self.validate_cli_identifiers(session_id=session_id, model=model)
+        if not ok:
+            return self.build_exec_result(
+                ok=False,
+                ai="claude",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=err_msg or "Invalid session_id or model",
+            )
+
+        ok, err_msg, resolved_cwd = self.validate_confinement(req, mode, cwd)
+        if not ok:
+            return self.build_exec_result(
+                ok=False,
+                ai="claude",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=err_msg or "Confinement violation",
+            )
+
+        # Claude Code reads prompt from stdin when omitted after -p
+        argv: list[str] = [cli_bin, "-p", "--output-format", "json"]
 
         if model:
             argv.extend(["--model", str(model)])
@@ -53,7 +76,8 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
 
         out = await run_cli_process(
             argv,
-            cwd=cwd,
+            input_text=str(task),
+            cwd=resolved_cwd or cwd,
             env=env,
             timeout_s=timeout_s,
         )

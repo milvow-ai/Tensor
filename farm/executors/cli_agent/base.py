@@ -222,6 +222,124 @@ def extract_cost_usd(data: dict[str, Any] | None) -> Decimal:
     return Decimal(0)
 
 
+OS_ESSENTIAL_VARS = {
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "WINDIR",
+    "COMSPEC",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+    "OS",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "TERM",
+}
+
+_SECRET_NAME_RE = re.compile(
+    r"(KEY|TOKEN|SECRET|PASSWORD|_VK\b|\bVK\b|DB_URL|DATABASE_URL)",
+    re.IGNORECASE,
+)
+_SECRET_VAL_RE = re.compile(
+    r"postgres(?:ql)?://[^:\s]+:[^@\s]+@",
+    re.IGNORECASE,
+)
+
+
+def looks_secret(name: str, value: str) -> bool:
+    """Return True if an environment variable's name or value looks like a secret/credential."""
+    if _SECRET_NAME_RE.search(name):
+        return True
+    if _SECRET_VAL_RE.search(value):
+        return True
+    return False
+
+
+def build_child_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Build a sanitized child environment with OS essentials and driver variables.
+
+    Filters out any secrets (keys, tokens, passwords, DB URLs, VKs) even if requested.
+    """
+    child_env: dict[str, str] = {}
+
+    for k, v in os.environ.items():
+        if k.upper() in OS_ESSENTIAL_VARS:
+            if not looks_secret(k, v):
+                child_env[k] = v
+
+    if extra:
+        for k, v in extra.items():
+            k_str = str(k)
+            v_str = str(v)
+            if not looks_secret(k_str, v_str):
+                child_env[k_str] = v_str
+
+    child_env["NO_COLOR"] = "1"
+    return child_env
+
+
+def resolve_shim(executable_path: str) -> tuple[list[str], bool]:
+    """Resolve .cmd/.bat shims (e.g. npm shims or python test runner shims) to their binary target.
+
+    Returns (resolved_argv_prefix, is_resolved_binary).
+    If it is a .cmd/.bat file and cannot be resolved, returns ([executable_path], False).
+    """
+    p = Path(executable_path)
+    ext = p.suffix.lower()
+    if ext not in (".cmd", ".bat"):
+        return [executable_path], True
+
+    if not p.is_file():
+        return [executable_path], False
+
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return [executable_path], False
+
+    # Check for Python runner script: @"python" "script" %* or "python" "script" %*
+    py_match = re.search(r'(?:^|\n)\s*@?"([^"]+?\.exe)"\s+"([^"]+?)"\s+%\*', content)
+    if py_match:
+        target_bin = py_match.group(1)
+        target_script = py_match.group(2)
+        if Path(target_bin).is_file() and Path(target_script).is_file():
+            return [target_bin, target_script], True
+
+    # Check for npm shim:
+    # SET "_prog=%dp0%\node.exe" ... & "%_prog%" "%dp0%\..." %*
+    # or node "%dp0%\..." %*
+    dp0 = p.parent
+    npm_match = re.search(r'(?:&|\n)\s*(?:\$COMSPEC% & )?"(?:%_prog%|node)"\s+"([^"]+?)"\s+%\*', content)
+    if not npm_match:
+        npm_match = re.search(r'"%_prog%"\s+"([^"]+?)"\s+%\*', content)
+    if not npm_match:
+        npm_match = re.search(r'node\s+"([^"]+?)"\s+%\*', content)
+
+    if npm_match:
+        raw_script = npm_match.group(1)
+        script_resolved = raw_script.replace("%dp0%", str(dp0)).replace("%~dp0", str(dp0))
+        node_bin = dp0 / "node.exe"
+        if not node_bin.is_file():
+            which_node = shutil.which("node")
+            node_cmd = which_node if which_node else "node"
+        else:
+            node_cmd = str(node_bin)
+        return [node_cmd, str(Path(script_resolved).resolve())], True
+
+    return [executable_path], False
+
+
 class _ProcessState:
     def __init__(self) -> None:
         self.lock = threading.Lock()
@@ -237,10 +355,11 @@ def _run_sync_worker(
     merged_env: dict[str, str],
     timeout_s: float,
     max_bytes: int,
+    input_bytes: bytes | None = None,
 ) -> SubprocessOutput:
     start_time = time.monotonic()
     popen_kwargs: dict[str, Any] = {
-        "stdin": subprocess.DEVNULL,
+        "stdin": subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
         "cwd": work_dir,
@@ -269,6 +388,24 @@ def _run_sync_worker(
                 stderr=f"Failed to start process {cmd_name}: {exc}",
                 duration_s=duration_s,
             )
+
+    if input_bytes is not None and proc.stdin is not None:
+        stdin_stream = proc.stdin
+
+        def feed_stdin() -> None:
+            try:
+                stdin_stream.write(input_bytes)
+                stdin_stream.flush()
+            except Exception:
+                pass
+            finally:
+                try:
+                    stdin_stream.close()
+                except Exception:
+                    pass
+
+        t_stdin = threading.Thread(target=feed_stdin, daemon=True)
+        t_stdin.start()
 
     stdout_result: list[str] = [""]
     stderr_result: list[str] = [""]
@@ -327,6 +464,7 @@ def _run_sync_worker(
 async def run_cli_process(
     argv: list[str],
     *,
+    input_text: str | None = None,
     cwd: str | Path | None = None,
     env: dict[str, str] | None = None,
     timeout_s: float = 30.0,
@@ -334,7 +472,8 @@ async def run_cli_process(
 ) -> SubprocessOutput:
     """Run a CLI subprocess with timeout, process tree termination, and output caps.
 
-    Does NOT use shell=True. Resolves the executable path using shutil.which.
+    Does NOT use shell=True. Resolves the executable path and any .cmd/.bat shims.
+    Delivers input via stdin when provided. Uses a sanitized child environment.
     Runs via a worker thread (asyncio.to_thread) around subprocess.Popen.
     """
     if not argv:
@@ -355,23 +494,27 @@ async def run_cli_process(
             duration_s=0.0,
         )
 
-    # Windows .cmd/.bat wrapping if needed
-    cmd_args = [resolved_cmd, *argv[1:]]
+    shim_prefix, is_binary = resolve_shim(resolved_cmd)
+    if not is_binary:
+        return SubprocessOutput(
+            exit_code=1,
+            stdout="",
+            stderr=f"Refusing to execute unresolvable batch file (.cmd/.bat) with untrusted text: {cmd_name}",
+            duration_s=0.0,
+        )
 
-    # Env overlay
-    merged_env = os.environ.copy()
-    if env:
-        for k, v in env.items():
-            merged_env[str(k)] = str(v)
+    cmd_args = [*shim_prefix, *argv[1:]]
+    merged_env = build_child_env(env)
 
     work_dir = None
     if cwd:
         p = Path(cwd)
-        try:
-            p.mkdir(parents=True, exist_ok=True)
-            work_dir = str(p)
-        except Exception:
+        if p.exists():
+            work_dir = str(p.resolve())
+        else:
             work_dir = str(cwd)
+
+    input_bytes = input_text.encode("utf-8") if input_text is not None else None
 
     state = _ProcessState()
     try:
@@ -384,6 +527,7 @@ async def run_cli_process(
             merged_env,
             timeout_s,
             max_bytes,
+            input_bytes,
         )
     except asyncio.CancelledError:
         with state.lock:
@@ -403,11 +547,115 @@ async def run_cli_process(
 
 
 class BaseCliAgentExecutor:
-    """Base class providing shared helper methods for CLI agent executors."""
+    _SAFE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+    _SAFE_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$")
+
+    @classmethod
+    def validate_cli_identifiers(
+        cls, *, session_id: Any = None, model: Any = None
+    ) -> tuple[bool, str | None]:
+        """Validate session_id and model against safe argv patterns to prevent flag injection."""
+        if session_id is not None:
+            s_str = str(session_id)
+            if not cls._SAFE_IDENTIFIER_PATTERN.match(s_str):
+                return False, f"Invalid session_id: {session_id!r}"
+        if model is not None:
+            m_str = str(model)
+            if not cls._SAFE_MODEL_PATTERN.match(m_str):
+                return False, f"Invalid model: {model!r}"
+        return True, None
 
     @staticmethod
     def get_param(req: ExecRequest, key: str, default: Any = None) -> Any:
         return req.params.get(key, default)
+
+    @staticmethod
+    def validate_confinement(
+        req: ExecRequest, mode: str, cwd: str | Path | None
+    ) -> tuple[bool, str | None, Path | None]:
+        """Validate edit mode confinement according to SEC1 rules.
+
+        mode=edit is permitted only when meta.allow_edit is True AND cwd resolves
+        inside an allowed root (meta.edit_roots, default FARM_DATA_DIR/workspaces).
+        Never mkdir a caller path.
+        """
+        if mode == "edit":
+            meta = req.connection.meta or {}
+            allow_edit = meta.get("allow_edit")
+
+            # Require strict boolean True
+            if allow_edit is not True:
+                return (
+                    False,
+                    f"Edit mode is not permitted for connection '{req.connection.id}' "
+                    "(meta.allow_edit is false)",
+                    None,
+                )
+
+            if not cwd:
+                return False, "Edit mode requires 'cwd' to be specified", None
+
+            p = Path(cwd)
+            if not p.exists():
+                return False, f"Working directory does not exist: {cwd}", None
+
+            resolved_cwd = p.resolve()
+            if not resolved_cwd.is_dir():
+                return False, f"Working directory is not a directory: {cwd}", None
+
+            edit_roots = meta.get("edit_roots")
+            roots: list[Path] = []
+            if edit_roots is not None:
+                if isinstance(edit_roots, (str, Path)):
+                    raw_roots = [edit_roots]
+                elif isinstance(edit_roots, list):
+                    raw_roots = edit_roots
+                else:
+                    return False, f"Invalid edit_roots type: {type(edit_roots).__name__}", None
+
+                for r in raw_roots:
+                    r_str = str(r).strip()
+                    if not r_str or r_str == ".":
+                        return False, f"Invalid edit_roots entry: {r!r} (cannot be empty or '.')", None
+                    p_entry = Path(r_str)
+                    if not p_entry.is_absolute():
+                        return False, f"Invalid edit_roots entry: {r!r} (must be an absolute path)", None
+                    roots.append(p_entry.resolve())
+            else:
+                farm_data = Path(os.environ.get("FARM_DATA_DIR", "D:/farm-data"))
+                roots = [(farm_data / "workspaces").resolve()]
+
+            def _is_relative_to_root(path: Path, root: Path) -> bool:
+                try:
+                    path.relative_to(root)
+                    return True
+                except ValueError:
+                    pass
+                if sys.platform == "win32":
+                    try:
+                        Path(str(path).lower()).relative_to(Path(str(root).lower()))
+                        return True
+                    except ValueError:
+                        pass
+                return False
+
+            is_inside = any(_is_relative_to_root(resolved_cwd, r) for r in roots)
+            if not is_inside:
+                roots_str = ", ".join(str(r) for r in roots)
+                return (
+                    False,
+                    f"Working directory '{resolved_cwd}' is outside allowed edit roots: [{roots_str}]",
+                    None,
+                )
+
+            return True, None, resolved_cwd
+
+        # Non-edit mode (answer mode)
+        if cwd:
+            p = Path(cwd)
+            if p.exists():
+                return True, None, p.resolve()
+        return True, None, None
 
     @staticmethod
     def build_exec_result(

@@ -86,7 +86,7 @@ async def test_claude_edit_mode_and_resume(fake_harness: FakeCliHarness) -> None
         auth_ref="cli:test",
         id="claude-03",
         provider_id="claude",
-        meta={"cli_path": str(bin_path)},
+        meta={"cli_path": str(bin_path), "allow_edit": True, "edit_roots": [str(fake_harness.bin_dir)]},
     )
     req = ExecRequest(
         request_id=uuid4(),
@@ -96,6 +96,7 @@ async def test_claude_edit_mode_and_resume(fake_harness: FakeCliHarness) -> None
             "mode": "edit",
             "session_id": "session-resume-456",
             "model": "opus",
+            "cwd": str(fake_harness.bin_dir / "workdir"),
         },
         connection=conn,
     )
