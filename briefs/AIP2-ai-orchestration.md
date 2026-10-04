@@ -8,6 +8,12 @@ The main AI (Claude Code, Codex, …) uses the Farm to **run other AIs as worker
 ## Read first
 `briefs/CONTEXT.md`, `briefs/M3e-ai-pool.md`, `farm/executors/cli_agent/*` (SEC1 rules: env allow-list, id validation, edit confinement — do not weaken), `farm/capabilities/schemas.py` (`AskAiIn/Out`), `farm/gateway/server.py` (ask_ai tools), `farm/resources/router.py` public API.
 
+## Reuse first (mandatory — owner 2026-10-05)
+- Keep the M3e executors (already SEC1-hardened) as the transport for this round; do not rewrite them.
+- **Do not use `codex mcp-server`** — removed upstream. Codex stays on `codex exec` / `codex exec resume`.
+- Job execution: reuse the existing thread runner + tree-kill from FIX1/M3e; persist jobs in Postgres with the existing DB layer. FastMCP background tasks (`library/fastmcp/docs/servers/tasks.mdx`, SEP-2663) may additionally be enabled on `ai_start` for clients that support MCP tasks, but the explicit `ai_*` tools are required because not every client supports tasks.
+- Next round (not now): an ACP transport (Agent Client Protocol: Python SDK `agentclientprotocol/python-sdk`; adapters `claude-agent-acp`, `codex-acp`; Gemini CLI native `--experimental-acp`) for persistent streaming sessions — design `farm/ai/` so a second transport can plug in behind the same job/conversation API.
+
 ## Owns
 `farm/ai/` (new package: `jobs.py`, `conversations.py`), `farm/gateway/ai_tools.py` (new; move the M3e-B ask_ai tool registrations here; `server.py` keeps one registration call), `farm/capabilities/schemas.py` (AI section only), `farm/executors/cli_agent/codex.py` + `agy.py` (multi-account home dirs only), `farm/control/cli.py` (`farm ai jobs|show|cancel`), one new Alembic migration (next free number), tests `tests/test_ai_jobs.py`, `tests/test_ai_conversations.py`, `tests/test_accept_aip2.py`.
 

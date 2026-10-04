@@ -9,6 +9,18 @@ Typed capabilities (`verify_email`, …) stay as an optional layer for cross-pro
 ## Read first
 `briefs/CONTEXT.md`, `farm/registry/models.py`, `config/registry.yaml` (Clay block), `farm/executors/mcp/` (M3c-A client + token store + fake MCP server in tests), `farm/gateway/server.py`, `farm/resources/router.py` (public API only), `farm/secrets.py` (`set-secret` path), `farm/control/cli.py`.
 
+## Reuse first (mandatory — owner 2026-10-05: do not hand-roll what FastMCP 4 already ships)
+Build on the pinned FastMCP (`library/fastmcp`, docs under `library/fastmcp/docs/servers/`), wiring its primitives to the Farm's router/ledger/run history instead of writing parallel versions:
+- **Proxying any server:** `providers/proxy.mdx` (MCP Proxy Provider, `create_proxy`) — one proxy client per Farm connection (account); a small `WrappedProvider` (`fastmcp.server.providers.wrapped_provider`) or gateway middleware picks the connection per call via the router.
+- **Server definitions + import parsing:** `fastmcp.mcp_config` (`MCPConfig`, the standard `mcpServers` format Claude uses) and `fastmcp.client.transports.config`; only the Codex TOML reader and secret extraction are ours.
+- **Namespacing / allow-deny:** `transforms/namespace.mdx` (`Namespace`), `servers/visibility.mdx` + `transforms/visibility`.
+- **Discovery:** `transforms/tool-search.mdx` (BM25 search transform → synthetic `search_tools` + `call_tool`). Use it instead of writing `find_tools`/`describe_tool` (rename item 3 accordingly).
+- **Extra `_farm` argument / arg stripping:** `transforms/tool-transformation.mdx` (`ToolTransform`).
+- **OAuth MCPs (Notion, Linear, …):** `fastmcp.client.auth.oauth` + `oauth_callback`, storing tokens in the M3c-A per-connection token store.
+- **HTTP APIs with an OpenAPI spec:** `fastmcp.server.providers.openapi` — add `executor: openapi` providers (spec URL/path + `env:` auth ref) the same way, same router path.
+- Patterns only (read, do not vendor): `library/mcp-context-forge` (IBM MCP gateway: federation, per-tool enable/disable, health).
+Our own code is limited to: registry/config models, secret extraction to `.env`, Codex TOML import, the per-call account selection, router/ledger/run-row wiring, CLI and tests. If a FastMCP API does not do what the brief needs, say so in the reply instead of re-implementing it silently.
+
 ## Owns
 `farm/registry/models.py` (extend), `config/registry.yaml` (add an example `fake-mcp` provider only if tests need it — keep the real file loading), `farm/mcp/` (new package: `importer.py`, `sync.py`, `passthrough.py`), `farm/gateway/mcp_tools.py` (new; `server.py` gets one registration call), `farm/gateway/server.py` (only: that call + remove test-name hooks, see 6), `farm/executors/mcp/*` (extend for raw results), `farm/control/cli.py` (new `farm mcp` sub-commands), one new Alembic migration (next free number in `farm/db/migrations/versions/`), tests `tests/test_mcp_import.py`, `tests/test_mcp_sync.py`, `tests/test_mcp_passthrough.py`, `tests/test_accept_open1.py`, test fixtures under `tests/fixtures/mcp/`.
 

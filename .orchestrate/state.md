@@ -118,6 +118,7 @@ Blockers (user):
 - One writer per file; builders never commit; lead commits after checks pass.
 
 ## Decisions log
+- 2026-10-05: **Reuse first** — build on open source (FastMCP proxy/namespace/search/openapi/oauth/tasks, library/ repos) instead of from scratch, without lowering quality; CONTEXT.md section added; ACP transport queued as AIP3 after AIP2 — owner.
 - 2026-10-05: **Scope** — Harness Farm is a general product (one MCP for all MCP servers + AI CLIs); not narrowed to GTM. Briefs OPEN1 + AIP2 added; Clay becomes a config-only MCP provider — owner.
 - 2026-10-03: Build order = Harness Farm → Farm Console → (later) Tensor — user decision.
 - 2026-10-03: Stack = FastMCP 4 + DBOS + Postgres (Supabase) + Crawl4AI + Bifrost; Console = Next.js + shadcn starter on Vercel, controlled via Supabase command queue — previous session design.
