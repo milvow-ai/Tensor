@@ -1,0 +1,612 @@
+{
+  "pause": {
+    "additionalProperties": false,
+    "properties": {
+      "connection_id": {
+        "title": "Connection Id",
+        "type": "string"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Reason"
+      }
+    },
+    "required": [
+      "connection_id"
+    ],
+    "title": "PausePayload",
+    "type": "object"
+  },
+  "resume": {
+    "additionalProperties": false,
+    "properties": {
+      "connection_id": {
+        "title": "Connection Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "connection_id"
+    ],
+    "title": "ResumePayload",
+    "type": "object"
+  },
+  "set_priority": {
+    "additionalProperties": false,
+    "properties": {
+      "connection_id": {
+        "title": "Connection Id",
+        "type": "string"
+      },
+      "priority": {
+        "minimum": 0,
+        "title": "Priority",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "connection_id",
+      "priority"
+    ],
+    "title": "SetPriorityPayload",
+    "type": "object"
+  },
+  "set_strategy": {
+    "additionalProperties": false,
+    "properties": {
+      "strategy": {
+        "enum": [
+          "failover",
+          "most_remaining",
+          "round_robin",
+          "parallel_split",
+          "sticky",
+          "fit_check",
+          "pin"
+        ],
+        "title": "Strategy",
+        "type": "string"
+      },
+      "provider_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Id"
+      },
+      "connection_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Connection Id"
+      },
+      "capability": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Capability"
+      }
+    },
+    "required": [
+      "strategy"
+    ],
+    "title": "SetStrategyPayload",
+    "type": "object"
+  },
+  "set_budget": {
+    "additionalProperties": false,
+    "properties": {
+      "scope": {
+        "enum": [
+          "global",
+          "provider",
+          "connection"
+        ],
+        "title": "Scope",
+        "type": "string"
+      },
+      "monthly_usd": {
+        "anyOf": [
+          {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "type": "string"
+          }
+        ],
+        "title": "Monthly Usd"
+      },
+      "ref": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Ref"
+      },
+      "hard_stop": {
+        "default": true,
+        "title": "Hard Stop",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "scope",
+      "monthly_usd"
+    ],
+    "title": "SetBudgetPayload",
+    "type": "object"
+  },
+  "add_connection": {
+    "$defs": {
+      "CommandUnitSpec": {
+        "additionalProperties": false,
+        "description": "Specification of a consumption unit for a connection.",
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "period": {
+            "default": "month",
+            "enum": [
+              "minute",
+              "hour",
+              "day",
+              "week",
+              "month",
+              "rolling_5h",
+              "total",
+              "none"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "anchor": {
+            "anyOf": [
+              {
+                "maximum": 31,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Anchor"
+          },
+          "charged_on": {
+            "default": "attempt",
+            "enum": [
+              "attempt",
+              "success",
+              "found"
+            ],
+            "title": "Charged On",
+            "type": "string"
+          },
+          "unit_cost_usd": {
+            "default": 0.0,
+            "minimum": 0,
+            "title": "Unit Cost Usd",
+            "type": "number"
+          },
+          "estimate_per_call": {
+            "default": 1.0,
+            "minimum": 0,
+            "title": "Estimate Per Call",
+            "type": "number"
+          }
+        },
+        "title": "CommandUnitSpec",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "provider_id": {
+        "title": "Provider Id",
+        "type": "string"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "auth_ref": {
+        "title": "Auth Ref",
+        "type": "string"
+      },
+      "label": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Label"
+      },
+      "scope": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Scope",
+        "type": "array"
+      },
+      "priority": {
+        "default": 100,
+        "minimum": 0,
+        "title": "Priority",
+        "type": "integer"
+      },
+      "strategy": {
+        "anyOf": [
+          {
+            "enum": [
+              "failover",
+              "most_remaining",
+              "round_robin",
+              "parallel_split",
+              "sticky",
+              "fit_check",
+              "pin"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Strategy"
+      },
+      "concurrency": {
+        "default": 1,
+        "minimum": 1,
+        "title": "Concurrency",
+        "type": "integer"
+      },
+      "rate_per_min": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Rate Per Min"
+      },
+      "status": {
+        "default": "active",
+        "enum": [
+          "active",
+          "paused",
+          "needs_login",
+          "exhausted",
+          "disabled"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "plan": {
+        "additionalProperties": true,
+        "title": "Plan",
+        "type": "object"
+      },
+      "meta": {
+        "additionalProperties": true,
+        "title": "Meta",
+        "type": "object"
+      },
+      "units": {
+        "additionalProperties": {
+          "$ref": "#/$defs/CommandUnitSpec"
+        },
+        "title": "Units",
+        "type": "object"
+      }
+    },
+    "required": [
+      "provider_id",
+      "id",
+      "auth_ref"
+    ],
+    "title": "AddConnectionPayload",
+    "type": "object"
+  },
+  "update_connection": {
+    "additionalProperties": false,
+    "properties": {
+      "connection_id": {
+        "title": "Connection Id",
+        "type": "string"
+      },
+      "label": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Label"
+      },
+      "auth_ref": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Auth Ref"
+      },
+      "scope": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Scope"
+      },
+      "priority": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Priority"
+      },
+      "strategy": {
+        "anyOf": [
+          {
+            "enum": [
+              "failover",
+              "most_remaining",
+              "round_robin",
+              "parallel_split",
+              "sticky",
+              "fit_check",
+              "pin"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Strategy"
+      },
+      "concurrency": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Concurrency"
+      },
+      "rate_per_min": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Rate Per Min"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "enum": [
+              "active",
+              "paused",
+              "needs_login",
+              "exhausted",
+              "disabled"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Status"
+      },
+      "plan": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Plan"
+      },
+      "meta": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Meta"
+      }
+    },
+    "required": [
+      "connection_id"
+    ],
+    "title": "UpdateConnectionPayload",
+    "type": "object"
+  },
+  "remove_connection": {
+    "additionalProperties": false,
+    "properties": {
+      "connection_id": {
+        "title": "Connection Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "connection_id"
+    ],
+    "title": "RemoveConnectionPayload",
+    "type": "object"
+  },
+  "set_route": {
+    "additionalProperties": false,
+    "properties": {
+      "capability": {
+        "title": "Capability",
+        "type": "string"
+      },
+      "provider_id": {
+        "title": "Provider Id",
+        "type": "string"
+      },
+      "position": {
+        "default": 0,
+        "title": "Position",
+        "type": "integer"
+      },
+      "enabled": {
+        "default": true,
+        "title": "Enabled",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "capability",
+      "provider_id"
+    ],
+    "title": "SetRoutePayload",
+    "type": "object"
+  },
+  "test_connection": {
+    "additionalProperties": false,
+    "properties": {
+      "connection_id": {
+        "title": "Connection Id",
+        "type": "string"
+      },
+      "capability": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Capability"
+      }
+    },
+    "required": [
+      "connection_id"
+    ],
+    "title": "TestConnectionPayload",
+    "type": "object"
+  },
+  "ack_alert": {
+    "additionalProperties": false,
+    "properties": {
+      "alert_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "title": "Alert Id"
+      }
+    },
+    "required": [
+      "alert_id"
+    ],
+    "title": "AckAlertPayload",
+    "type": "object"
+  }
+}

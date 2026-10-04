@@ -22,7 +22,12 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Spinner } from "@/components/ui/spinner";
 import { CHARGED_ON, PERIOD_LABELS, PERIODS } from "@/lib/farm/command-meta";
-import { type AddAccountFormValues, addAccountFormSchema, type UnitFormValues } from "@/lib/farm/commands";
+import {
+  type AddAccountFormValues,
+  addAccountFormSchema,
+  buildAddConnectionPayload,
+  type UnitFormValues,
+} from "@/lib/farm/commands";
 
 const EMPTY_UNIT: UnitFormValues = { unit: "", limit: null, period: "month", anchor: null, chargedOn: "attempt" };
 
@@ -71,30 +76,30 @@ export function AddAccountForm({
     setFormError(null);
     const accepted = await run(
       "add_connection",
-      {
+      buildAddConnectionPayload({
         provider_id: providerId,
-        connection: {
-          id: values.id,
-          label: values.label,
-          auth_ref: `env:${values.authEnv}`,
-          scope: ["internal"],
-          priority: values.priority,
-          concurrency: values.concurrency,
-          plan: { name: values.planName, price_usd: values.planPrice, billing_day: values.billingDay },
-          meta: {},
-          units: Object.fromEntries(
-            values.units.map((unit) => [
-              unit.unit,
-              {
-                limit: unit.limit,
-                period: unit.period,
-                anchor: unit.period === "month" ? (unit.anchor ?? values.billingDay) : null,
-                charged_on: unit.chargedOn,
-              },
-            ]),
-          ),
-        },
-      },
+        id: values.id,
+        label: values.label,
+        auth_ref: `env:${values.authEnv}`,
+        scope: ["internal"],
+        priority: values.priority,
+        concurrency: values.concurrency,
+        plan: { name: values.planName, price_usd: values.planPrice, billing_day: values.billingDay },
+        meta: {},
+        units: Object.fromEntries(
+          values.units.map((unit) => [
+            unit.unit,
+            {
+              limit: unit.limit,
+              period: unit.period,
+              anchor: unit.period === "month" ? (unit.anchor ?? values.billingDay) : null,
+              charged_on: unit.chargedOn,
+              unit_cost_usd: 0,
+              estimate_per_call: 1,
+            },
+          ]),
+        ),
+      }),
       {
         key: `add:${values.id}`,
         label: `Add account ${values.id}`,

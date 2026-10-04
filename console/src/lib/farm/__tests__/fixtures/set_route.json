@@ -1,0 +1,6 @@
+{
+  "capability": "cap_contract",
+  "provider_id": "p_contract",
+  "position": 1,
+  "enabled": true
+}

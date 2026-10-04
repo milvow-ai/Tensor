@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Spinner } from "@/components/ui/spinner";
 import { AI_CLI_INFO, AI_CLIS, type AiCli } from "@/lib/farm/command-meta";
-import { type AddAiAccountFormValues, addAiAccountFormSchema } from "@/lib/farm/commands";
+import { type AddAiAccountFormValues, addAiAccountFormSchema, buildAddConnectionPayload } from "@/lib/farm/commands";
 
 export function AddAiAccountForm({
   defaultCli = "claude",
@@ -64,22 +64,20 @@ export function AddAiAccountForm({
       .filter(Boolean);
     const accepted = await run(
       "add_connection",
-      {
+      buildAddConnectionPayload({
         provider_id: AI_CLI_INFO[values.cli].providerId,
-        connection: {
-          id: values.id,
-          label: values.label,
-          auth_ref: `cli:${values.id}`,
-          scope: ["internal"],
-          priority: 100,
-          concurrency: 1,
-          plan: values.planName
-            ? { name: values.planName, price_usd: values.planPrice }
-            : { price_usd: values.planPrice },
-          meta: { cli: values.cli, models },
-          units: {},
-        },
-      },
+        id: values.id,
+        label: values.label,
+        auth_ref: `cli:${values.id}`,
+        scope: ["internal"],
+        priority: 100,
+        concurrency: 1,
+        plan: values.planName
+          ? { name: values.planName, price_usd: values.planPrice }
+          : { price_usd: values.planPrice },
+        meta: { cli: values.cli, models },
+        units: {},
+      }),
       {
         key: `add:${values.id}`,
         label: `Add AI account ${values.id}`,

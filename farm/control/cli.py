@@ -29,6 +29,9 @@ app.add_typer(db_app, name="db")
 registry_app = typer.Typer(help="Registry: seed the database from YAML, export it back, print the schema.")
 app.add_typer(registry_app, name="registry")
 
+commands_app = typer.Typer(help="Command contracts and schemas.")
+app.add_typer(commands_app, name="commands")
+
 ALEMBIC_INI = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
 DEFAULT_REGISTRY = Path(__file__).resolve().parent.parent.parent / "config" / "registry.yaml"
 
@@ -334,3 +337,25 @@ def format_status(pools: "list[PoolCapacity]") -> str:
                 pool_label = ""
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     return "\n".join("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip() for row in rows)
+
+
+@commands_app.command(name="schema")
+def commands_schema(
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Path to write the exported command schemas JSON."),
+    ] = None,
+) -> None:
+    """Export JSON Schemas for all Farm commands."""
+    import json
+
+    from farm.control.commands import export_command_schemas
+
+    schemas = export_command_schemas()
+    payload = json.dumps(schemas, indent=2)
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(payload + "\n", encoding="utf-8")
+        print(f"Wrote command schemas to {out}")
+    else:
+        print(payload)

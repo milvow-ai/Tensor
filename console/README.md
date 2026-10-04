@@ -18,10 +18,16 @@ Farm (the PC)               --polls-->   farm_commands, validates, executes, wri
 
 | kind | payload |
 |---|---|
-| `pause`, `resume`, `test_connection`, `remove_connection` | `{ connection_id }` |
+| `pause` | `{ connection_id, reason? }` |
+| `resume` | `{ connection_id }` |
 | `set_priority` | `{ connection_id, priority }` |
-| `set_strategy` | `{ provider_id, strategy }` (failover, most_remaining, round_robin, parallel_split, sticky, fit_check) |
-| `add_connection` | `{ provider_id, connection: { id, label, auth_ref, scope, priority, concurrency, plan: { name, price_usd, billing_day }, meta, units: { <unit>: { limit, period, anchor, charged_on } } } }` |
+| `set_strategy` | `{ strategy, provider_id?, connection_id?, capability? }` (failover, most_remaining, round_robin, parallel_split, sticky, fit_check, pin) |
+| `set_budget` | `{ scope, monthly_usd, ref?, hard_stop? }` (scope: global, provider, connection) |
+| `add_connection` | `{ provider_id, id, auth_ref, label?, scope?, priority?, strategy?, concurrency?, rate_per_min?, status?, plan?: { name?, price_usd?, billing_day? }, meta?, units?: { <unit>: { limit?, period?, anchor?, charged_on?, unit_cost_usd?, estimate_per_call? } } }` |
+| `update_connection` | `{ connection_id, label?, auth_ref?, scope?, priority?, strategy?, concurrency?, rate_per_min?, status?, plan?, meta? }` |
+| `remove_connection` | `{ connection_id }` |
+| `set_route` | `{ capability, provider_id, position?, enabled? }` |
+| `test_connection` | `{ connection_id, capability? }` |
 | `ack_alert` | `{ alert_id }` |
 
 The zod schemas are in `src/lib/farm/commands.ts`; the server action validates every payload again before it is queued.
