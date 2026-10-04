@@ -15,21 +15,26 @@ all other async tests keep the platform default loop (Windows: Proactor, which a
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
 import pytest_asyncio
+import respx
 from alembic import command
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+from farm.context import FarmContext
 from farm.control.cli import alembic_config
 from farm.db.local import get_local_server
 from farm.db.pool import DbPool, loop_factory, open_pool
+from farm.executors.api import ApiExecutor
 from farm.registry import Registry, load_registry
+from farm.registry.sync import sync_registry
 from farm.settings import data_dir
 
 
@@ -182,3 +187,81 @@ def _json(value: Any) -> Any:
     from psycopg.types.json import Jsonb
 
     return Jsonb(value) if isinstance(value, dict) else value
+
+
+# --- M1c fixtures: a synced registry, a FarmContext, a movable clock, mocked providers ------------------------
+
+REOON_URL = "https://emailverifier.reoon.com/api/v1/verify"
+ZEROBOUNCE_URL = "https://api.zerobounce.net/v2/validate"
+START = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
+
+
+class FakeClock:
+    """An injectable clock (``FarmContext.clock``): cache expiry, cooldowns and leases are tested by moving it."""
+
+    def __init__(self, now: datetime = START) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += timedelta(seconds=seconds)
+
+
+def reoon_body(status: str = "safe", email: str = "jane.doe@example.com") -> dict[str, Any]:
+    return {"email": email, "status": status, "verification_mode": "power", "is_valid_syntax": True}
+
+
+def zerobounce_body(status: str = "valid", email: str = "jane.doe@example.com") -> dict[str, Any]:
+    return {"address": email, "status": status, "sub_status": ""}
+
+
+@pytest.fixture
+def provider_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The keys the fixture registry points at; the values are fake (no network in tests)."""
+    for name in ("REOON_API_KEY", "REOON_API_KEY_2", "ZEROBOUNCE_API_KEY"):
+        monkeypatch.setenv(name, f"test-key-{name.lower()}")
+
+
+@pytest.fixture
+def http() -> Iterator[respx.MockRouter]:
+    """All HTTP is mocked: a request without a route fails the test instead of leaving the machine."""
+    with respx.mock(assert_all_called=False, assert_all_mocked=True) as router:
+        yield router
+
+
+@pytest_asyncio.fixture
+async def farm_factory(
+    pool: DbPool, registry: Registry, provider_keys: None
+) -> AsyncIterator[Callable[..., Awaitable[FarmContext]]]:
+    """``await make(registry=None, **context_fields)``: sync a registry (default: the fixture one) and return a context."""
+    contexts: list[FarmContext] = []
+
+    async def make(reg: Registry | None = None, **fields: Any) -> FarmContext:
+        await sync_registry(pool, reg or registry)
+        fields.setdefault("executors", {"api": ApiExecutor()})
+        fields.setdefault("poll_interval_s", 0.02)
+        ctx = FarmContext(pool=pool, **fields)
+        contexts.append(ctx)
+        return ctx
+
+    yield make
+    for ctx in contexts:
+        await ctx.aclose()
+    # A synced registry changes the singleton farm_settings row, which M1a's schema test reads from the shared
+    # session database without going through ``pool``: leave the database as clean as it was found.
+    await truncate_all(pool)
+
+
+@pytest_asyncio.fixture
+async def clean_pool(pool: DbPool) -> AsyncIterator[DbPool]:
+    """``pool`` that is emptied again afterwards (for tests that sync a registry without ``farm_factory``)."""
+    yield pool
+    await truncate_all(pool)
+
+
+@pytest_asyncio.fixture
+async def farm_ctx(farm_factory: Callable[..., Awaitable[FarmContext]], registry: Registry) -> FarmContext:
+    """The fixture registry synced into the test database: reoon-01, reoon-02, zerobounce-01, clay, claude."""
+    return await farm_factory(registry)
