@@ -1,8 +1,15 @@
 # Orchestrate state
 
 ## Current state
-Effort: Harness Farm + Farm Console (see HANDOFF.md). Phase: **0 — pre-setup DONE 2026-10-04 except user blockers; plan v2 written; waiting for "go"**.
-Next action: on "go" → start Bifrost (`scripts/start-bifrost.ps1`), write briefs M1a–M1d, run M1.
+Effort: Harness Farm + Farm Console. Phase: **1 — building (paused 2026-10-04 ~07:00: Claude Pro usage limit reached)**.
+Done + merged: Phase 0; briefs for M1a–M5, C1 (briefs/); CONTEXT.md (§0 quality bar); **M1b merged 932d7eb**.
+**RESUME HERE (next session):**
+1. Main tree `D:\Harness Farm\Tensor` has UNCOMMITTED M1a work (Gemini partial + Sonnet finisher, may be cut off): farm/db/**, farm/resources/ledger.py, tests/conftest.py, tests/test_ledger.py, test_db_schema.py, test_accept_m1_ledger_concurrency.py, pyproject/uv.lock, cli.py, settings.py. Run `powershell -File scripts/check.ps1`; finish/fix per briefs/M1a-db-ledger.md; then commit.
+2. `D:\Harness Farm\wt-c1` (branch c1-console): C1 Console partial (Gemini stripped starter, Sonnet finisher possibly cut off). Check `pnpm check` + `pnpm test:e2e` in console/; finish per briefs/C1-console-core.md; then merge; wrap console/sql/views.sql into Alembic 0003.
+3. `D:\Harness Farm\wt-m3e` (branch m3e-ai-pool): M3e phase A (Gemini) FINISHED but UNREVIEWED — read D:/dev-cache/runs/M3e-ai-pool/agy.json reply, run its tests, review, merge (keep M1b's farm/executors/base.py on conflict).
+4. M2c (Sonnet, worktree under .claude/worktrees/agent-*): possibly partial — inspect `git worktree list`, run checks, finish or relaunch from briefs/M2c-adapters-llm.md.
+5. Then: M1c (Sonnet) → M1 milestone gate (adversarial review workflow + real e2e) → M2a/M2b → M3a/M3b/M3c/M3e-B → M4 → M5 → C2/C3.
+Services: Bifrost via scripts/start-bifrost.ps1 (127.0.0.1:8080); keep-awake helper until ~19:00; agy on owner's Gemini Pro account (works); Hermes profiles farm-builder (Bifrost), farm-builder-bedrock (AWS, cap $20).
 
 ## Phase 0 findings (2026-10-04, PC: Windows 11, 15.3 GB RAM)
 - Repo cloned from bundle to `C:\Users\Amaan\Harness Farm\Tensor`. Push as GitHub user `Mr-amaanx` → 403 (no write access to milvow-ai/Tensor).
