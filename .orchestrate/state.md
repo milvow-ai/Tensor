@@ -1,7 +1,7 @@
 # Orchestrate state
 
 ## Current state
-Effort: Harness Farm + Farm Console. Phase: **1 — building (paused 2026-10-04 ~07:00: Claude Pro usage limit reached)**.
+Effort: Harness Farm + Farm Console. Phase: **1 — building**. 2026-10-04 ~07:00 paused (Claude usage limit) → resumed; later the PC shut down (all builders killed) → resumed 07:52 with partial work intact; keep-awake now via the app (session_idle).
 Done + merged: Phase 0; briefs for M1a–M5, C1 (briefs/); CONTEXT.md (§0 quality bar); **M1b merged 932d7eb**.
 **RESUME HERE (next session):**
 1. Main tree `D:\Harness Farm\Tensor` has UNCOMMITTED M1a work (Gemini partial + Sonnet finisher, may be cut off): farm/db/**, farm/resources/ledger.py, tests/conftest.py, tests/test_ledger.py, test_db_schema.py, test_accept_m1_ledger_concurrency.py, pyproject/uv.lock, cli.py, settings.py. Run `powershell -File scripts/check.ps1`; finish/fix per briefs/M1a-db-ledger.md; then commit.
