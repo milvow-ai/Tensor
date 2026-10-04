@@ -3,9 +3,7 @@
   "id": "c_contract_added",
   "auth_ref": "env:CONTRACT_KEY_NEW",
   "label": "Contract Test Account",
-  "scope": [
-    "internal"
-  ],
+  "scope": ["internal"],
   "priority": 75,
   "concurrency": 2,
   "status": "active",

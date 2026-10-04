@@ -6,21 +6,41 @@ import { type ConnectionSpecPayload, commandPayloadSchemas, isSupportedCommand }
 import { groupConnectionRows } from "../group";
 import type {
   AlertRow,
+  BillingOverview,
+  BudgetRow,
   CommandKind,
   Connection,
   ConnectionQuery,
   ConnectionSortKey,
+  CostPerResultRow,
   FarmCommand,
   FarmData,
   FarmOverview,
+  IdlePaidRow,
   JsonObject,
   Page,
   PoolDetail,
   PoolOverviewRow,
   ProviderKind,
+  RenewalRow,
+  RunDetailRow,
+  RunQuery,
   RunRow,
+  SpendDailyRow,
 } from "../types";
-import { capabilityCapacityRows, connectionStatusRows, poolOverviewRows, recentRunRows, spendMonthRows } from "./views";
+import {
+  budgetRows,
+  capabilityCapacityRows,
+  connectionStatusRows,
+  costPerResultRows,
+  idlePaidRows,
+  poolOverviewRows,
+  recentRunRows,
+  renewalRows,
+  runDetail,
+  spendDailyRows,
+  spendMonthRows,
+} from "./views";
 import { buildWorld, nextMonthlyReset, type World, type WorldConnection, type WorldUnit } from "./world";
 
 const QUEUE_RUNNING_MS = 500;
@@ -161,6 +181,22 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
       alert.acked_at ??= new Date(now).toISOString();
       return { ok: true };
     }
+    case "set_budget": {
+      const { scope, monthly_usd, ref, hard_stop } = commandPayloadSchemas.set_budget.parse(rawPayload);
+      if (scope === "global") {
+        w.globalBudgetUsd = monthly_usd;
+        w.globalBudgetHardStop = hard_stop ?? true;
+        return { ok: true, scope, monthly_usd, hard_stop: w.globalBudgetHardStop };
+      }
+      if (scope === "provider") {
+        if (!ref) throw new Rejection("Provider ref required for provider budget.");
+        w.providerBudgets[ref] = monthly_usd;
+        w.providerBudgetHardStops ??= {};
+        w.providerBudgetHardStops[ref] = hard_stop ?? true;
+        return { ok: true, scope, ref, monthly_usd, hard_stop: w.providerBudgetHardStops[ref] };
+      }
+      return { ok: true, scope, ref, monthly_usd, hard_stop: hard_stop ?? true };
+    }
     default:
       throw new Rejection(`Command "${kind}" is not handled by this Console version.`);
   }
@@ -283,5 +319,80 @@ export class FixturesFarmData implements FarmData {
     }, QUEUE_DONE_MS);
 
     return { ...command };
+  }
+
+  async getBillingOverview(dailyDays = 90): Promise<BillingOverview> {
+    const w = world();
+    const now = Date.now();
+    const renewals = renewalRows(w, 45, now);
+    const idlePaid = idlePaidRows(w, now);
+    const paidAccounts = w.connections.filter((c) => (c.plan.price_usd ?? 0) > 0 && c.status !== "disabled");
+
+    return {
+      spendMonth: spendMonthRows(w, now),
+      spendDaily: spendDailyRows(w, dailyDays, now),
+      budgets: budgetRows(w, now),
+      renewals,
+      costPerResult: costPerResultRows(w, now),
+      idlePaid,
+      paidAccountsCount: paidAccounts.length,
+      idlePaidCount: idlePaid.length,
+    };
+  }
+
+  async listSpendDaily(days = 90): Promise<SpendDailyRow[]> {
+    return spendDailyRows(world(), days);
+  }
+
+  async listBudgets(): Promise<BudgetRow[]> {
+    return budgetRows(world());
+  }
+
+  async listRenewals(days = 45): Promise<RenewalRow[]> {
+    return renewalRows(world(), days);
+  }
+
+  async listCostPerResult(): Promise<CostPerResultRow[]> {
+    return costPerResultRows(world());
+  }
+
+  async listIdlePaid(): Promise<IdlePaidRow[]> {
+    return idlePaidRows(world());
+  }
+
+  async listRuns(query: RunQuery = {}): Promise<Page<RunRow>> {
+    const { page = 1, pageSize = 20, capability, status, failuresOnly, caller, from, to } = query;
+    let all = recentRunRows(world());
+
+    if (capability) {
+      all = all.filter((r) => r.capability === capability);
+    }
+    if (status) {
+      all = all.filter((r) => r.status === status);
+    }
+    if (failuresOnly) {
+      all = all.filter((r) => r.status === "failed" || r.status === "blocked");
+    }
+    if (caller) {
+      all = all.filter((r) => r.caller === caller);
+    }
+    if (from) {
+      all = all.filter((r) => r.started_at >= from);
+    }
+    if (to) {
+      all = all.filter((r) => r.started_at <= to);
+    }
+
+    const start = (page - 1) * pageSize;
+    return {
+      items: all.slice(start, start + pageSize),
+      total: all.length,
+      page,
+      pageSize,
+    };
+  }
+
+  async getRunDetail(id: string): Promise<RunDetailRow | null> {
+    return runDetail(world(), id);
   }
 }

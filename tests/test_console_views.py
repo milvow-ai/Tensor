@@ -305,8 +305,8 @@ def test_console_views_migration_downgrade_and_upgrade(scratch_db: Any) -> None:
     url = scratch_db()
     cfg = alembic_config(url)
 
-    # 1. Upgrade to head
-    command.upgrade(cfg, "head")
+    # 1. Upgrade to 0003 (later migrations add more views)
+    command.upgrade(cfg, "0003")
     with psycopg.connect(url) as conn:
         row = conn.execute(
             "select count(*) from pg_views where schemaname = 'public' and viewname like 'v_%'"
@@ -321,10 +321,31 @@ def test_console_views_migration_downgrade_and_upgrade(scratch_db: Any) -> None:
         ).fetchone()
         assert row is not None and row[0] == 0
 
-    # 3. Upgrade back to head
-    command.upgrade(cfg, "head")
+    # 3. Upgrade back to 0003
+    command.upgrade(cfg, "0003")
     with psycopg.connect(url) as conn:
         row = conn.execute(
             "select count(*) from pg_views where schemaname = 'public' and viewname like 'v_%'"
         ).fetchone()
         assert row is not None and row[0] == 5
+
+
+def test_c2_views_migration_downgrade_and_upgrade(scratch_db: Any) -> None:
+    """0006_c2_views adds the five Billing/Runs views on top of 0003's five and drops only its own on downgrade."""
+    url = scratch_db()
+    cfg = alembic_config(url)
+    c2_views = {"v_spend_daily", "v_cost_per_result", "v_renewals", "v_idle_paid", "v_run_detail"}
+
+    def views() -> set[str]:
+        with psycopg.connect(url) as conn:
+            rows = conn.execute("select viewname from pg_views where schemaname = 'public'").fetchall()
+        return {r[0] for r in rows if r[0].startswith("v_")}
+
+    command.upgrade(cfg, "head")
+    assert c2_views <= views() and len(views()) == 10
+
+    command.downgrade(cfg, "0005")
+    assert not (c2_views & views()) and len(views()) == 5
+
+    command.upgrade(cfg, "head")
+    assert c2_views <= views() and len(views()) == 10

@@ -1,27 +1,81 @@
-import { CreditCard } from "lucide-react";
 import type { Metadata } from "next";
 
-import { ComingSoon } from "@/components/farm/coming-soon";
+import { CommandsProvider } from "@/components/farm/commands-provider";
+import { PageHeader } from "@/components/farm/page-header";
+import { ErrorState } from "@/components/farm/states";
+import { attempt } from "@/lib/farm/data";
+
+import { BillingKpiRow } from "./_components/billing-kpi-row";
+import { BudgetsTable } from "./_components/budgets-table";
+import { CostPerResultTable } from "./_components/cost-per-result-table";
+import { IdlePaidCard } from "./_components/idle-paid-card";
+import { RenewalCalendar } from "./_components/renewal-calendar";
+import { SpendChartCard } from "./_components/spend-chart-card";
 
 export const metadata: Metadata = { title: "Billing" };
 
-export default function BillingPage() {
+export default async function BillingPage() {
+  const result = await attempt(async (data) => {
+    const [overview, pools] = await Promise.all([data.getBillingOverview(90), data.listPools()]);
+    return { overview, pools };
+  });
+
+  if (!result.ok) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          title="Billing"
+          description="Budgets, spend, projected month-end totals, renewals calendar, and idle accounts."
+        />
+        <ErrorState message={result.message} />
+      </div>
+    );
+  }
+
+  const { overview, pools } = result.data;
+  const totalSpendRow = overview.spendMonth.find((r) => r.provider_id === "total") ?? {
+    provider_id: "total",
+    provider_name: "Total",
+    kind: "all",
+    usage_usd: 0,
+    billing_usd: 0,
+    spend_usd: 0,
+    budget_usd: null,
+    forecast_usd: 0,
+    elapsed_days: 1,
+    days_in_month: 30,
+  };
+
   return (
-    <ComingSoon
-      title="Billing"
-      description="Budgets, spend, forecast and renewals across all accounts."
-      milestone="C2"
-      icon={CreditCard}
-      will={[
-        "See month-to-date spend per provider against its budget, with the month-end forecast.",
-        "Watch a renewal calendar: which plan renews when, at what usage, keep or cancel.",
-        "Compare cost per result per account and spot paid accounts that sit idle.",
-      ]}
-      today={{
-        text: "Spend against the global budget and its forecast are on Overview. Plan price and billing day are in every account row.",
-        href: "/pools/tools",
-        label: "Open Tools & Pools",
-      }}
-    />
+    <CommandsProvider>
+      <div className="flex flex-col gap-4 md:gap-5">
+        <PageHeader
+          title="Billing"
+          description="Budgets, spend, projected month-end totals, renewals calendar, and idle accounts."
+        />
+
+        {/* KPI Row */}
+        <BillingKpiRow
+          totalSpendRow={totalSpendRow}
+          paidAccountsCount={overview.paidAccountsCount}
+          idlePaidCount={overview.idlePaidCount}
+        />
+
+        {/* Spend Over Time Stacked Area Chart */}
+        <SpendChartCard rows={overview.spendDaily} />
+
+        {/* Budgets & Hard Stops + Idle Paid Accounts */}
+        <div className="grid gap-4 md:gap-5 xl:grid-cols-2">
+          <BudgetsTable budgets={overview.budgets} pools={pools} />
+          <IdlePaidCard rows={overview.idlePaid} />
+        </div>
+
+        {/* Renewal Calendar */}
+        <RenewalCalendar renewals={overview.renewals} />
+
+        {/* Cost Per Result */}
+        <CostPerResultTable rows={overview.costPerResult} />
+      </div>
+    </CommandsProvider>
   );
 }

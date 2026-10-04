@@ -103,7 +103,9 @@ export interface World {
   alerts: AlertRow[];
   commands: FarmCommand[];
   providerBudgets: Record<string, number | undefined>;
+  providerBudgetHardStops: Record<string, boolean>;
   globalBudgetUsd: number;
+  globalBudgetHardStop: boolean;
   spend: Record<string, WorldSpend | undefined>;
 }
 
@@ -348,7 +350,7 @@ function connectionSeeds(now: number): ConnSeed[] {
       concurrency: 2,
       ratePerMin: 60,
       plan: { name: "Launch", price: 185, day: 7 },
-      units: clayUnits(940, 0, 5_100, 7),
+      units: clayUnits(300, 0, 1_000, 7),
       success: 1304,
       failure: 4,
       p50: 1410,
@@ -433,7 +435,7 @@ function connectionSeeds(now: number): ConnSeed[] {
       status: "needs_login",
       concurrency: 2,
       ratePerMin: 60,
-      plan: { name: "Launch", price: 185, day: 27 },
+      plan: { name: "Clay Pro", price: 185, day: 27 },
       units: clayUnits(0, 0, 0, 27),
       success: 0,
       failure: 3,
@@ -820,6 +822,30 @@ function buildRuns(connections: WorldConnection[], providers: WorldProvider[], n
       continue;
     }
 
+    if (i === 1) {
+      runs.push({
+        id: "00000000-0000-0000-0000-000000000002",
+        capability: "enrich_company",
+        request_id: "5d2a2002-9c3b-41e8-8d6e-200000000002",
+        caller: "claude",
+        started_at: iso(startedAt),
+        strategy: "failover",
+        status: "succeeded",
+        cost_usd: 0.12,
+        cached: false,
+        connection_id: "clay-02",
+        connection_label: "Clay Launch 02",
+        provider_id: "clay",
+        provider_name: "Clay",
+        error_kind: null,
+        error: null,
+        finished_at: iso(startedAt + 1200),
+        duration_ms: 1200,
+        attempts_count: 2,
+      });
+      continue;
+    }
+
     if (roll < 0.1) {
       // cache hit
       runs.push({
@@ -971,7 +997,9 @@ export function buildWorld(now: number = Date.now()): World {
     alerts: [],
     commands: [],
     providerBudgets,
-    globalBudgetUsd: 2000,
+    providerBudgetHardStops: Object.fromEntries(Object.keys(providerBudgets).map((k) => [k, true])),
+    globalBudgetUsd: 7000,
+    globalBudgetHardStop: true,
     spend,
   };
   world.alerts = buildAlerts(world, now);
