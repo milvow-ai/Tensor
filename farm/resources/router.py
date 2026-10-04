@@ -53,6 +53,7 @@ from uuid import UUID
 
 import psycopg
 import structlog
+import tenacity
 from pydantic import BaseModel, ValidationError
 
 from farm.capabilities.policy import falls_back_on_empty
@@ -61,7 +62,15 @@ from farm.context import FarmContext
 from farm.db.pool import DbPool
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult, Executor
 from farm.resources import flight, health, ledger
-from farm.resources.strategies import ResolvedStrategy, order_candidates, resolve_strategy
+from farm.resources.gate import GateSaturated, get_gate
+from farm.resources.ranking import rank_candidates
+from farm.resources.strategies import (
+    UNIMPLEMENTED_M3,
+    ResolvedStrategy,
+    get_and_advance_rr_cursor,
+    order_candidates,
+    resolve_strategy,
+)
 from farm.resources.trajectory import Trajectory
 from farm.secrets import redact
 
@@ -118,6 +127,11 @@ HINTS: dict[str, str] = {
     ),
     INTERNAL: (
         "The Farm hit an unexpected error; the run trajectory (get_run) and the Farm log have the details."
+    ),
+    "session_unknown": ("The session ID was not found in active sessions; start a new conversation."),
+    "session_account_unavailable": (
+        "The account that owns this session is unavailable or exhausted; "
+        "wait for reset or start a new session."
     ),
 }
 
@@ -197,6 +211,7 @@ class UnitConfig:
     charged_on: str
     unit_cost_usd: Decimal
     estimate: Decimal
+    next_reset_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -215,6 +230,10 @@ class Candidate:
     circuit: str
     cooldown_until: datetime | None
     units: tuple[UnitConfig, ...]
+    success_count: int = 0
+    failure_count: int = 0
+    open_seconds: int | None = None
+    remaining_fraction: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -251,14 +270,16 @@ async def _load_candidates(pool: DbPool, provider_id: str) -> list[Candidate]:
     async with pool.connection() as conn:
         cur = await conn.execute(
             "select cn.id, cn.provider_id, cn.auth_ref, cn.scope, cn.priority, cn.status, cn.meta, "
-            "cn.concurrency, cn.rate_per_min, coalesce(h.circuit, 'closed'), h.cooldown_until "
+            "cn.concurrency, cn.rate_per_min, coalesce(h.circuit, 'closed'), h.cooldown_until, "
+            "coalesce(h.success_count, 0), coalesce(h.failure_count, 0), h.open_seconds "
             "from public.connections cn left join public.connection_health h on h.connection_id = cn.id "
             "where cn.provider_id = %s order by cn.priority, cn.id",
             (provider_id,),
         )
         connections = await cur.fetchall()
         cur = await conn.execute(
-            "select connection_id, unit, limit_value, period, charged_on, unit_cost_usd, estimate_per_call "
+            "select connection_id, unit, limit_value, period, charged_on, unit_cost_usd, "
+            "estimate_per_call, next_reset_at "
             "from public.consumption_units where connection_id = any(%s) order by connection_id, unit",
             ([c[0] for c in connections],),
         )
@@ -274,12 +295,15 @@ async def _load_candidates(pool: DbPool, provider_id: str) -> list[Candidate]:
             scope=tuple(c[3]),
             priority=c[4],
             status=c[5],
-            meta=c[6],
+            meta=c[6] or {},
             concurrency=c[7],
             rate_per_min=c[8],
             circuit=c[9],
             cooldown_until=c[10],
             units=tuple(units.get(c[0], ())),
+            success_count=c[11],
+            failure_count=c[12],
+            open_seconds=c[13],
         )
         for c in connections
     ]
@@ -358,7 +382,18 @@ def _timeout_for(candidate: Candidate, pool: ProviderPool, default_s: float) -> 
         value = source.get("timeout_s")
         if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
             return float(value)
+    if pool.executor == "llm":
+        return 90.0
+    if pool.executor == "cli_agent":
+        return 900.0
     return default_s
+
+
+def _is_read_capability(capability: str) -> bool:
+    return capability.startswith(("find_", "lookup_", "get_", "search_", "enrich_")) or capability in (
+        "jobs_lookup",
+        "pagespeed",
+    )
 
 
 def _log_crash(event: str, exc: BaseException, **fields: Any) -> None:
@@ -442,6 +477,7 @@ class _Call:
     pin: str | None
     scope: str
     models: Models | None
+    session_pinned: bool = False
 
 
 @dataclass(frozen=True)
@@ -530,6 +566,11 @@ class _Chain:
     async def run(self) -> _Settled:
         call = self.call
         routes = await _load_routes(self.ctx.pool, call.capability)
+        if call.params.get("ai") and call.params["ai"] != "any":
+            target_ai = str(call.params["ai"]).lower()
+            routes = [p for p in routes if p.id.lower() == target_ai]
+            if not routes:
+                return await self._reject(f"no provider route for ai '{call.params['ai']}'")
         if call.pin is not None:
             restricted = await self._restrict_to_pin(routes, call.pin)
             if isinstance(restricted, _Settled):
@@ -586,24 +627,102 @@ class _Chain:
             await self._skip(provider_pool, None, "no_connections")
             return None
         now = ctx.clock()
+        await health.reactivate_due(ctx.pool, now)
+
+        requested_model = call.params.get("model")
         eligible: list[Candidate] = []
         for candidate in candidates:
+            if requested_model:
+                models_meta = candidate.meta.get("models")
+                if isinstance(models_meta, str):
+                    candidate_models = [models_meta]
+                elif isinstance(models_meta, list):
+                    candidate_models = [str(m) for m in models_meta]
+                else:
+                    single_m = candidate.meta.get("model")
+                    candidate_models = [str(single_m)] if single_m else []
+                if not any(m.lower() == str(requested_model).lower() for m in candidate_models):
+                    await self._skip(
+                        provider_pool, candidate, "model_not_offered", requested_model=str(requested_model)
+                    )
+                    continue
+
             reason = skip_reason(candidate, call.scope, now)
             if reason is not None:
                 await self._skip(provider_pool, candidate, reason, cooldown_until=candidate.cooldown_until)
             else:
                 eligible.append(candidate)
 
+        if not eligible:
+            return None
+
+        # 5. Ranking: score candidates inside pool before strategy orders them
+        ranking_result = rank_candidates(eligible)
+        ranked = ranking_result.candidates
+        ranking_reasons = ranking_result.reasons
+
+        # 6. Strategies: failover, most_remaining, round_robin, pin
         resolved = resolve_strategy(
             requested=call.strategy,
             pin=call.pin,
             capability=call.cap.default_strategy,
             provider=provider_pool.default_strategy,
         )
-        for candidate in order_candidates(eligible, resolved.name, call.pin):
-            settled = await self._try_connection(provider_pool, candidate, executor, resolved, budgets)
-            if settled is not None:
-                return settled
+
+        if resolved.name == "round_robin":
+            if len(ranked) <= 1:
+                resolved = ResolvedStrategy(
+                    "failover",
+                    "strategy 'round_robin' cannot be honoured with 1 connection; using failover",
+                )
+                ordered = order_candidates(ranked, "failover")
+            else:
+                cursor = await get_and_advance_rr_cursor(ctx.pool, provider_pool.id, len(ranked))
+                ordered = order_candidates(ranked, "round_robin", cursor=cursor)
+        elif resolved.name == "most_remaining":
+            ordered = order_candidates(ranked, "most_remaining")
+        elif resolved.name == "pin":
+            ordered = order_candidates(ranked, "pin", pin=call.pin)
+        else:
+            ordered = order_candidates(ranked, "failover")
+
+        # Bulkheads: a connection that is busy right now (concurrency or rate limit full) moves to the back so
+        # it never delays a free one, and the run history says why instead of reordering silently.
+        free_candidates: list[Candidate] = []
+        busy_candidates: list[Candidate] = []
+        for c in ordered:
+            gate_now = get_gate(c.id, c.concurrency, c.rate_per_min)
+            (free_candidates if gate_now.is_available() else busy_candidates).append(c)
+        for c in busy_candidates:
+            await self._skip(provider_pool, c, "saturated", deferred=True)
+        candidate_order = free_candidates + busy_candidates
+
+        for candidate in candidate_order:
+            # 1. Half-open circuit probe check: exactly one probe request allowed
+            if candidate.circuit == "open":
+                claimed = await health.claim_probe(ctx.pool, candidate.id, now)
+                if not claimed:
+                    await self._skip(provider_pool, candidate, "circuit_open")
+                    continue
+
+            # 4. Bulkhead gate per connection: Semaphore(concurrency) + AsyncLimiter(rate_per_min)
+            gate = get_gate(candidate.id, candidate.concurrency, candidate.rate_per_min)
+            max_wait_s = float(candidate.meta.get("max_queue_wait_s", 2.0))
+            try:
+                async with gate.acquire(max_wait_s=max_wait_s):
+                    settled = await self._try_connection(
+                        provider_pool,
+                        candidate,
+                        executor,
+                        resolved,
+                        budgets,
+                        ranking_reason=ranking_reasons.get(candidate.id),
+                    )
+                    if settled is not None:
+                        return settled
+            except GateSaturated:
+                await self._skip(provider_pool, candidate, "saturated")
+                continue
         return None
 
     async def _skip(
@@ -628,6 +747,7 @@ class _Chain:
         executor: Executor,
         resolved: ResolvedStrategy,
         budgets: Budgets,
+        ranking_reason: str | None = None,
     ) -> _Settled | None:
         ctx, call, traj = self.ctx, self.call, self.traj
         if self.failed_from is not None:
@@ -658,6 +778,7 @@ class _Chain:
             strategy=resolved.name,
             strategy_note=resolved.note,
             priority=candidate.priority,
+            ranking_reason=ranking_reason,
         )
         held = await self._reserve(provider_pool, candidate)
         if held is None:
@@ -680,8 +801,39 @@ class _Chain:
         )
         await traj.event("execute", candidate.id, provider=provider_pool.id, timeout_s=timeout_s)
         self.last_provider, self.last_connection = provider_pool.id, candidate.id
+
+        is_idempotent = getattr(call.cap, "idempotent", None)
+        if is_idempotent is None:
+            if "idempotent" in candidate.meta:
+                is_idempotent = bool(candidate.meta["idempotent"])
+            else:
+                is_idempotent = _is_read_capability(call.capability)
+        base_retry_s = float(candidate.meta.get("retry_base_s", 0.5))
+        cap_retry_s = float(candidate.meta.get("retry_cap_s", 4.0))
+
+        async def _call_exec() -> ExecResult:
+            return await self._execute(executor, request, timeout_s)
+
+        result: ExecResult
         try:
-            result = await self._execute(executor, request, timeout_s)
+            if is_idempotent:
+
+                def _retry_fallback(state: tenacity.RetryCallState) -> ExecResult:
+                    if state.outcome is not None:
+                        return state.outcome.result()  # type: ignore[no-any-return]
+                    return _failed(ErrorKind.UNKNOWN, "retry exhausted without outcome")
+
+                retrying = tenacity.AsyncRetrying(
+                    stop=tenacity.stop_after_attempt(2),
+                    wait=tenacity.wait_random_exponential(multiplier=base_retry_s, max=cap_retry_s),
+                    retry=tenacity.retry_if_result(
+                        lambda r: not r.ok and r.error_kind in (ErrorKind.SERVER, ErrorKind.TIMEOUT)
+                    ),
+                    retry_error_callback=_retry_fallback,
+                )
+                result = await retrying(_call_exec)
+            else:
+                result = await _call_exec()
         except BaseException:
             # Cancelled (deadline, shutdown): the provider may or may not have been reached, so settle like a
             # failed attempt before letting the cancellation go.
@@ -699,6 +851,14 @@ class _Chain:
         if result.ok:
             return await self._answered(provider_pool, candidate, result)
         await self._on_failure(provider_pool, candidate, result)
+        if call.session_pinned:
+            error = _error(
+                (result.error_kind or ErrorKind.UNKNOWN).value,
+                result.error or "session account execution failed",
+                self.attempts,
+                retry_after_s=result.retry_after_s,
+            )
+            return self.settled_failure(error)
         return None
 
     async def _answered(
@@ -720,6 +880,9 @@ class _Chain:
             empty=empty,
             units_used=result.units_used,
             cost_usd=self.cost_usd,
+            account=candidate.id,
+            model=result.data.get("model") if result.data else call.params.get("model"),
+            session_id=result.data.get("session_id") if result.data else None,
         )
         settled = _Settled(
             ok=True,
@@ -731,6 +894,26 @@ class _Chain:
             cost_usd=self.cost_usd,
             units=dict(self.units),
         )
+        if settled.ok and result.data and result.data.get("session_id"):
+            sess_id = str(result.data["session_id"])
+            ai_name = str(result.data.get("ai") or provider_pool.id)
+            model_name = result.data.get("model") or call.params.get("model")
+            async with ctx.pool.connection() as conn:
+                await conn.execute(
+                    """
+                    insert into public.ai_sessions (
+                      session_id, connection_id, ai, model, created_at, last_used_at
+                    )
+                    values (%s, %s, %s, %s, now(), now())
+                    on conflict (session_id) do update set
+                      connection_id = excluded.connection_id,
+                      ai = excluded.ai,
+                      model = coalesce(excluded.model, ai_sessions.model),
+                      last_used_at = now()
+
+                    """,
+                    (sess_id, candidate.id, ai_name, model_name),
+                )
         if empty and falls_back_on_empty(call.capability):
             self.empty_answer = settled
             self.failed_from, self.fallback_reason = candidate.id, "empty"
@@ -760,9 +943,32 @@ class _Chain:
                 now=ctx.clock(),
                 retry_after_s=result.retry_after_s,
                 reset_at=result.reset_at,
+                jitter=True,
             ),
             "health.failure",
         )
+        if kind in (ErrorKind.AUTH, ErrorKind.NEEDS_LOGIN):
+            login_cmd = f"farm ai login {candidate.id}"
+            alert_msg = f"Account {candidate.id} authentication failed. Run: {login_cmd}"
+            from farm.manager.alerts import create_alert
+
+            await _best_effort(
+                create_alert(
+                    ctx.pool,
+                    kind="needs_login",
+                    severity="critical",
+                    message=alert_msg,
+                    ref=f"login:{candidate.id}",
+                    notify_telegram=False,
+                ),
+                "alert.needs_login",
+            )
+        if kind is ErrorKind.LIMIT_REACHED and result.reset_at is not None:
+            async with ctx.pool.connection() as conn:
+                await conn.execute(
+                    "update public.consumption_units set next_reset_at = %s where connection_id = %s",
+                    (result.reset_at, candidate.id),
+                )
         await self.traj.event(
             "failure",
             candidate.id,
@@ -774,6 +980,7 @@ class _Chain:
         )
         self.last_failure = result
         self.failed_from, self.fallback_reason = candidate.id, kind.value
+
         self.attempts.append(
             AttemptSummary(
                 provider=provider_pool.id,
@@ -788,19 +995,34 @@ class _Chain:
         """Reserve every unit with an estimate, all or nothing. ``None`` = skipped (``reserve_failed``)."""
         ttl_s = int(_timeout_for(candidate, provider_pool, self.ctx.default_timeout_s) + RESERVATION_MARGIN_S)
         held: list[_Held] = []
+
+        units_map = None
+        if isinstance(candidate.meta, Mapping):
+            by_cap = candidate.meta.get("units_by_capability")
+            if isinstance(by_cap, Mapping) and self.call.capability in by_cap:
+                units_map = by_cap[self.call.capability]
+
         try:
             for unit in candidate.units:
-                if unit.estimate <= 0:
+                if units_map is not None:
+                    if unit.unit not in units_map:
+                        continue
+                    amount = Decimal(str(units_map[unit.unit]))
+                else:
+                    amount = unit.estimate
+
+                if amount <= 0:
                     continue
+
                 reservation = await ledger.reserve(
-                    self.ctx.pool, candidate.id, unit.unit, unit.estimate, self.request_id, ttl_s
+                    self.ctx.pool, candidate.id, unit.unit, amount, self.request_id, ttl_s
                 )
                 if reservation is None:
                     await self.traj.event(
                         "reserve_failed",
                         candidate.id,
                         unit=unit.unit,
-                        amount=unit.estimate,
+                        amount=amount,
                         reason="the unit's remaining quota is below the estimate",
                     )
                     self.attempts.append(
@@ -818,7 +1040,7 @@ class _Chain:
                     return None
                 held.append(_Held(unit, reservation))
                 await self.traj.event(
-                    "reserve", candidate.id, unit=unit.unit, amount=unit.estimate, reservation_id=reservation
+                    "reserve", candidate.id, unit=unit.unit, amount=amount, reservation_id=reservation
                 )
         except BaseException:
             await asyncio.shield(self._release(candidate, held, "interrupted while reserving"))
@@ -833,13 +1055,10 @@ class _Chain:
 
     async def _execute(self, executor: Executor, request: ExecRequest, timeout_s: float) -> ExecResult:
         started = time.monotonic()
-        limit = asyncio.timeout(timeout_s + TIMEOUT_GRACE_S)
         try:
-            async with limit:
+            async with asyncio.timeout(timeout_s):
                 result = await executor.execute(request)
         except TimeoutError:
-            if not limit.expired():
-                raise
             return _failed(
                 ErrorKind.TIMEOUT,
                 f"no answer within {timeout_s:g}s (the router cut the call off)",
@@ -863,14 +1082,16 @@ class _Chain:
         """Commit or release every reservation of one finished attempt; write usage events."""
         spent = _Spent()
         pool = self.ctx.pool
+        any_committed = False
         for h in held:
             actual, reason = charge_for(h.unit, result)
             if actual > 0:
                 cost = actual * h.unit.unit_cost_usd
                 if await _best_effort(ledger.commit(pool, h.reservation_id, actual), "ledger.commit"):
-                    await _best_effort(self._usage_event(candidate, h.unit, actual, cost), "usage_event")
+                    await _best_effort(self._usage_event(candidate, h.unit.unit, actual, cost), "usage_event")
                 spent.cost += cost
                 spent.units[h.unit.unit] = spent.units.get(h.unit.unit, Decimal(0)) + actual
+                any_committed = True
                 await self.traj.event(
                     "commit",
                     candidate.id,
@@ -883,22 +1104,36 @@ class _Chain:
             else:
                 await _best_effort(ledger.release(pool, h.reservation_id), "ledger.release")
                 await self.traj.event("release", candidate.id, unit=h.unit.unit, reason=reason)
+
+        if not any_committed and result.cost_usd > 0:
+            await _best_effort(
+                self._usage_event(candidate, "usd", result.cost_usd, result.cost_usd), "usage_event"
+            )
+
         held.clear()
         return spent
 
-    async def _usage_event(
-        self, candidate: Candidate, unit: UnitConfig, actual: Decimal, cost: Decimal
-    ) -> None:
+    async def _usage_event(self, candidate: Candidate, unit: str, actual: Decimal, cost: Decimal) -> None:
         async with self.ctx.pool.connection() as conn:
             await conn.execute(
                 "insert into public.usage_events "
                 "(connection_id, unit, amount, kind, cost_usd, request_id, run_id, at) "
                 "values (%s, %s, %s, 'actual', %s, %s, %s, %s)",
-                (candidate.id, unit.unit, actual, cost, self.request_id, self.traj.run_id, self.ctx.clock()),
+                (candidate.id, unit, actual, cost, self.request_id, self.traj.run_id, self.ctx.clock()),
             )
 
     def _exhausted(self) -> _Settled:
         """No candidate produced a final answer."""
+        if self.call.session_pinned and self.last_failure is None:
+            sess_id_disp = self.call.params.get("session_id")
+            error = _error(
+                "session_account_unavailable",
+                f"session_account_unavailable: account '{self.call.pin}' for session '{sess_id_disp}' "
+                "is unavailable",
+                self.attempts,
+            )
+            return self.settled_failure(error)
+
         if self.last_failure is None and self.empty_answer is not None:
             # Every pool that could be asked said "nothing": that is the answer.
             return replace(self.empty_answer, cost_usd=self.cost_usd, units=dict(self.units))
@@ -941,6 +1176,8 @@ async def route(
     A bug (any unexpected exception) finalises the run as failed/``internal``, is logged with its traceback
     and also comes back as an ``ok = false`` envelope (kind ``internal``); only cancellation propagates.
     """
+    if strategy is not None and strategy in UNIMPLEMENTED_M3:
+        raise NotImplementedError(f"strategy {strategy!r} is not implemented yet; stays for M3")
     cap = await _load_capability(ctx.pool, capability)
     if cap is None:
         raise UnknownCapability(f"unknown capability '{capability}' (run `farm registry sync`)")
@@ -980,6 +1217,11 @@ async def _abort(traj: Trajectory, exc: BaseException, *, owner: bool = False) -
     )
 
 
+async def _reject_kind(traj: Trajectory, kind: str, message: str) -> RouteOutcome:
+    await traj.event("failure", error_kind=kind, error=message)
+    return await _finish(traj, _settled_error(_error(kind, message)))
+
+
 async def _route(
     ctx: FarmContext,
     cap: CapabilityInfo,
@@ -1005,6 +1247,43 @@ async def _route(
     except ValueError as exc:
         return await _reject(traj, str(exc))
 
+    session_pinned = False
+    session_id = normalised.get("session_id")
+    if session_id:
+        async with ctx.pool.connection() as conn:
+            cur = await conn.execute(
+                "select connection_id, ai, model from public.ai_sessions where session_id = %s",
+                (str(session_id),),
+            )
+            sess_row = await cur.fetchone()
+        if sess_row is None:
+            return await _reject_kind(
+                traj,
+                "session_unknown",
+                f"session_unknown: session '{session_id}' not found",
+            )
+        pinned_conn_id = str(sess_row[0])
+        prov_id = sess_row[1] or await _provider_of(ctx.pool, pinned_conn_id)
+        candidates = await _load_candidates(ctx.pool, prov_id) if prov_id else []
+        cand = next((c for c in candidates if c.id == pinned_conn_id), None)
+        if cand is None:
+            return await _reject_kind(
+                traj,
+                "session_account_unavailable",
+                f"session_account_unavailable: account '{pinned_conn_id}' for session '{session_id}' "
+                "not found",
+            )
+        reason = skip_reason(cand, scope, ctx.clock())
+        if reason is not None:
+            return await _reject_kind(
+                traj,
+                "session_account_unavailable",
+                f"session_account_unavailable: account '{pinned_conn_id}' for session '{session_id}' "
+                f"is unavailable ({reason})",
+            )
+        pin = pinned_conn_id
+        session_pinned = True
+
     call = _Call(
         capability=cap.name,
         cap=cap,
@@ -1015,6 +1294,7 @@ async def _route(
         pin=pin,
         scope=scope,
         models=models,
+        session_pinned=session_pinned,
     )
 
     if pin is not None:
@@ -1172,18 +1452,20 @@ async def _publish(
     if settled.ok and settled.data is not None and settled.provider and settled.connection_id:
         # An inconclusive or empty answer (found = False) is not worth keeping: the next call asks again.
         ttl = 0 if settled.found is False else call.cap.cache_ttl_seconds
+        stored_data = {} if ttl <= 0 else settled.data
         await flight.finish_success(
             ctx.pool,
             request_id,
             traj.run_id,
             flight.StoredResult(
-                data=settled.data,
+                data=stored_data,
                 provider=settled.provider,
                 connection_id=settled.connection_id,
                 found=settled.found,
             ),
             now + timedelta(seconds=ttl),
         )
+
     elif settled.error is not None:
         await flight.finish_failure(
             ctx.pool, request_id, traj.run_id, settled.error.model_dump(mode="json"), now

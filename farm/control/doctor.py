@@ -33,6 +33,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from farm.db.pool import DbPool, get_db_url
+from farm.executors.cli_agent.base import build_child_env
 from farm.secrets import redact
 from farm.settings import data_dir as get_data_dir
 
@@ -452,6 +453,7 @@ def check_ai_clis(clis: list[str] | None = None) -> CheckResult:
                 text=True,
                 timeout=5.0,
                 check=False,
+                env=build_child_env(),
             )
             out = (res.stdout.strip() or res.stderr.strip()).splitlines()
             if out:

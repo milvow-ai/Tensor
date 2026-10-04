@@ -38,8 +38,23 @@ class McpExecutor:
     def get_token_store_dir(self, connection: ConnectionView) -> Path:
         """Resolve and ensure the token store directory for a connection."""
         if connection.auth_ref.startswith("token-store:"):
-            return resolve_token_store(connection.auth_ref)
-        store_dir = self._data_dir / "tokens" / connection.id
+            store_dir = resolve_token_store(connection.auth_ref, data_dir=self._data_dir)
+        else:
+            store_dir = self._data_dir / "tokens" / connection.id
+
+        tokens_root = (self._data_dir / "tokens").resolve()
+        resolved_store = store_dir.resolve()
+        try:
+            resolved_store.relative_to(tokens_root)
+        except ValueError:
+            raise ValueError(
+                f"Path traversal detected: token store directory '{resolved_store}' "
+                f"escapes tokens root '{tokens_root}'"
+            ) from None
+        if resolved_store == tokens_root:
+            raise ValueError(
+                f"Token store directory cannot be the tokens root itself: '{resolved_store}'"
+            )
         return ensure_token_store_dir(store_dir)
 
     def _create_client(self, connection: ConnectionView) -> Client[Any]:

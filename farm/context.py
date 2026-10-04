@@ -21,6 +21,7 @@ from typing import Any, Protocol, runtime_checkable
 from farm.db.pool import DbPool, open_pool
 from farm.executors.api import ApiExecutor
 from farm.executors.base import Executor
+from farm.executors.cli_agent import CliAgentExecutor
 from farm.executors.llm import LlmExecutor
 
 
@@ -49,6 +50,8 @@ class FarmContext:
     owns_pool: bool = False
     flights: dict[str, asyncio.Task[Any]] = field(default_factory=dict)
     """In-process single-flight: request hash -> the running execution (see ``farm.resources.router``)."""
+    connection_semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict)
+    """In-process concurrency gates: connection_id -> semaphore."""
 
     async def aclose(self) -> None:
         """Wait for running executions, close executors that need it, and the pool if this context owns it."""
@@ -69,4 +72,13 @@ async def build_context(db_url: str | None = None) -> FarmContext:
     milestone that ships that executor.
     """
     pool = await open_pool(db_url)
-    return FarmContext(pool=pool, executors={"api": ApiExecutor(), "llm": LlmExecutor()}, owns_pool=True)
+    return FarmContext(
+        pool=pool,
+        executors={
+            "api": ApiExecutor(),
+            "llm": LlmExecutor(),
+            "cli_agent": CliAgentExecutor(),
+        },
+        owns_pool=True,
+    )
+

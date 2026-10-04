@@ -18,6 +18,7 @@ from collections import Counter
 from collections.abc import Iterator
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from typing import Annotated, Any, Literal, get_args
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -46,7 +47,7 @@ ConnectionStatus = Literal["active", "paused", "needs_login", "exhausted", "disa
 Period = Literal["minute", "hour", "day", "week", "month", "rolling_5h", "total", "none"]
 ChargedOn = Literal["attempt", "success", "found"]
 
-Slug = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9_-]*$", max_length=64)]
+Slug = Annotated[str, StringConstraints(pattern=r"^[a-z0-9][a-z0-9_-]{0,62}$", max_length=63)]
 Scope = Annotated[str, StringConstraints(pattern=r"^(internal|client:[A-Za-z0-9][A-Za-z0-9_.-]*)$")]
 
 _NUMBER_SCHEMA: dict[str, Any] = {"type": "number", "minimum": 0}
@@ -123,6 +124,27 @@ class ConnectionSpec(_Model):
     plan: PlanSpec | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
     units: dict[Slug, UnitSpec] = Field(default_factory=dict)
+
+    @field_validator("meta")
+    @classmethod
+    def _validate_meta(cls, meta: dict[str, Any]) -> dict[str, Any]:
+        if "allow_edit" in meta and not isinstance(meta["allow_edit"], bool):
+            raise ValueError("meta.allow_edit must be a strict boolean (True or False)")
+        if "edit_roots" in meta:
+            roots = meta["edit_roots"]
+            if isinstance(roots, (str, Path)):
+                raw_roots = [roots]
+            elif isinstance(roots, list):
+                raw_roots = roots
+            else:
+                raise ValueError("meta.edit_roots must be a list of paths")
+            for r in raw_roots:
+                r_str = str(r).strip()
+                if not r_str or r_str == ".":
+                    raise ValueError(f"edit_roots entry cannot be empty or '.': {r!r}")
+                if not Path(r_str).is_absolute():
+                    raise ValueError(f"edit_roots entry must be an absolute path: {r!r}")
+        return meta
 
     @model_validator(mode="after")
     def _default_label(self) -> ConnectionSpec:

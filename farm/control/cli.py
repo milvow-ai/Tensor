@@ -32,6 +32,10 @@ app.add_typer(registry_app, name="registry")
 commands_app = typer.Typer(help="Command contracts and schemas.")
 app.add_typer(commands_app, name="commands")
 
+ai_app = typer.Typer(help="AI pool: Claude, Codex, Gemini/Agy, Hermes accounts.")
+app.add_typer(ai_app, name="ai")
+
+
 ALEMBIC_INI = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
 DEFAULT_REGISTRY = Path(__file__).resolve().parent.parent.parent / "config" / "registry.yaml"
 
@@ -359,3 +363,159 @@ def commands_schema(
         print(f"Wrote command schemas to {out}")
     else:
         print(payload)
+
+
+def format_ai_list(data: dict[str, Any]) -> str:
+    rows: list[list[str]] = [["AI", "ACCOUNT", "STATUS", "MODELS", "RESET / COOLDOWN", "CALLS TODAY"]]
+    ais = data.get("ais", [])
+    if not ais:
+        return "no AI pools found: run `farm registry sync`"
+    for ai in ais:
+        ai_name = ai.get("id", "")
+        accounts = ai.get("accounts", [])
+        if not accounts:
+            rows.append([ai_name, "-", "-", "-", "-", "-"])
+            continue
+        first = True
+        for acc in accounts:
+            status = acc.get("status", "")
+            reset_time = acc.get("reset_at") or acc.get("cooldown_until")
+            reset_str = "-" if not reset_time else str(reset_time)[:16].replace("T", " ") + "Z"
+            if status == "exhausted" and reset_time:
+                status_str = f"exhausted [resets {reset_str}]"
+            elif acc.get("circuit") == "open":
+                status_str = f"circuit_open [{reset_str}]"
+            elif status == "needs_login":
+                status_str = "needs_login"
+            else:
+                status_str = status
+            models = ", ".join(acc.get("models", [])) or "-"
+            calls = str(acc.get("todays_calls", 0))
+            rows.append([
+                ai_name if first else "",
+                acc.get("id", ""),
+                status_str,
+                models,
+                reset_str,
+                calls,
+            ])
+            first = False
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    return "\n".join("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip() for row in rows)
+
+
+@ai_app.command(name="list")
+def ai_list(local: LocalOption = False) -> None:
+    """List all AI accounts with their status, models, reset times, and today's calls."""
+    from farm.gateway.server import list_ai_accounts
+
+    async def main() -> dict[str, Any]:
+        ctx = await _context(local)
+        try:
+            return await list_ai_accounts(ctx.pool, ctx.clock())
+        finally:
+            await ctx.aclose()
+
+    data = _run_farm(main())
+    typer.echo(format_ai_list(data))
+
+
+@ai_app.command(name="test")
+def ai_test(
+    connection: Annotated[str, typer.Argument(help="Connection ID to test, e.g. agy-01, hermes-01.")],
+    local: LocalOption = False,
+) -> None:
+    """Run a tiny test call on an AI connection."""
+    from farm.resources.router import route
+
+    async def main() -> bool:
+        ctx = await _context(local)
+        try:
+            outcome = await route(
+                ctx,
+                "ask_ai",
+                {"task": "Respond with only the word PONG", "mode": "answer"},
+                pin=connection,
+                caller="cli",
+            )
+        finally:
+            await ctx.aclose()
+
+        if outcome.ok and outcome.result:
+            text = str(outcome.result.get("text", "")).strip()
+            cost = outcome.cost.usd if outcome.cost else 0.0
+            typer.echo(f"OK: {connection} answered: {text} (cost: ${cost:.6f})")
+            return True
+        else:
+            err = outcome.error.message if outcome.error else "unknown error"
+            typer.echo(f"FAIL: {connection}: {err}", err=True)
+            return False
+
+    if not _run_farm(main()):
+        raise typer.Exit(code=1)
+
+
+@ai_app.command(name="login")
+def ai_login(
+    connection: Annotated[str, typer.Argument(help="Connection ID to log in, e.g. claude-02, codex-01.")],
+    local: LocalOption = False,
+) -> None:
+    """Print and run the exact interactive login for that account."""
+    import subprocess
+
+    from farm.settings import data_dir
+
+    async def get_conn_info() -> dict[str, Any]:
+        ctx = await _context(local)
+        try:
+            async with ctx.pool.connection() as conn:
+                cur = await conn.execute(
+                    "select c.id, c.provider_id, c.meta from public.connections c where c.id = %s",
+                    (connection,),
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    raise _fail(f"connection '{connection}' not found in database")
+                return {"id": row[0], "provider_id": row[1], "meta": row[2] or {}}
+        finally:
+            await ctx.aclose()
+
+    conn_info = _run_farm(get_conn_info())
+    meta = conn_info["meta"]
+    cli_name = str(meta.get("cli") or conn_info["provider_id"]).lower()
+
+    config_dir_str = meta.get("config_dir")
+    if not config_dir_str:
+        config_dir = data_dir() / "ai" / connection
+    else:
+        config_dir = Path(config_dir_str)
+    config_dir.mkdir(parents=True, exist_ok=True)
+
+    env = dict(os.environ)
+    if cli_name == "claude":
+        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+        typer.echo(f"Account: {connection} (Claude)")
+        typer.echo(f"Config directory: {config_dir}")
+        typer.echo(f"Command: CLAUDE_CONFIG_DIR={config_dir} claude")
+        typer.echo("Starting interactive Claude Code... type /login to complete authentication.")
+        subprocess.run(["claude"], env=env)
+    elif cli_name == "codex":
+        env["CODEX_HOME"] = str(config_dir)
+        typer.echo(f"Account: {connection} (Codex)")
+        typer.echo(f"Config directory: {config_dir}")
+        typer.echo(f"Command: CODEX_HOME={config_dir} codex login")
+        subprocess.run(["codex", "login"], env=env)
+    elif cli_name in ("agy", "gemini"):
+        typer.echo(f"Account: {connection} (Antigravity)")
+        typer.echo("Antigravity uses the global login on this machine.")
+        typer.echo("Command: agy")
+        subprocess.run(["agy"], env=env)
+    elif cli_name == "hermes":
+        profile = meta.get("profile", "farm-agent")
+        typer.echo(f"Account: {connection} (Hermes)")
+        typer.echo(f"Profile: {profile}")
+        typer.echo(f"Command: hermes -p {profile}")
+        subprocess.run(["hermes", "-p", str(profile)], env=env)
+    else:
+        typer.echo(f"Unknown CLI driver '{cli_name}' for connection {connection}")
+

@@ -1,5 +1,7 @@
 # HANDOFF — Harness Farm + Farm Console
 
+> **Scope update — owner, 2026-10-05 (overrides narrower wording below).** Harness Farm is a **general, independent product**: one MCP connection through which any AI (Claude Code, Codex, …) reaches **every MCP server and every AI CLI** the owner connects — not a GTM/email tool. (1) **Any MCP server is added by config, no code**, imported in bulk from Claude/Codex configs, and its tools reach the caller **exactly as the original server returns them**, with multi-account pools, quotas, budgets and run history on top (brief `OPEN1`). (2) **AI orchestration**: the main AI starts tasks on other AI accounts (several Claude accounts on different emails, Codex, Gemini, Hermes — CLI, as many as the owner logs in), checks them, reads exact results, and iterates with the same worker/session; failures say which worker and why (brief `AIP2`). Typed capabilities (`verify_email`, …) and the Tensor/GTM providers are one use case and stay an optional layer. The Console's Integrations and AI Pools screens are the main control surfaces.
+
 Written 2026-10-03 by the previous Claude session, for the next session working on this repo.
 
 **Read this whole file once. Then start with Phase 0. Do not start building before the user says "go".**
