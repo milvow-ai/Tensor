@@ -53,7 +53,7 @@ uns\C1-console-core |
 | M1c router+gateway | worker-build | sonnet | see briefs/M1c | Waiting for M1a+M1b | — |
 | M2c adapters+LLM | worker-build (worktree) | sonnet | adapters apollo/hunter/pagespeed/adzuna/ats_public, executors/llm.py, schemas, registry | Resumed after rate limit | agent reply |
 | M3e-A AI executors | agy (wt-m3e) | gemini-3.8-flash-high | farm/executors/cli_agent/* | **Merged fde1ce3** (32 tests; live agy+hermes OK $0.0003; Codex 0.160.0 installed) | — |
-| M3c-A MCP executor | agy (wt-m3c) | gemini-3.8-flash-high | farm/executors/mcp/*, token store, fake MCP server | Running | D:/dev-cache/runs/M3c-mcp-pools |
+| M3c-A MCP executor | agy (wt-m3c) | gemini-3.8-flash-high | farm/executors/mcp/*, token store, fake MCP server | **Merged ff60d8d** (14 tests; Clay URL UNVERIFIED; notes: silent except on ACL, data_dir dup) | — |
 Shared contract: `briefs/CONTEXT.md`. Keep-awake helper: D:\dev-cache\keep-awake.ps1 (14 h from 04:57).
 User approved (2026-10-04): Sonnet 5.5 subagents for coding as a second build lane.
 
