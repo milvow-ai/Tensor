@@ -113,7 +113,7 @@ test.describe("C3 — Console Control & Deploy Acceptance Tests", () => {
     // Global cap card
     await expect(page.getByText("Global Spending Cap", { exact: true })).toBeVisible();
     await expect(page.getByText("Alert Thresholds", { exact: true })).toBeVisible();
-    await expect(page.getByText("Audit Log", { exact: true })).toBeVisible();
+    await expect(page.getByText("Control Audit Log", { exact: true })).toBeVisible();
 
     // Click Edit Cap
     const editCapBtn = page.getByRole("button", { name: "Edit Cap" });
