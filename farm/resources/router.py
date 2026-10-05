@@ -125,6 +125,10 @@ HINTS: dict[str, str] = {
         "A budget of 0 blocks every paid connection of this capability. "
         "Raise the budget in the Console (or registry), or add a free account."
     ),
+    "budget_exhausted": (
+        "The monthly budget has been exhausted (hard stop). "
+        "Raise the budget in the Console (or CLI), or add a free account."
+    ),
     INTERNAL: (
         "The Farm hit an unexpected error; the run trajectory (get_run) and the Farm log have the details."
     ),
@@ -780,6 +784,31 @@ class _Chain:
             priority=candidate.priority,
             ranking_reason=ranking_reason,
         )
+
+        est_cost = Decimal(0)
+        for u in candidate.units:
+            if u.unit_cost_usd > 0 and u.estimate > 0:
+                est_cost += u.estimate * u.unit_cost_usd
+
+        if est_cost > 0:
+            from farm.resources import budget
+
+            decision = await budget.check(ctx.pool, candidate.id, est_cost, now=ctx.clock())
+            if not decision.allowed:
+                self.policy_blocks += 1
+                reason = decision.reason or "budget_exhausted"
+                await traj.event("policy_block", candidate.id, provider=provider_pool.id, reason=reason)
+                self.attempts.append(
+                    AttemptSummary(
+                        provider=provider_pool.id,
+                        connection_id=candidate.id,
+                        outcome="policy_blocked",
+                        kind=decision.error_kind or "budget_exhausted",
+                        message=reason,
+                    )
+                )
+                return None
+
         held = await self._reserve(provider_pool, candidate)
         if held is None:
             return None
@@ -1146,11 +1175,19 @@ class _Chain:
                 retry_after_s=last.retry_after_s,
             )
         elif self.policy_blocks:
-            error = _error(
-                POLICY_BLOCKED,
-                f"{self.policy_blocks} connection(s) blocked by a zero budget; none could be tried",
-                self.attempts,
-            )
+            budget_attempts = [a for a in self.attempts if a.kind == "budget_exhausted"]
+            if budget_attempts:
+                error = _error(
+                    "budget_exhausted",
+                    budget_attempts[-1].message,
+                    self.attempts,
+                )
+            else:
+                error = _error(
+                    POLICY_BLOCKED,
+                    f"{self.policy_blocks} connection(s) blocked by a zero budget; none could be tried",
+                    self.attempts,
+                )
         else:
             error = _error(NO_CAPACITY, "no connection of this capability could be tried", self.attempts)
         return self.settled_failure(error)

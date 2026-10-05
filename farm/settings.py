@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Any
 
 DEFAULT_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
@@ -40,3 +41,43 @@ def data_dir() -> Path:
     path = Path(os.environ.get("FARM_DATA_DIR") or "D:/farm-data")
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+HTTP_HOST: str = "127.0.0.1"
+HTTP_PORT: int = 8787
+HTTP_PATH: str = "/mcp"
+
+
+def http_host() -> str:
+    load_env()
+    return os.environ.get("FARM_HTTP_HOST", HTTP_HOST)
+
+
+def http_port() -> int:
+    load_env()
+    return int(os.environ.get("FARM_HTTP_PORT", str(HTTP_PORT)))
+
+
+def http_path() -> str:
+    load_env()
+    return os.environ.get("FARM_HTTP_PATH", HTTP_PATH)
+
+
+class _HttpSetting(str):
+    def __call__(self) -> str:
+        return str(self)
+
+
+class _HttpPortSetting(int):
+    def __call__(self) -> int:
+        return int(self)
+
+
+def __getattr__(name: str) -> Any:
+    if name == "http_host":
+        return _HttpSetting(http_host())
+    if name == "http_port":
+        return _HttpPortSetting(http_port())
+    if name == "http_path":
+        return _HttpSetting(http_path())
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
