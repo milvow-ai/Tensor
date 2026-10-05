@@ -17,6 +17,7 @@ import subprocess
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -101,9 +102,7 @@ async def test_concurrent_mcp_http_clients_and_caller_tracking(
 
     # Verify run rows carried right caller names
     async with pool.connection() as conn:
-        cur = await conn.execute(
-            "select caller, count(*) from public.runs group by caller order by caller"
-        )
+        cur = await conn.execute("select caller, count(*) from public.runs group by caller order by caller")
         rows = await cur.fetchall()
         caller_counts = {r[0]: r[1] for r in rows}
         assert caller_counts.get("claude-code") == 1
@@ -127,8 +126,12 @@ async def test_concurrent_mcp_http_clients_and_caller_tracking(
         assert r_bad_token.status_code == 401
 
 
-def test_watchdog_restart_and_alert_on_failure() -> None:
-    """Acceptance 2: Watchdog in test mode detects dead farm, restarts, and records alert."""
+def test_watchdog_restart_and_alert_on_failure(tmp_path: Path) -> None:
+    """Acceptance 2: Watchdog in test mode detects dead farm, restarts, and records alert.
+
+    The heartbeat file and log are per-test: a real `farm run` on this PC writes a fresh heartbeat in the
+    shared data dir, which would make the watchdog (rightly) report the Farm healthy.
+    """
     result = subprocess.run(
         [
             "powershell",
@@ -142,6 +145,10 @@ def test_watchdog_restart_and_alert_on_failure() -> None:
             "-SkipBifrost",
             "-FarmUrl",
             "http://127.0.0.1:59999",
+            "-FarmHeartbeatFile",
+            str(tmp_path / "no-heartbeat.json"),
+            "-LogFile",
+            str(tmp_path / "watchdog.log"),
         ],
         capture_output=True,
         text=True,
@@ -300,9 +307,7 @@ async def test_graceful_shutdown_finishes_in_flight_call(
     ctx = await farm_factory(registry, executors={"api": AsyncFnExecutor(async_exec)})
 
     # Start an in-flight route call
-    route_task = asyncio.create_task(
-        route(ctx, "verify_email", {"email": EMAIL}, caller="in-flight-client")
-    )
+    route_task = asyncio.create_task(route(ctx, "verify_email", {"email": EMAIL}, caller="in-flight-client"))
 
     # Wait until the call is in-flight
     await call_started.wait()
