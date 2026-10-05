@@ -10,7 +10,13 @@ generated from the same JSON Schema as `config/registry.yaml`, set policies and 
 **Scope (owner 2026-10-05, see HANDOFF scope update):** the Farm is a general product — one MCP for every MCP server and AI CLI. The Console must
 read that way: **Integrations** (every MCP server / OpenAPI API / AI CLI account the owner connects) and **AI Pools** (accounts, live jobs,
 conversations) are the main control surfaces; GTM tools are just some of the integrations. Fixtures must show a general setup too (see below).
-This round starts **after OPEN1 and AIP2 are merged** — it reads their tables (`mcp_tools`, `ai_jobs`, `ai_conversations`) and commands.
+OPEN1 (any-MCP pass-through) and AIP2 (AI jobs) are being finished in parallel, so build the UI **now against fixtures**. For their tables use the
+column lists in `briefs/OPEN1-mcp-passthrough.md` (`mcp_tools`, MCP provider config) and `briefs/AIP2-ai-orchestration.md` (`ai_jobs`,
+`ai_conversations`); keep every read of those tables in ONE module (`console/src/lib/farm/integrations-data.ts`) so the lead can reconcile names at merge.
+Do not add an Alembic migration: put new views in `console/sql/views_c3.sql`; the lead wraps it into the next migration at merge.
+Owner's bar (2026-10-05): it must feel exactly like a serious SaaS product — everything configurable from the dashboard: add AI CLIs, add MCP servers of
+any product, add several accounts for the same product (a pool), set strategy/priority/budgets — with things only the PC can do (logins, secrets)
+shown as exact copy-paste commands.
 
 ## Read first
 `briefs/CONTEXT.md` (§3, §4: registry models + `farm registry schema`), `HANDOFF.md` §5, §10 (optimisation rules), C1/C2 code, `farm/registry/models.py`,
