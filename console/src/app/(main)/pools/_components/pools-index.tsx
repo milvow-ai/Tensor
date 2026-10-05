@@ -1,8 +1,10 @@
 import { Bot, Wrench } from "lucide-react";
+import Link from "next/link";
 
 import { CommandsProvider } from "@/components/farm/commands-provider";
 import { PageHeader } from "@/components/farm/page-header";
 import { EmptyState, ErrorState } from "@/components/farm/states";
+import { Button } from "@/components/ui/button";
 import { attempt } from "@/lib/farm/data";
 import { fmtInt, fmtPlanUsd } from "@/lib/farm/format";
 import type { ProviderKind } from "@/lib/farm/types";
@@ -17,7 +19,7 @@ const COPY = {
     icon: Wrench,
     empty: "No tool pools are registered yet.",
     emptyHint:
-      "Pools come from the Farm registry (config/registry.yaml). Add a provider there and start the Farm; it appears here.",
+      "Add an MCP server or an OpenAPI provider from Integrations (or with `farm mcp add`); its account pool appears here.",
   },
   ai: {
     title: "AI Pools",
@@ -26,7 +28,7 @@ const COPY = {
     icon: Bot,
     empty: "No AI pools are registered yet.",
     emptyHint:
-      "AI pools come from the Farm registry (config/registry.yaml). Add a provider there and start the Farm; it appears here.",
+      "Add a Claude, Codex, Gemini or Hermes account from Integrations (or with `farm ai add`); its pool appears here.",
   },
 } as const;
 
@@ -57,7 +59,11 @@ export async function PoolsIndex({ kind }: { kind: ProviderKind }) {
           actions={kind === "ai" ? <AddAiAccountDialog /> : null}
         />
         {pools.length === 0 ? (
-          <EmptyState icon={copy.icon} title={copy.empty} description={copy.emptyHint} />
+          <EmptyState icon={copy.icon} title={copy.empty} description={copy.emptyHint}>
+            <Button asChild>
+              <Link href="/integrations">Add your first MCP server</Link>
+            </Button>
+          </EmptyState>
         ) : (
           <>
             <dl className="flex flex-wrap gap-x-8 gap-y-2 text-sm" aria-label="Totals">

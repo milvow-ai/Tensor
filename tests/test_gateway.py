@@ -28,7 +28,7 @@ from tests.farm_helpers import EMAIL, ScriptedExecutor, failure, fetch, ok_resul
 
 type Make = Callable[..., Awaitable[FarmContext]]
 
-REAL_REGISTRY = Path(__file__).parent.parent / "config" / "registry.yaml"
+REAL_REGISTRY = Path(__file__).parent.parent / "config" / "registry.example.yaml"
 
 
 @pytest.mark.parametrize(

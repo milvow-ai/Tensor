@@ -46,7 +46,7 @@ from tests.mcp_helpers import (
 
 FIXTURES = Path(__file__).parent / "fixtures" / "mcp"
 STDIO_SERVER = FIXTURES / "stdio_server.py"
-REAL_REGISTRY = Path(__file__).parent.parent / "config" / "registry.yaml"
+REAL_REGISTRY = Path(__file__).parent.parent / "config" / "registry.example.yaml"
 FARM_DIR = Path(__file__).parent.parent / "farm"
 
 

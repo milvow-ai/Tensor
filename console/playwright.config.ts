@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const PORT = 3100;
+// FARM_E2E_PORT lets the suite run while something else (the live Console preview) holds 3100.
+const PORT = Number(process.env.FARM_E2E_PORT ?? 3100);
 
 /**
  * End-to-end suite: the production build (`next start`) in fixtures mode.
@@ -32,7 +33,7 @@ export default defineConfig({
     },
     {
       name: "behaviour",
-      testMatch: /(overview|pools|add-account|guard|auth|c2-billing-runs|c3-control)\.spec\.ts/,
+      testMatch: /(overview|pools|add-account|guard|auth|c2-billing-runs|c3-control|open2-self-serve)\.spec\.ts/,
       dependencies: ["screens"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },

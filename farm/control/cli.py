@@ -1,3 +1,5 @@
+import asyncio
+import concurrent.futures
 import json
 import logging
 import os
@@ -46,6 +48,9 @@ app.add_typer(token_app, name="token")
 
 alert_app = typer.Typer(help="Alerts: dispatch and check alerts.")
 app.add_typer(alert_app, name="alert")
+
+provider_app = typer.Typer(help="Manage providers: remove integrations.")
+app.add_typer(provider_app, name="provider")
 
 
 ALEMBIC_INI = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
@@ -158,6 +163,15 @@ def _run_farm[T](work: Coroutine[Any, Any, T]) -> T:
     """Run ``work`` on the selector event loop psycopg needs; failures a person can fix get one clear line."""
     configure_logging()
     try:
+        try:
+            asyncio.get_running_loop()
+            in_loop = True
+        except RuntimeError:
+            in_loop = False
+
+        if in_loop:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                return ex.submit(lambda: run(work)).result()
         return run(work)
     except RegistryError as exc:
         raise _fail(str(exc)) from None
@@ -760,6 +774,50 @@ def ai_login(
         typer.echo(f"Unknown CLI driver '{cli_name}' for connection {connection}")
 
 
+@ai_app.command(name="add")
+def ai_add(
+    driver: Annotated[str, typer.Argument(help="AI CLI driver: claude, codex, gemini, or hermes.")],
+    account_id: Annotated[str, typer.Argument(help="Account ID, e.g. claude-02.")],
+    label: Annotated[str | None, typer.Option("--label", "-l", help="Display label.")] = None,
+    model: Annotated[list[str] | None, typer.Option("--model", "-m", help="Allowed models.")] = None,
+    max_parallel: Annotated[int, typer.Option("--max-parallel", help="Max parallel jobs.")] = 1,
+    local: LocalOption = False,
+) -> None:
+    """Add a new AI CLI account (Claude, Codex, Gemini/agy, Hermes)."""
+    from farm.control.commands import execute_provider_command
+
+    driver_clean = driver.lower().strip()
+    if driver_clean not in ("claude", "codex", "gemini", "agy", "hermes"):
+        raise _fail(f"Unknown AI driver '{driver}': choose claude, codex, gemini, or hermes.")
+
+    provider_id = "gemini" if driver_clean == "agy" else driver_clean
+    payload = {
+        "provider_id": provider_id,
+        "cli": driver_clean,
+        "account_id": account_id,
+        "label": label or account_id,
+        "models": model or [],
+        "max_parallel": max_parallel,
+    }
+
+    async def main() -> None:
+        ctx = await _context(local)
+        try:
+            status, res = await execute_provider_command(ctx.pool, "add_provider", payload, actor="cli")
+            if status != "done":
+                raise _fail(f"ai add failed: {res.get('error', 'unknown error')}")
+            res_status = res.get("status")
+            typer.echo(
+                f"Added AI provider '{provider_id}' (account: '{account_id}') (status: {res_status})."
+            )
+            if res.get("next_step"):
+                typer.echo(f"Next step: {res['next_step']}")
+        finally:
+            await ctx.aclose()
+
+    _run_farm(main())
+
+
 # --- MCP pass-through (OPEN1) -----------------------------------------------------------------------------
 
 
@@ -891,6 +949,120 @@ def mcp_login(
                     (connection,),
                 )
             typer.echo(f"{connection} is logged in and active ({tools} tools visible); next: farm mcp sync")
+        finally:
+            await ctx.aclose()
+
+    _run_farm(main())
+
+
+@mcp_app.command(name="add")
+def mcp_add(
+    name: Annotated[str, typer.Argument(help="Provider name / ID.")],
+    command: Annotated[
+        str | None, typer.Option("--command", "-c", help="Command to run for stdio MCP server.")
+    ] = None,
+    arg: Annotated[
+        list[str] | None, typer.Option("--arg", "-a", help="Arguments to pass to the stdio command.")
+    ] = None,
+    url: Annotated[
+        str | None, typer.Option("--url", "-u", help="HTTP / SSE URL for remote MCP server.")
+    ] = None,
+    env: Annotated[
+        list[str] | None, typer.Option("--env", "-e", help="Environment variable names to pass.")
+    ] = None,
+    header: Annotated[
+        list[str] | None, typer.Option("--header", "-H", help="Headers in NAME=ENV format.")
+    ] = None,
+    auth: Annotated[str, typer.Option("--auth", help="Auth scheme: none, env, oauth.")] = "none",
+    namespace: Annotated[
+        str | None, typer.Option("--namespace", help="Namespace prefix for exposed tools.")
+    ] = None,
+    expose: Annotated[str, typer.Option("--expose", help="Exposure mode: direct, discovery, auto.")] = "auto",
+    cwd: Annotated[str | None, typer.Option("--cwd", help="Working directory for stdio server.")] = None,
+    local: LocalOption = False,
+) -> None:
+    """Add a new MCP server (stdio or HTTP/SSE)."""
+    from farm.control.commands import execute_provider_command
+
+    if not command and not url:
+        raise _fail("Specify either --command for stdio or --url for HTTP/SSE MCP server.")
+    if command and url:
+        raise _fail("Specify either --command or --url, not both.")
+
+    env_dict = {}
+    if env:
+        for e in env:
+            if "=" in e:
+                k, v = e.split("=", 1)
+                env_dict[k] = v if v.startswith("env:") else f"env:{v}"
+            else:
+                env_dict[e] = f"env:{e}"
+
+    headers_dict = {}
+    if header:
+        for h in header:
+            if "=" in h:
+                k, v = h.split("=", 1)
+                headers_dict[k] = v if v.startswith("env:") else f"env:{v}"
+            else:
+                headers_dict[h] = f"env:{h}"
+
+    payload = {
+        "provider_id": name,
+        "name": name,
+        "kind": "tool",
+        "executor": "mcp",
+        "command": command,
+        "args": arg or [],
+        "cwd": cwd,
+        "env": env_dict,
+        "url": url,
+        "headers": headers_dict,
+        "auth": auth,
+        "namespace": namespace,
+        "exposure": expose,
+    }
+
+    async def main() -> None:
+        ctx = await _context(local)
+        try:
+            status, res = await execute_provider_command(ctx.pool, "add_provider", payload, actor="cli")
+            if status != "done":
+                raise _fail(f"mcp add failed: {res.get('error', 'unknown error')}")
+            typer.echo(f"Added MCP provider '{name}' (status: {res.get('status')}).")
+            if res.get("tools_count", 0) > 0:
+                typer.echo(f"Synced {res['tools_count']} tools.")
+            if res.get("next_step"):
+                typer.echo(f"Next step: {res['next_step']}")
+        finally:
+            await ctx.aclose()
+
+    _run_farm(main())
+
+
+@provider_app.command(name="remove")
+def provider_remove(
+    id: Annotated[str, typer.Argument(help="Provider ID to remove.")],
+    force: Annotated[
+        bool, typer.Option("--force", "-f", help="Force removal even with open jobs or reservations.")
+    ] = False,
+    local: LocalOption = False,
+) -> None:
+    """Remove a provider and its connections."""
+    from farm.control.commands import execute_provider_command
+
+    payload = {
+        "provider_id": id,
+        "force": force,
+    }
+
+    async def main() -> None:
+        ctx = await _context(local)
+        try:
+            status, res = await execute_provider_command(ctx.pool, "remove_provider", payload, actor="cli")
+            if status != "done":
+                raise _fail(f"provider remove failed: {res.get('error', 'unknown error')}")
+            typer.echo(f"Removed provider '{id}'.")
         finally:
             await ctx.aclose()
 

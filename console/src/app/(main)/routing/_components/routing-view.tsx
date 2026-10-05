@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
-import { ArrowDown, ArrowUp, Check, Clock, GripVertical, ShieldAlert, Sparkles, Zap } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Clock, GitFork, GripVertical, ShieldAlert, Sparkles, Zap } from "lucide-react";
 import { toast } from "sonner";
 
+import { EmptyState } from "@/components/farm/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -167,6 +169,20 @@ export function RoutingView({
     } finally {
       setSaving(false);
     }
+  }
+
+  if (capabilities.length === 0) {
+    return (
+      <EmptyState
+        icon={GitFork}
+        title="No routes configured"
+        description="Routing rules specify how calls to capabilities are dispatched across your providers."
+      >
+        <Button asChild>
+          <Link href="/integrations">Add your first MCP server</Link>
+        </Button>
+      </EmptyState>
+    );
   }
 
   return (

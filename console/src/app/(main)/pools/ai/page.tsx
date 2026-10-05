@@ -31,9 +31,11 @@ export default async function AiPoolsPage() {
   return (
     <div className="space-y-8">
       <PoolsIndex kind="ai" />
-      <div className="pt-2">
-        <AiOrchestrationView initialJobs={jobs} initialConversations={conversations} accounts={aiAccounts} />
-      </div>
+      {pools.length > 0 || jobs.length > 0 ? (
+        <div className="pt-2">
+          <AiOrchestrationView initialJobs={jobs} initialConversations={conversations} accounts={aiAccounts} />
+        </div>
+      ) : null}
     </div>
   );
 }

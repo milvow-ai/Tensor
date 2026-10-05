@@ -19,6 +19,7 @@ from farm.secrets import parse_auth_ref
 
 ROOT = Path(__file__).resolve().parent.parent
 REAL = ROOT / "config" / "registry.yaml"
+EXAMPLE = ROOT / "config" / "registry.example.yaml"
 FIXTURE = ROOT / "tests" / "fixtures" / "registry.yaml"
 
 
@@ -44,8 +45,19 @@ def expect_error(data: dict[str, Any], *fragments: str) -> str:
 # --- the real and the fixture registry ---------------------------------------------------------------
 
 
-def test_real_registry_loads_and_matches_the_brief() -> None:
+def test_blank_owner_registry_loads() -> None:
     reg = load_registry(REAL)
+    assert len(reg.providers) == 0
+    assert set(reg.capabilities) == {"ask_ai", "agent_task"}
+    assert reg.capabilities["ask_ai"].routes == []
+    assert reg.capabilities["agent_task"].routes == []
+    assert reg.settings.owner_email == "milvow.ai@gmail.com"
+    assert reg.settings.alert_thresholds == [50, 80, 100]
+    assert reg.budgets.global_monthly_usd == 0
+
+
+def test_example_registry_loads_and_matches_the_brief() -> None:
+    reg = load_registry(EXAMPLE)
     assert list(reg.providers) == [
         "reoon",
         "zerobounce",
@@ -136,12 +148,13 @@ def test_real_registry_loads_and_matches_the_brief() -> None:
 
 
 def test_real_registry_holds_references_not_secrets() -> None:
-    reg = load_registry(REAL)
-    for _provider, conn in reg.iter_connections():
-        scheme, _ref = parse_auth_ref(conn.auth_ref)
-        assert scheme in {"env", "token-store", "cli"}
-    raw = REAL.read_text(encoding="utf-8")
-    assert not re.search(r"sk-[A-Za-z0-9_-]{16,}|[A-Za-z0-9]{32,}", raw)
+    for path in (REAL, EXAMPLE):
+        reg = load_registry(path)
+        for _provider, conn in reg.iter_connections():
+            scheme, _ref = parse_auth_ref(conn.auth_ref)
+            assert scheme in {"env", "token-store", "cli"}
+        raw = path.read_text(encoding="utf-8")
+        assert not re.search(r"sk-[A-Za-z0-9_-]{16,}|[A-Za-z0-9]{32,}", raw)
 
 
 def test_fixture_registry_loads() -> None:
@@ -202,10 +215,8 @@ def test_capability_kind_must_match_provider_kind() -> None:
     expect_error(data, "capability 'verify_email' is kind 'tool' but route 'claude' is a 'ai' provider")
 
 
-def test_route_lists_must_be_non_empty_and_unique() -> None:
+def test_route_lists_must_be_unique() -> None:
     data = fixture_data()
-    data["capabilities"]["verify_email"]["routes"] = []
-    expect_error(data, "capabilities.verify_email.routes")
     data["capabilities"]["verify_email"]["routes"] = ["reoon", "reoon"]
     expect_error(data, "more than once: reoon")
 
@@ -379,11 +390,15 @@ def test_top_level_must_be_a_mapping() -> None:
 
 
 def test_missing_required_sections_are_named() -> None:
+    """Blank start: providers and capabilities are optional (an empty Farm is valid); settings still are not."""
     with pytest.raises(RegistryError) as caught:
         parse_registry("budgets: {}\n", source="thin.yaml")
     message = str(caught.value)
-    for section in ("providers", "capabilities", "settings"):
-        assert section in message
+    assert "settings" in message
+    assert "providers" not in message and "capabilities" not in message
+
+    blank = parse_registry("settings: {owner_email: owner@example.com}\n", source="blank.yaml")
+    assert blank.providers == {} and blank.capabilities == {}
 
 
 def test_missing_file_is_a_registry_error(tmp_path: Path) -> None:
@@ -444,7 +459,7 @@ def test_schema_offers_forms_the_right_choices() -> None:
         assert (unit[name]["type"], unit[name]["minimum"], unit[name]["default"]) == ("number", 0, default)
 
 
-@pytest.mark.parametrize("path", [REAL, FIXTURE], ids=["real", "fixture"])
+@pytest.mark.parametrize("path", [REAL, EXAMPLE, FIXTURE], ids=["real", "example", "fixture"])
 def test_registries_dumped_as_json_validate_against_the_exported_schema(path: Path) -> None:
     jsonschema = pytest.importorskip("jsonschema")
     document = load_registry(path).model_dump(mode="json")

@@ -24,7 +24,7 @@ from farm.registry.models import looks_like_secret
 from farm.secrets import redact, set_secret
 
 FIXTURES = Path(__file__).parent / "fixtures" / "mcp"
-REAL_REGISTRY = Path(__file__).parent.parent / "config" / "registry.yaml"
+REAL_REGISTRY = Path(__file__).parent.parent / "config" / "registry.example.yaml"
 DESKTOP = f"file:{FIXTURES / 'claude_desktop_config.json'}"
 CODE = f"file:{FIXTURES / 'claude_code.json'}"
 CODEX = f"file:{FIXTURES / 'codex_config.toml'}"

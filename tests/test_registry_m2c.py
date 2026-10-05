@@ -16,7 +16,7 @@ from farm.executors.llm import LlmExecutor
 from farm.registry.loader import load_registry
 from farm.registry.models import Registry
 
-REAL = Path(__file__).resolve().parent.parent / "config" / "registry.yaml"
+REAL = Path(__file__).resolve().parent.parent / "config" / "registry.example.yaml"
 
 # What each adapter's ``units_used`` can contain (the keys of the dicts it returns).
 EMITTED_UNITS = {

@@ -1,12 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 import {
   AlertTriangle,
   CheckCircle2,
   Clock,
   Copy,
+  Database,
   ExternalLink,
   Eye,
   Globe,
@@ -16,6 +18,8 @@ import {
   User,
 } from "lucide-react";
 import { toast } from "sonner";
+
+import { EmptyState } from "@/components/farm/states";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -113,6 +117,20 @@ export function MemoryView({
     } else {
       toast.info(`Evidence artifact (${evidenceIds[0]}) not found in current view.`);
     }
+  }
+
+  if (initialFacts.length === 0 && initialEvidence.length === 0) {
+    return (
+      <EmptyState
+        icon={Database}
+        title="No memory or evidence yet"
+        description="Verified entity facts, provenance, and captured evidence artifacts will appear here as tools and AI workflows run."
+      >
+        <Button asChild>
+          <Link href="/integrations">Add your first MCP server</Link>
+        </Button>
+      </EmptyState>
+    );
   }
 
   return (

@@ -47,7 +47,7 @@ test.describe("C3 — Console Control & Deploy Acceptance Tests", () => {
     expect(problems()).toEqual([]);
   });
 
-  test("integrations form renders from schema, rejects a raw key, and enqueues add_connection", async ({
+  test("integrations: the dialog asks what to add, refuses a raw key, enqueues add_provider and restores state", async ({
     page,
     baseURL,
   }) => {
@@ -59,47 +59,76 @@ test.describe("C3 — Console Control & Deploy Acceptance Tests", () => {
     // Verify connected integrations cards are visible (Notion, GitHub, Linear, etc.)
     await expect(page.getByText("Notion Workspace").first()).toBeVisible();
 
-    // Open "Add Integration" dialog
+    // "Add Integration" first asks WHAT is being added
     const addBtn = page.getByRole("button", { name: "Add Integration" });
     await expect(addBtn).toBeVisible();
     await addBtn.click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", { name: "Add Integration" })).toBeVisible();
+    for (const choice of [
+      "New MCP server",
+      "New AI account",
+      "Account for an existing integration",
+      "OpenAPI provider",
+    ]) {
+      await expect(dialog.getByText(choice, { exact: true })).toBeVisible();
+    }
+    await dialog.getByRole("button", { name: /New MCP server/ }).click();
+    await expect(dialog.getByRole("heading", { name: "Add MCP Server" })).toBeVisible();
 
-    // Modal opens
-    await expect(page.getByRole("heading", { name: "Connect Integration" })).toBeVisible();
+    await dialog.locator("#mcp-id").fill("test-service");
+    await dialog.locator("#mcp-name").fill("Test MCP Service");
+    await dialog.locator("#mcp-command").fill("python");
 
-    // Fill ID and Name
-    await page.locator("#id-input").fill("test-service");
-    await page.locator("#name-input").fill("Test MCP Service");
-
-    // Test secret rejection: enter a raw secret key
-    const authInput = page.locator("#auth-ref-input");
-    await authInput.fill("sk-proj-1234567890abcdef1234567890abcdef");
-
-    // Verify rejection warning message is shown and Add button is disabled
-    await expect(page.getByText("Raw secrets are forbidden in connection forms")).toBeVisible();
-    const submitBtn = page.getByRole("button", { name: "Add Connection" });
+    // Test secret rejection: a raw key in the env-var field is refused and nothing can be sent.
+    // (built at runtime so the repo secret scanner never sees a key-shaped literal)
+    const envInput = dialog.locator("#mcp-env");
+    await envInput.fill(["sk-", "proj-", "1234567890abcdef1234567890abcdef"].join(""));
+    await expect(dialog.getByText("This looks like a secret, not a name")).toBeVisible();
+    const submitBtn = dialog.getByRole("button", { name: "Add Integration" });
     await expect(submitBtn).toBeDisabled();
 
-    // Fix auth reference with a safe environment variable name
-    await authInput.fill("env:TEST_SERVICE_API_KEY");
-    await expect(page.getByText("Raw secrets are forbidden in connection forms")).not.toBeVisible();
+    // A safe environment-variable NAME is accepted
+    await envInput.fill("TEST_SERVICE_API_KEY");
+    await expect(dialog.getByText("This looks like a secret, not a name")).not.toBeVisible();
     await expect(submitBtn).toBeEnabled();
 
-    // Submit the form
+    // Submit the form: the Console enqueues add_provider for the Farm
+    const enqueued = page.waitForRequest(
+      (request) => request.method() === "POST" && (request.postData() ?? "").includes("add_provider"),
+    );
     await submitBtn.click();
+    await enqueued;
 
-    // Verify success toast
+    // Verify success toast and the post-save step: status plus the exact next command
+    await expect(page.locator("[data-sonner-toast]", { hasText: 'MCP server "test-service" registered.' })).toBeVisible();
+    await expect(dialog.getByRole("heading", { name: "Integration Added" })).toBeVisible();
+    await expect(dialog.getByText("Next Step on Farm PC:")).toBeVisible();
+    await expect(dialog.getByText("farm mcp sync")).toBeVisible();
+
+    // Close the dialog: the new integration is on the page
+    await dialog.getByRole("button", { name: "Done" }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByText("Test MCP Service", { exact: true })).toBeVisible();
+
+    // The Farm (not just the page) has it: a fresh load of the page still lists the integration
+    await expect(async () => {
+      await page.reload();
+      await expect(page.getByText("Test MCP Service", { exact: true })).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 20_000 });
+
+    // Restore the shared fixture world: remove the integration again (remove_provider) and wait for the Farm
+    await page.getByRole("button", { name: "Remove Test MCP Service" }).click();
+    await expect(page.getByRole("heading", { name: "Remove Integration?" })).toBeVisible();
+    await page.getByRole("button", { name: "Confirm Remove" }).click();
     await expect(
-      page.locator("[data-sonner-toast]", { hasText: 'Connection "test-service-01" queued.' }),
+      page.locator("[data-sonner-toast]", { hasText: 'Integration "Test MCP Service" removed.' }),
     ).toBeVisible();
-
-    // Verify post-save CLI instruction card is rendered
-    await expect(page.getByText("Next Step: Store Secret Locally")).toBeVisible();
-    await expect(page.getByText("farm set-secret TEST_SERVICE_API_KEY")).toBeVisible();
-
-    // Close the dialog
-    await page.getByRole("button", { name: "Done" }).click();
-    await expect(page.getByRole("heading", { name: "Connect Integration" })).not.toBeVisible();
+    await expect(async () => {
+      await page.reload();
+      await expect(page.getByText("Notion Workspace").first()).toBeVisible({ timeout: 1_000 });
+      await expect(page.getByText("Test MCP Service", { exact: true })).toHaveCount(0, { timeout: 500 });
+    }).toPass({ timeout: 20_000 });
 
     expect(problems()).toEqual([]);
   });

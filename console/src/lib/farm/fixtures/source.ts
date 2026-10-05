@@ -52,7 +52,14 @@ import {
   spendDailyRows,
   spendMonthRows,
 } from "./views";
-import { buildWorld, nextMonthlyReset, type World, type WorldConnection, type WorldUnit } from "./world";
+import {
+  buildEmptyWorld,
+  buildWorld,
+  nextMonthlyReset,
+  type World,
+  type WorldConnection,
+  type WorldUnit,
+} from "./world";
 
 const QUEUE_RUNNING_MS = 500;
 const QUEUE_DONE_MS = 1500;
@@ -60,7 +67,10 @@ const QUEUE_DONE_MS = 1500;
 const store = globalThis as unknown as { __farmFixtureWorld?: World };
 
 function world(): World {
-  store.__farmFixtureWorld ??= buildWorld();
+  if (!store.__farmFixtureWorld) {
+    const isBlank = process.env.FARM_FIXTURES === "empty";
+    store.__farmFixtureWorld = isBlank ? buildEmptyWorld() : buildWorld();
+  }
   return store.__farmFixtureWorld;
 }
 
@@ -268,6 +278,146 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
     case "sync_mcp_tools": {
       const parsed = commandPayloadSchemas.sync_mcp_tools.parse(rawPayload);
       return { ok: true, provider_id: parsed.provider_id ?? null, synced_count: w.mcpTools.length };
+    }
+    case "add_provider": {
+      const spec = commandPayloadSchemas.add_provider.parse(rawPayload);
+      const providerId = spec.provider_id;
+      const isAi = spec.kind === "ai" || Boolean(spec.cli) || spec.executor === "cli_agent";
+      const isMcp = !isAi && spec.executor !== "api" && !spec.spec;
+      const accountId = spec.account_id ?? spec.connection_id ?? `${providerId}-01`;
+
+      let prov = w.providers.find((p) => p.id === providerId);
+      if (!prov) {
+        prov = {
+          id: providerId,
+          name: spec.name ?? providerId,
+          kind: isAi ? "ai" : "tool",
+          executor: isAi ? "cli_agent" : (spec.executor ?? "mcp"),
+          defaultStrategy: spec.default_strategy,
+          enabled: spec.enabled,
+        };
+        w.providers.push(prov);
+      }
+
+      const status = spec.status ?? (isAi || spec.auth === "oauth" ? "needs_login" : "active");
+      let authRef = spec.auth_ref;
+      if (!authRef) {
+        if (isAi) {
+          authRef = `cli:${accountId}`;
+        } else if (spec.auth === "oauth") {
+          authRef = `token-store:${accountId}`;
+        } else {
+          authRef = "cli:none";
+        }
+      }
+
+      if (!w.connections.some((c) => c.id === accountId)) {
+        const rawPlan = spec.plan as Record<string, unknown> | undefined;
+        w.connections.push({
+          id: accountId,
+          providerId,
+          label: spec.label ?? accountId,
+          authRef,
+          scope: ["internal"],
+          priority: spec.priority ?? 100,
+          strategy: null,
+          concurrency: spec.concurrency ?? 1,
+          ratePerMin: spec.rate_per_min ?? null,
+          status,
+          plan: {
+            name: typeof rawPlan?.name === "string" ? rawPlan.name : "Default",
+            price_usd: typeof rawPlan?.price_usd === "number" ? rawPlan.price_usd : 0,
+          },
+          meta: (spec.meta ?? {}) as Record<string, unknown>,
+          health: {
+            circuit: "closed",
+            consecutiveFailures: 0,
+            lastErrorKind: null,
+            lastError: null,
+            lastErrorAt: null,
+            cooldownUntil: null,
+            successCount: 0,
+            failureCount: 0,
+            lastSuccessAt: null,
+            latencyMsP50: null,
+          },
+          sessionsCount: 0,
+          callsToday: 0,
+          units: [],
+        });
+      }
+
+      if (isMcp) {
+        const mcpCap = `mcp:${providerId}`;
+        if (!w.capabilities.some((c) => c.name === mcpCap)) {
+          w.capabilities.push({
+            name: mcpCap,
+            kind: "tool",
+            description: `Pass-through MCP tools of ${providerId}`,
+            defaultStrategy: "failover",
+          });
+        }
+        if (!w.routes.some((r) => r.capability === mcpCap && r.providerId === providerId)) {
+          w.routes.push({
+            capability: mcpCap,
+            providerId,
+            position: 1,
+            enabled: true,
+          });
+        }
+        if (!w.mcpTools.some((t) => t.provider === providerId)) {
+          w.mcpTools.push({
+            id: `tool-${providerId}-echo`,
+            workspaceId: "ws-default",
+            provider: providerId,
+            name: `${providerId}__echo`,
+            description: `Echo tool for ${providerId}`,
+            inputSchema: { type: "object", properties: { message: { type: "string" } } },
+            outputSchema: null,
+            annotations: null,
+            schemaHash: "hash-echo",
+            syncedAt: new Date(now).toISOString(),
+            enabled: true,
+            readOnly: true,
+          });
+        }
+      }
+
+      let nextStep = "farm mcp sync";
+      if (isAi) {
+        nextStep = `farm ai login ${accountId}`;
+      } else if (spec.auth === "oauth") {
+        nextStep = `farm mcp login ${accountId}`;
+      }
+
+      return {
+        ok: true,
+        provider_id: providerId,
+        connection_id: accountId,
+        status,
+        next_step: nextStep,
+      };
+    }
+    case "update_provider": {
+      const spec = commandPayloadSchemas.update_provider.parse(rawPayload);
+      const prov = w.providers.find((p) => p.id === spec.provider_id);
+      if (!prov) throw new Rejection(`Provider "${spec.provider_id}" not found.`);
+      if (spec.name !== undefined && spec.name !== null) prov.name = spec.name;
+      if (spec.enabled !== undefined && spec.enabled !== null) prov.enabled = spec.enabled;
+      if (spec.default_strategy !== undefined && spec.default_strategy !== null)
+        prov.defaultStrategy = spec.default_strategy;
+      return { ok: true, provider_id: spec.provider_id };
+    }
+    case "remove_provider": {
+      const spec = commandPayloadSchemas.remove_provider.parse(rawPayload);
+      const prov = w.providers.find((p) => p.id === spec.provider_id);
+      if (!prov) throw new Rejection(`Provider "${spec.provider_id}" not found.`);
+      w.providers = w.providers.filter((p) => p.id !== spec.provider_id);
+      w.connections = w.connections.filter((c) => c.providerId !== spec.provider_id);
+      w.routes = w.routes.filter((r) => r.providerId !== spec.provider_id);
+      w.capabilities = w.capabilities.filter((c) => c.name !== `mcp:${spec.provider_id}`);
+      w.mcpTools = w.mcpTools.filter((t) => t.provider !== spec.provider_id);
+      return { ok: true, provider_id: spec.provider_id };
     }
     default:
       throw new Rejection(`Command "${kind}" is not handled by this Console version.`);

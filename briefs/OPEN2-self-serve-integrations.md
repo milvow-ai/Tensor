@@ -54,3 +54,34 @@ screen, `console/src/lib/farm/*` (contract regen, fixtures incl. an empty world)
 ## Done when
 `powershell -File scripts/check.ps1` → `RESULT: all passed` and `pnpm check` + `pnpm test:e2e` green in `console/`. Reply ≤ 15 lines: files, tests,
 gate tails, whether new MCP tools appear without restart, deviations.
+
+## Resume note (lead, 2026-10-05 ~17:30)
+The first run (Gemini) stopped at the 60-minute limit; its work (31 files) is in `git status` — keep it and finish. Before anything else run
+`git merge claude/awesome-archimedes-vb1t7y` (main has AIP2b's migration 0011 and a fixed watchdog test); give your migration the next free number.
+Gate failures to fix:
+- ruff E501: `farm/control/cli.py:798, 963`; `farm/control/commands.py:112, 505, 544`.
+- mypy: `commands.py:547, 914, 922` (indexing a possibly-None row: check for None first); `commands.py:1575/1577` (variable typed `CliAgentExecutor`
+  receives `McpExecutor` / passed to `sync_all`: look the MCP executor up with the right type); `commands.py:1598` (payload typed `BaseModel`
+  passed where the add/update/remove payload union is expected: narrow it).
+- pytest: `tests/test_accept_open2.py::test_accept_open2_add_provider_stdio_fake_mcp_dynamic_echo`,
+  `::test_accept_open2_cli_parity_and_test_connection`, `tests/test_self_serve.py::test_add_provider_rejects_raw_secrets`,
+  `::test_cli_mcp_and_ai_add_parity_and_next_steps`, `::test_remove_provider_guards` (psycopg errors), plus the rest of the 8 the gate lists —
+  run `uv run pytest tests/test_self_serve.py tests/test_accept_open2.py -x -q` to see them. Fix code, not tests, unless a test contradicts the brief.
+- secret-grep: `tests/test_accept_open2.py:95` has a literal key-shaped string (`sk-ant-…`). Build fake keys at runtime (e.g. `"sk-" + "ant-" + "x" * 24`)
+  so the scanner never sees one.
+- Console e2e failed — run `pnpm --prefix console test:e2e` and fix (any spec that changes shared fixture state must restore it).
+A real `farm run` is serving on 127.0.0.1:8787 on this PC: tests must never use that port or the shared `D:/farm-data` heartbeat/logs (use temp
+dirs and free ports). Run every command in the foreground and wait for it; never start one in the background and poll it.
+
+## Resume note 2 (lead, 2026-10-05 ~18:05) — what is left
+Fixed already: mypy, secret-grep, tests/test_self_serve.py. Left:
+- ruff E501 `farm/registry/sync.py:452`.
+- `tests/test_registry.py::test_missing_required_sections_are_named` and
+  `tests/test_registry_sync.py::test_export_of_an_unsynced_database_is_a_clear_error` encode the OLD rule (providers required / empty DB invalid).
+  The blank start makes `providers` optional and an empty Farm valid — update both tests to the new rule (settings still required; exporting a
+  database that was never migrated/seeded stays a clear error) and say so in the reply.
+- `tests/test_registry_sync.py::test_sync_then_export_round_trips[example|fixture]`: export after sync no longer equals the input — the export's
+  `capabilities` differ (it has the auto-ensured `agent_task`, and the input's own capabilities such as `verify_email` do not match). Round-trip must
+  stay exact: don't inject product-level capabilities into a registry file that didn't declare them (ensure them in the DB at sync time, but export only
+  what the file owns, or mark them `builtin` and skip them on export), and find why the declared capabilities differ.
+- Console e2e (`pnpm --prefix console test:e2e`) fails — run it, fix, keep shared fixture state restored.

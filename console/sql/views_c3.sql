@@ -90,12 +90,15 @@ order by ev.captured_at desc;
 
 
 -- ---------------------------------------------------------------------------------------------------------------------
--- Expand farm_commands.kind CHECK constraint for C3 commands (wrapped into migration at merge)
+-- Expand farm_commands.kind CHECK constraint for C3 commands (wrapped into migration at merge).
+-- Keep this list equal to the latest migration that sets it (0012 adds the OPEN2 provider kinds): applying this
+-- file again must never narrow the constraint.
 -- ---------------------------------------------------------------------------------------------------------------------
 alter table public.farm_commands drop constraint if exists farm_commands_kind_check;
 alter table public.farm_commands add constraint farm_commands_kind_check check (kind in (
   'pause','resume','set_priority','set_strategy','set_budget','add_connection','update_connection',
   'remove_connection','set_route','test_connection','ack_alert',
-  'cancel_ai_job','set_max_parallel','set_mcp_tool_access','sync_mcp_tools'
+  'cancel_ai_job','set_max_parallel','set_mcp_tool_access','sync_mcp_tools',
+  'add_provider','update_provider','remove_provider'
 ));
 

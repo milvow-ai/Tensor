@@ -10,8 +10,10 @@ from farm.registry.models import (
     SettingsSpec,
     UnitSpec,
 )
+from farm.registry.writer import DEFAULT_REGISTRY_PATH, write_registry_file
 
 __all__ = [
+    "DEFAULT_REGISTRY_PATH",
     "STRATEGIES",
     "BudgetSpec",
     "CapabilitySpec",
@@ -25,4 +27,5 @@ __all__ = [
     "export_json_schema",
     "load_registry",
     "parse_registry",
+    "write_registry_file",
 ]

@@ -227,6 +227,58 @@ export const commandPayloadSchemas = {
   sync_mcp_tools: z.object({
     provider_id: connectionId.nullable().optional(),
   }),
+  add_provider: z
+    .object({
+      provider_id: slugSchema,
+      name: z.string().optional().nullable(),
+      kind: z.enum(["tool", "ai"]).default("tool"),
+      executor: z
+        .enum(["api", "mcp", "llm", "cli_agent", "agent", "browser", "local", "human"])
+        .default("mcp"),
+      default_strategy: z.enum([...POOL_STRATEGIES, "pin"] as const).default("failover"),
+      enabled: z.boolean().default(true),
+      config: z.record(z.string(), z.unknown()).default({}),
+      mcp: z.record(z.string(), z.unknown()).optional().nullable(),
+      command: z.string().optional().nullable(),
+      args: z.array(z.string()).default([]),
+      cwd: z.string().optional().nullable(),
+      env: z.union([z.record(z.string(), z.string()), z.array(z.string())]).default({}),
+      url: z.string().optional().nullable(),
+      headers: z.record(z.string(), z.string()).default({}),
+      auth: z.enum(["none", "env", "oauth"]).default("none"),
+      namespace: slugSchema.optional().nullable(),
+      exposure: z.enum(["direct", "discovery", "auto"]).default("auto"),
+      timeout_s: z.number().positive().optional().nullable(),
+      cli: z.enum(AI_CLIS).optional().nullable(),
+      account_id: slugSchema.optional().nullable(),
+      label: z.string().optional().nullable(),
+      models: z.array(z.string()).default([]),
+      max_parallel: z.number().int().min(1).default(1),
+      spec: z.string().optional().nullable(),
+      auth_env: z.string().optional().nullable(),
+      connection_id: slugSchema.optional().nullable(),
+      auth_ref: z.string().optional().nullable(),
+      priority: z.number().int().min(0).default(100),
+      concurrency: z.number().int().min(1).default(1),
+      rate_per_min: z.number().int().min(1).optional().nullable(),
+      status: z.enum(["active", "paused", "needs_login", "exhausted", "disabled"]).optional().nullable(),
+      plan: z.record(z.string(), z.unknown()).default({}),
+      meta: z.record(z.string(), z.unknown()).default({}),
+      units: z.record(z.string(), commandUnitSpecSchema).default({}),
+    })
+    .passthrough(),
+  update_provider: z.object({
+    provider_id: slugSchema,
+    name: z.string().optional().nullable(),
+    enabled: z.boolean().optional().nullable(),
+    default_strategy: z.enum([...POOL_STRATEGIES, "pin"] as const).optional().nullable(),
+    config: z.record(z.string(), z.unknown()).optional().nullable(),
+    mcp: z.record(z.string(), z.unknown()).optional().nullable(),
+  }),
+  remove_provider: z.object({
+    provider_id: slugSchema,
+    force: z.boolean().default(false),
+  }),
 } satisfies Record<CommandKind, z.ZodType>;
 
 export type SupportedCommandKind = keyof typeof commandPayloadSchemas;
@@ -572,5 +624,28 @@ export function createContractExamplePayloads(): Record<CommandKind, Record<stri
     sync_mcp_tools: buildSyncMcpToolsPayload({
       provider_id: "p_contract",
     }),
+    add_provider: {
+      provider_id: "p_contract",
+      name: "Contract Provider",
+      kind: "tool",
+      executor: "mcp",
+      default_strategy: "failover",
+      enabled: true,
+      config: {},
+      command: "python",
+      args: ["-m", "fake_server"],
+      auth: "none",
+      exposure: "auto",
+    },
+    update_provider: {
+      provider_id: "p_contract",
+      name: "Contract Provider Updated",
+      enabled: true,
+      default_strategy: "round_robin",
+    },
+    remove_provider: {
+      provider_id: "p_contract",
+      force: true,
+    },
   };
 }
