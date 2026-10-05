@@ -6,6 +6,20 @@ Multiple client sessions can connect to **one running Farm process** concurrentl
 
 ---
 
+## 0. One-time setup (first run on a PC, and after every update)
+
+```powershell
+uv run farm db migrate --local                          # create / upgrade the Farm database (embedded Postgres)
+uv run farm mcp import --from claude-code --dry-run     # see which of your MCP servers would be imported (names only)
+uv run farm mcp import --from claude-code               # import them: providers into config/registry.yaml, secrets into .env
+uv run farm registry sync --local                       # load config/registry.yaml (providers, accounts, capabilities) into the database
+```
+
+Also available: `--from claude-desktop` and `--from codex`. Run `farm db migrate` again after any update that adds a migration —
+`farm run` refuses to start on an old schema ("the database has no Farm schema yet").
+
+---
+
 ## 1. Start the Farm
 
 Start the always-on shared endpoint:
