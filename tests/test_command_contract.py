@@ -32,6 +32,10 @@ EXPECTED_KINDS = {
     "set_route",
     "test_connection",
     "ack_alert",
+    "cancel_ai_job",
+    "set_max_parallel",
+    "set_mcp_tool_access",
+    "sync_mcp_tools",
 }
 
 

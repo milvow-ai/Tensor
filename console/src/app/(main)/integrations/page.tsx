@@ -1,27 +1,27 @@
 import { Blocks } from "lucide-react";
 import type { Metadata } from "next";
 
-import { ComingSoon } from "@/components/farm/coming-soon";
+import { PageHeader } from "@/components/farm/page-header";
+import { getIntegrationsList } from "@/lib/farm/integrations-data";
 
-export const metadata: Metadata = { title: "Integrations" };
+import { IntegrationsView } from "./_components/integrations-view";
 
-export default function IntegrationsPage() {
+export const metadata: Metadata = {
+  title: "Integrations",
+  description: "Manage connected MCP servers, OpenAPI APIs, and AI CLI accounts.",
+};
+
+export default async function IntegrationsPage() {
+  const integrations = await getIntegrationsList();
+
   return (
-    <ComingSoon
-      title="Integrations"
-      description="Connect new tools and APIs to the Farm."
-      milestone="C3"
-      icon={Blocks}
-      will={[
-        "Add an MCP server or REST API from a form generated from the registry schema.",
-        "Map its tools to Farm capabilities.",
-        "Run Test connection and see the result before the integration goes live.",
-      ]}
-      today={{
-        text: "New accounts for an existing pool can be added now from the pool page.",
-        href: "/pools/tools",
-        label: "Open Tools & Pools",
-      }}
-    />
+    <div className="space-y-6">
+      <PageHeader
+        title="Integrations"
+        description="Every MCP server, OpenAPI provider, and AI account connected to Harness Farm."
+        icon={Blocks}
+      />
+      <IntegrationsView initialIntegrations={integrations} />
+    </div>
   );
 }

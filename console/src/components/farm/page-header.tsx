@@ -14,12 +14,14 @@ export function PageHeader({
   crumbs,
   actions,
   badge,
+  icon: Icon,
 }: {
   title: string;
   description?: React.ReactNode;
   crumbs?: Crumb[];
   actions?: React.ReactNode;
   badge?: React.ReactNode;
+  icon?: React.ComponentType<{ className?: string }>;
 }) {
   return (
     <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -44,6 +46,7 @@ export function PageHeader({
           </nav>
         ) : null}
         <div className="flex flex-wrap items-center gap-2">
+          {Icon ? <Icon className="size-5 text-muted-foreground" aria-hidden="true" /> : null}
           <h1 className="font-semibold text-xl tracking-tight sm:text-2xl">{title}</h1>
           {badge}
         </div>

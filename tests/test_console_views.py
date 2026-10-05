@@ -331,7 +331,7 @@ def test_console_views_migration_downgrade_and_upgrade(scratch_db: Any) -> None:
 
 
 def test_c2_views_migration_downgrade_and_upgrade(scratch_db: Any) -> None:
-    """0006_c2_views adds the five Billing/Runs views on top of 0003's five and drops only its own on downgrade."""
+    """0006_c2_views adds the five Billing/Runs views on top of 0003's five; below 0006 only 0003's remain."""
     url = scratch_db()
     cfg = alembic_config(url)
     c2_views = {"v_spend_daily", "v_cost_per_result", "v_renewals", "v_idle_paid", "v_run_detail"}
@@ -342,10 +342,12 @@ def test_c2_views_migration_downgrade_and_upgrade(scratch_db: Any) -> None:
         return {r[0] for r in rows if r[0].startswith("v_")}
 
     command.upgrade(cfg, "head")
-    assert c2_views <= views() and len(views()) == 10
+    at_head = views()
+    assert c2_views <= at_head
 
     command.downgrade(cfg, "0005")
-    assert not (c2_views & views()) and len(views()) == 5
+    after = views()
+    assert not (c2_views & after) and len(after) == 5  # only the five 0003 views remain below 0006
 
     command.upgrade(cfg, "head")
-    assert c2_views <= views() and len(views()) == 10
+    assert views() == at_head

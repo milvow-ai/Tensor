@@ -10,31 +10,8 @@ import { type CommandKind, POOL_STRATEGIES, type PoolStrategy } from "./types";
 const ENV_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,39}$/;
 
-// Prefixes and shapes of well-known secret formats. Anything matching is refused with a specific message.
-const SECRET_SHAPES: RegExp[] = [
-  /^sk[-_]/i,
-  /^pk[-_]/i,
-  /^rk[-_]/i,
-  /^(ghp|gho|ghs|ghu|github_pat)_/i,
-  /^xox[abprs]-/i,
-  /^AKIA[0-9A-Z]{8,}/,
-  /^AIza[0-9A-Za-z_-]{10,}/,
-  /^eyJ[0-9A-Za-z_-]{6,}/,
-  /^bearer\s/i,
-  /^[A-Za-z0-9+/_-]{32,}={0,2}$/,
-];
-
-/** True when the text looks like a key or token rather than an environment-variable name. */
-export function looksLikeSecret(value: string): boolean {
-  const text = value.trim();
-  if (!text) return false;
-  if (SECRET_SHAPES.some((shape) => shape.test(text))) return true;
-  // A real env-var name is UPPER_SNAKE; mixed case with digits and no separators reads like a key.
-  return text.length >= 20 && /[a-z]/.test(text) && /[A-Z]/.test(text) && /\d/.test(text);
-}
-
-export const SECRET_REFUSAL =
-  "This looks like a secret, not a name. Enter only the environment-variable NAME. Keys never go through the Console.";
+import { looksLikeSecret, SECRET_REFUSAL } from "./redact";
+export { looksLikeSecret, SECRET_REFUSAL };
 
 export const envNameSchema = z
   .string()
@@ -233,6 +210,23 @@ export const commandPayloadSchemas = {
   ack_alert: z.object({
     alert_id: z.string().min(1).max(64),
   }),
+  cancel_ai_job: z.object({
+    job_id: z.string().min(1).max(64),
+  }),
+  set_max_parallel: z.object({
+    connection_id: connectionId.nullable().optional(),
+    provider_id: connectionId.nullable().optional(),
+    max_parallel: z.number().int().min(1).max(100),
+  }),
+  set_mcp_tool_access: z.object({
+    provider_id: connectionId,
+    tool: z.string().min(1).max(200),
+    enabled: z.boolean().default(true),
+    access: z.enum(["allow", "deny"]).optional(),
+  }),
+  sync_mcp_tools: z.object({
+    provider_id: connectionId.nullable().optional(),
+  }),
 } satisfies Record<CommandKind, z.ZodType>;
 
 export type SupportedCommandKind = keyof typeof commandPayloadSchemas;
@@ -430,6 +424,56 @@ export function buildAckAlertPayload(args: AckAlertArgs) {
   };
 }
 
+export interface CancelAiJobArgs {
+  job_id: string;
+}
+
+export function buildCancelAiJobPayload(args: CancelAiJobArgs) {
+  return {
+    job_id: args.job_id,
+  };
+}
+
+export interface SetMaxParallelArgs {
+  connection_id?: string | null;
+  provider_id?: string | null;
+  max_parallel: number;
+}
+
+export function buildSetMaxParallelPayload(args: SetMaxParallelArgs) {
+  return {
+    ...(args.connection_id ? { connection_id: args.connection_id } : {}),
+    ...(args.provider_id ? { provider_id: args.provider_id } : {}),
+    max_parallel: args.max_parallel,
+  };
+}
+
+export interface SetMcpToolAccessArgs {
+  provider_id: string;
+  tool: string;
+  enabled?: boolean;
+  access?: "allow" | "deny";
+}
+
+export function buildSetMcpToolAccessPayload(args: SetMcpToolAccessArgs) {
+  return {
+    provider_id: args.provider_id,
+    tool: args.tool,
+    enabled: args.enabled ?? (args.access === "allow" || args.access === undefined),
+    ...(args.access ? { access: args.access } : {}),
+  };
+}
+
+export interface SyncMcpToolsArgs {
+  provider_id?: string | null;
+}
+
+export function buildSyncMcpToolsPayload(args: SyncMcpToolsArgs) {
+  return {
+    ...(args.provider_id ? { provider_id: args.provider_id } : {}),
+  };
+}
+
 export const commandBuilders = {
   pause: buildPausePayload,
   resume: buildResumePayload,
@@ -442,6 +486,10 @@ export const commandBuilders = {
   set_route: buildSetRoutePayload,
   test_connection: buildTestConnectionPayload,
   ack_alert: buildAckAlertPayload,
+  cancel_ai_job: buildCancelAiJobPayload,
+  set_max_parallel: buildSetMaxParallelPayload,
+  set_mcp_tool_access: buildSetMcpToolAccessPayload,
+  sync_mcp_tools: buildSyncMcpToolsPayload,
 };
 
 export function createContractExamplePayloads(): Record<CommandKind, Record<string, unknown>> {
@@ -508,6 +556,21 @@ export function createContractExamplePayloads(): Record<CommandKind, Record<stri
     }),
     ack_alert: buildAckAlertPayload({
       alert_id: "a0000000-0000-0000-0000-000000000001",
+    }),
+    cancel_ai_job: buildCancelAiJobPayload({
+      job_id: "00000000-0000-0000-0000-000000000001",
+    }),
+    set_max_parallel: buildSetMaxParallelPayload({
+      connection_id: "c_contract",
+      max_parallel: 2,
+    }),
+    set_mcp_tool_access: buildSetMcpToolAccessPayload({
+      provider_id: "p_contract",
+      tool: "query_records",
+      enabled: true,
+    }),
+    sync_mcp_tools: buildSyncMcpToolsPayload({
+      provider_id: "p_contract",
     }),
   };
 }

@@ -3,7 +3,6 @@
 import { useState } from "react";
 
 import {
-  AlertCircle,
   ArrowRight,
   Check,
   CheckCircle2,
@@ -32,7 +31,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { DASH, fmtAbsolute, fmtDuration, fmtUsd } from "@/lib/farm/format";
 import { redactJson } from "@/lib/farm/redact";
 import { RUN_STATUS_META } from "@/lib/farm/state";
-import type { RunDetailRow, RunEventKind, RunEventRow } from "@/lib/farm/types";
+import type { RunDetailRow, RunEventKind } from "@/lib/farm/types";
 
 function EventIcon({ kind }: { kind: RunEventKind }) {
   switch (kind) {
@@ -102,7 +101,7 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
       {/* Run Summary Card */}
       <Card>
         <CardHeader className="pb-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Summary</h2>
+          <h2 className="mb-1 font-semibold text-muted-foreground text-xs uppercase tracking-wider">Summary</h2>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
               <CardTitle className="font-mono text-base">{run.capability}</CardTitle>
@@ -111,7 +110,7 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
             </div>
             <div className="text-muted-foreground text-xs">
               Started <RelativeTime iso={run.started_at} /> via{" "}
-              <span className="font-mono font-medium">{run.caller}</span>
+              <span className="font-medium font-mono">{run.caller}</span>
             </div>
           </div>
           <CardDescription>Outcome and routing metadata recorded by the Farm.</CardDescription>
@@ -128,7 +127,7 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
                 {run.connection_id ? (
                   <span>
                     {run.connection_label ?? run.connection_id}
-                    <span className="text-muted-foreground text-[11px] block font-mono">({run.connection_id})</span>
+                    <span className="block font-mono text-[11px] text-muted-foreground">({run.connection_id})</span>
                   </span>
                 ) : (
                   DASH
@@ -161,7 +160,7 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
       {/* Trajectory Timeline Stepper */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-semibold">Event Trajectory Timeline</CardTitle>
+          <CardTitle className="font-semibold text-sm">Event Trajectory Timeline</CardTitle>
           <CardDescription>
             Step-by-step decisions: planning, candidate ranking, reservations, execution, fallbacks and commits.
           </CardDescription>
@@ -182,7 +181,7 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
                 return (
                   <div key={evt.id} className="relative pb-6 last:pb-1" data-testid={`event-step-${evt.kind}`}>
                     {/* Stepper Dot */}
-                    <div className="absolute -left-6 top-0 flex size-5 items-center justify-center rounded-full border bg-background shadow-xs">
+                    <div className="absolute top-0 -left-6 flex size-5 items-center justify-center rounded-full border bg-background shadow-xs">
                       <EventIcon kind={evt.kind} />
                     </div>
 
@@ -193,7 +192,7 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
                             {evt.kind.replace("_", " ")}
                           </span>
                           {evt.connection_id ? (
-                            <span className="font-mono text-muted-foreground text-[11px]">({evt.connection_id})</span>
+                            <span className="font-mono text-[11px] text-muted-foreground">({evt.connection_id})</span>
                           ) : null}
                         </div>
                         <div className="flex items-center gap-2 text-[11px] text-muted-foreground tabular-nums">
@@ -207,7 +206,7 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
                       {/* Fallback highlight */}
                       {isFallback ? (
                         <div
-                          className="mt-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-800 dark:text-amber-300"
+                          className="mt-1 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-amber-800 text-xs dark:text-amber-300"
                           data-testid="fallback-reason-block"
                         >
                           <div className="flex items-center gap-1.5 font-semibold">
@@ -223,7 +222,7 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
                             <div className="mt-1.5 flex items-center gap-1 text-[11px] opacity-80">
                               <span className="font-mono">{String(evt.data.from)}</span>
                               <ArrowRight className="size-3" />
-                              <span className="font-mono font-medium">{String(evt.data.to)}</span>
+                              <span className="font-medium font-mono">{String(evt.data.to)}</span>
                             </div>
                           ) : null}
                         </div>
@@ -255,11 +254,11 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
         <Collapsible open={jsonOpen} onOpenChange={setJsonOpen}>
           <CardHeader className="flex flex-row items-center justify-between pb-3">
             <div>
-              <CardTitle className="text-sm font-semibold">Result Envelope</CardTitle>
+              <CardTitle className="font-semibold text-sm">Result Envelope</CardTitle>
               <CardDescription>Collapsible JSON viewer with secrets redacted by construction.</CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={copyJson}>
+              <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={copyJson}>
                 {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
                 <span>{copied ? "Copied" : "Copy JSON"}</span>
               </Button>
@@ -283,7 +282,7 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
       {/* Evidence Viewer */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-semibold">Evidence & Artifacts</CardTitle>
+          <CardTitle className="font-semibold text-sm">Evidence & Artifacts</CardTitle>
           <CardDescription>Thumbnails and captured artifacts stored on Supabase Storage or Farm PC.</CardDescription>
         </CardHeader>
         <CardContent>
@@ -295,13 +294,13 @@ export function RunDetailView({ run }: { run: RunDetailRow }) {
                     <span className="font-mono text-muted-foreground">{id.slice(0, 8)}</span>
                     <ToneBadge tone="ok">Captured</ToneBadge>
                   </div>
-                  <div className="flex h-32 items-center justify-center rounded bg-muted/30 border border-dashed">
+                  <div className="flex h-32 items-center justify-center rounded border border-dashed bg-muted/30">
                     <div className="flex flex-col items-center gap-1.5 text-muted-foreground text-xs">
                       <ImageIcon className="size-6 opacity-60" />
                       <span>Evidence thumbnail</span>
                     </div>
                   </div>
-                  <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" asChild>
+                  <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" asChild>
                     <a href={`/evidence/${id}`} target="_blank" rel="noopener noreferrer">
                       <span>View original capture</span>
                       <ExternalLink className="size-3" />

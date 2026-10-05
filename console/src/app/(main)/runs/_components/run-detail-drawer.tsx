@@ -54,12 +54,12 @@ export function RunDetailDrawer({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto p-4 sm:p-6">
+      <SheetContent side="right" className="w-full overflow-y-auto p-4 sm:max-w-2xl sm:p-6">
         <SheetHeader className="pb-2">
           <div className="flex items-center justify-between pr-6">
-            <SheetTitle className="text-base font-mono">Run {runId ? runId.slice(0, 8) : ""}</SheetTitle>
+            <SheetTitle className="font-mono text-base">Run {runId ? runId.slice(0, 8) : ""}</SheetTitle>
             {runId ? (
-              <Button size="sm" variant="ghost" className="h-7 text-xs gap-1.5" asChild>
+              <Button size="sm" variant="ghost" className="h-7 gap-1.5 text-xs" asChild>
                 <Link href={`/runs/${runId}`}>
                   <span>Full page</span>
                   <ExternalLink className="size-3" />

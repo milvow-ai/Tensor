@@ -1,0 +1,5 @@
+{
+  "provider_id": "p_contract",
+  "tool": "query_records",
+  "enabled": true
+}

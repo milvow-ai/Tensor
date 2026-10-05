@@ -1,27 +1,32 @@
 import { ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
 
-import { ComingSoon } from "@/components/farm/coming-soon";
+import { PageHeader } from "@/components/farm/page-header";
+import { getFarmData } from "@/lib/farm/data";
 
-export const metadata: Metadata = { title: "Policies & Budgets" };
+import { PoliciesView } from "./_components/policies-view";
 
-export default function PoliciesPage() {
+export const metadata: Metadata = {
+  title: "Policies & Budgets",
+  description: "Global and per-provider spending caps, hard stop thresholds, and audit log.",
+};
+
+export default async function PoliciesPage() {
+  const farmData = await getFarmData();
+  const [budgets, overview, auditPage] = await Promise.all([
+    farmData.listBudgets(),
+    farmData.getOverview(),
+    farmData.listAuditEvents({ pageSize: 50 }),
+  ]);
+
   return (
-    <ComingSoon
-      title="Policies & Budgets"
-      description="Spending caps, hard stops and alert thresholds."
-      milestone="C3"
-      icon={ShieldCheck}
-      will={[
-        "Set a monthly cap per provider, per account and for the whole Farm, with an optional hard stop.",
-        "Choose the usage levels that raise alerts (50, 80 and 100 percent by default).",
-        "See which calls a policy blocked and why.",
-      ]}
-      today={{
-        text: "Budgets already apply in the Farm. Their effect shows as blocked runs and budget alerts on Overview.",
-        href: "/overview",
-        label: "Open Overview",
-      }}
-    />
+    <div className="space-y-6">
+      <PageHeader
+        title="Policies & Budgets"
+        description="Global spending caps, per-provider hard stops, alert thresholds, and security policies."
+        icon={ShieldCheck}
+      />
+      <PoliciesView initialBudgets={budgets} spendMonth={overview.spend} initialAuditEvents={auditPage.items} />
+    </div>
   );
 }

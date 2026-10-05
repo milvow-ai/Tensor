@@ -1,27 +1,58 @@
 import { GitFork } from "lucide-react";
 import type { Metadata } from "next";
 
-import { ComingSoon } from "@/components/farm/coming-soon";
+import { PageHeader } from "@/components/farm/page-header";
+import { getFarmData } from "@/lib/farm/data";
 
-export const metadata: Metadata = { title: "Routing" };
+import { RoutingView } from "./_components/routing-view";
 
-export default function RoutingPage() {
+export const metadata: Metadata = {
+  title: "Routing",
+  description: "Configure pool order, strategies, and cache TTL per capability.",
+};
+
+export default async function RoutingPage() {
+  const farmData = await getFarmData();
+  const routes = await farmData.listRoutes();
+
+  // Load account previews for all unique pools in routes
+  const poolIds = Array.from(new Set(routes.map((r) => r.provider_id)));
+  const accountsByPool: Record<
+    string,
+    Array<{
+      id: string;
+      label: string;
+      status: string;
+      remaining: number | null;
+      unit: string | null;
+      latencyMs: number | null;
+      circuit: string;
+    }>
+  > = {};
+
+  await Promise.all(
+    poolIds.map(async (poolId) => {
+      const page = await farmData.listConnections(poolId, { pageSize: 50 });
+      accountsByPool[poolId] = page.items.map((conn) => ({
+        id: conn.id,
+        label: conn.label,
+        status: conn.status,
+        remaining: conn.units[0]?.remaining ?? null,
+        unit: conn.units[0]?.unit ?? null,
+        latencyMs: conn.health.latencyMsP50,
+        circuit: conn.health.circuit,
+      }));
+    }),
+  );
+
   return (
-    <ComingSoon
-      title="Routing"
-      description="Which pools serve which capability, and in what order."
-      milestone="C3"
-      icon={GitFork}
-      will={[
-        "Reorder the pools a capability tries, and enable or disable a step.",
-        "Set the default strategy per capability.",
-        "Preview the route before saving it; changes go through the command queue like every other control.",
-      ]}
-      today={{
-        text: "The current routes are drawn on Overview under How a request flows. A pool's own strategy can be changed on its page today.",
-        href: "/overview",
-        label: "Open Overview",
-      }}
-    />
+    <div className="space-y-6">
+      <PageHeader
+        title="Routing"
+        description="Which pools serve each capability, in what order, and with what default strategy."
+        icon={GitFork}
+      />
+      <RoutingView initialRoutes={routes} accountsByPool={accountsByPool} />
+    </div>
   );
 }

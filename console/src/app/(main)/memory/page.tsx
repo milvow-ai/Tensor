@@ -1,27 +1,31 @@
 import { Database } from "lucide-react";
 import type { Metadata } from "next";
 
-import { ComingSoon } from "@/components/farm/coming-soon";
+import { PageHeader } from "@/components/farm/page-header";
+import { getFarmData } from "@/lib/farm/data";
 
-export const metadata: Metadata = { title: "Memory & Evidence" };
+import { MemoryView } from "./_components/memory-view";
 
-export default function MemoryPage() {
+export const metadata: Metadata = {
+  title: "Memory & Evidence",
+  description: "Browse verified entity facts, provenance, and captured evidence artifacts.",
+};
+
+export default async function MemoryPage() {
+  const farmData = await getFarmData();
+  const [factsPage, evidencePage] = await Promise.all([
+    farmData.listFacts({ pageSize: 100 }),
+    farmData.listEvidence({ pageSize: 100 }),
+  ]);
+
   return (
-    <ComingSoon
-      title="Memory & Evidence"
-      description="What the Farm has learned, and the proof behind it."
-      milestone="C3"
-      icon={Database}
-      will={[
-        "Browse entities and their facts with source account, confidence and freshness.",
-        "Open the screenshots and captures that back a fact, with their hashes.",
-        "See which facts are stale and what it would cost to refresh them.",
-      ]}
-      today={{
-        text: "Facts and evidence are stored by the Farm already; this page is the viewer for them. Run history is on Overview.",
-        href: "/overview",
-        label: "Open Overview",
-      }}
-    />
+    <div className="space-y-6">
+      <PageHeader
+        title="Memory & Evidence"
+        description="What the Farm has learned, facts with source provenance, and verifiable evidence."
+        icon={Database}
+      />
+      <MemoryView initialFacts={factsPage.items} initialEvidence={evidencePage.items} />
+    </div>
   );
 }

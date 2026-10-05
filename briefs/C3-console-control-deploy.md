@@ -89,3 +89,18 @@ enqueues `add_connection`; policies budget edit; facts freshness badges); secret
 
 ## Reply (≤ 15 lines)
 Files/areas; check + e2e tails; Lighthouse scores; secret grep result; deviations; deploy steps for the lead.
+
+## Resume note (lead, 2026-10-05 ~11:15)
+The first run (Gemini) stopped at the 40-minute print timeout; its partial work is in `git status` (≈32 files). Keep what is right and finish.
+- `pnpm check` fails on TypeScript: lucide-react has no `CommandLine` icon (use `SquareTerminal`/`Terminal`); the shared page header component has
+  no `icon` prop but 6 pages pass one (either drop it or add an optional `icon` to that component and use it consistently on every page);
+  `src/lib/farm/__tests__/render-check.test.ts` renders the preferences provider without its required `children`. Also clean the Biome warnings in new files.
+- **OPEN1 and AIP2 are now merged into this worktree.** Reconcile `console/src/lib/farm/integrations-data.ts` and the fixtures with the real schema
+  and names: `farm/db/migrations/versions/0007_ai_jobs.py`, `0008_mcp_tools.py`, `farm/registry/models.py` (MCP provider spec), tools in
+  `farm/gateway/ai_tools.py` + `farm/gateway/mcp_tools.py`. Write `console/sql/views_c3.sql` against those real tables (no migration; the lead wraps it).
+- Console actions with no Farm command yet: add command kinds to `farm/control/commands.py` (the INT1 Pydantic contract) + handlers in the command
+  consumer calling the existing functions, with tests, and regenerate the Console's command contract: `cancel_ai_job`, `set_max_parallel`,
+  `set_mcp_tool_access` (allow/deny one tool), `sync_mcp_tools`, and `test_connection` if missing. You may edit `farm/control/commands.py`, the
+  consumer module and add `tests/test_commands_c3.py` for this.
+- Then in this order: the Radix Slot bug (root cause), the screens left in the brief, e2e in `console/e2e/`, Lighthouse, secret grep, screenshots.
+- Run every command in the foreground and wait for it; never start one in the background and poll it.

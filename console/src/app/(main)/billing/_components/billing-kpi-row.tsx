@@ -94,10 +94,11 @@ export function BillingKpiRow({
         >
           <div className="flex flex-col gap-1.5">
             <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="inline-flex cursor-help items-center gap-1 text-muted-foreground text-xs hover:text-foreground">
-                  <span>Method: {FORECAST_METHOD_EXPLANATION}</span>
-                </div>
+              <TooltipTrigger
+                className="inline-flex cursor-help items-center gap-1 text-muted-foreground text-xs hover:text-foreground"
+                aria-label="Forecast calculation method"
+              >
+                <span>Method: {FORECAST_METHOD_EXPLANATION}</span>
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-xs text-xs">
                 <p className="font-semibold">Forecast formula:</p>
