@@ -24,21 +24,23 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
 
         task = req.params.get("task") or req.params.get("prompt", "")
         model = req.params.get("model") or meta.get("model") or meta.get("default_model")
+        effort = req.params.get("effort") or meta.get("effort") or meta.get("default_effort")
         mode = req.params.get("mode", "answer")
         session_id = req.params.get("session_id")
         cwd = req.params.get("cwd")
         timeout_s = float(req.params.get("timeout_s", req.timeout_s))
         json_schema = req.params.get("json_schema")
 
-        ok, err_msg = self.validate_cli_identifiers(session_id=session_id, model=model)
+        ok, err_msg = self.validate_cli_identifiers(session_id=session_id, model=model, effort=effort)
         if not ok:
             return self.build_exec_result(
                 ok=False,
                 ai="claude",
                 model=str(model) if model else None,
+                effort=str(effort) if effort else None,
                 connection=req.connection,
                 error_kind=ErrorKind.BAD_REQUEST,
-                error=err_msg or "Invalid session_id or model",
+                error=err_msg or "Invalid session_id, model, or effort",
             )
 
         ok, err_msg, resolved_cwd = self.validate_confinement(req, mode, cwd)
@@ -47,6 +49,7 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
                 ok=False,
                 ai="claude",
                 model=str(model) if model else None,
+                effort=str(effort) if effort else None,
                 connection=req.connection,
                 error_kind=ErrorKind.BAD_REQUEST,
                 error=err_msg or "Confinement violation",
@@ -57,6 +60,8 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
 
         if model:
             argv.extend(["--model", str(model)])
+        if effort:
+            argv.extend(["--effort", str(effort)])
         if session_id:
             argv.extend(["--resume", str(session_id)])
         if mode == "edit":
@@ -196,6 +201,8 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
             session_id=str(sess_id) if sess_id else None,
             ai="claude",
             model=str(model) if model else None,
+            effort=str(effort) if effort else None,
+            effort_applied=True if effort else None,
             connection=req.connection,
             raw_data=data if isinstance(data, dict) else None,
             parsed_json=parsed_json,

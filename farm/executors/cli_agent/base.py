@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import IO, Any
 
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult
+
+_current_effort: ContextVar[str | None] = ContextVar("_current_effort", default=None)
 
 
 @dataclass
@@ -549,12 +552,17 @@ async def run_cli_process(
 class BaseCliAgentExecutor:
     _SAFE_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
     _SAFE_MODEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$")
+    ALLOWED_EFFORTS: frozenset[str] = frozenset({"low", "medium", "high", "xhigh", "max"})
+
+    async def execute(self, req: ExecRequest) -> ExecResult:
+        raise NotImplementedError
+
 
     @classmethod
     def validate_cli_identifiers(
-        cls, *, session_id: Any = None, model: Any = None
+        cls, *, session_id: Any = None, model: Any = None, effort: Any = None
     ) -> tuple[bool, str | None]:
-        """Validate session_id and model against safe argv patterns to prevent flag injection."""
+        """Validate session_id, model, and effort against safe argv patterns to prevent flag injection."""
         if session_id is not None:
             s_str = str(session_id)
             if not cls._SAFE_IDENTIFIER_PATTERN.match(s_str):
@@ -563,15 +571,19 @@ class BaseCliAgentExecutor:
             m_str = str(model)
             if not cls._SAFE_MODEL_PATTERN.match(m_str):
                 return False, f"Invalid model: {model!r}"
+        if effort is not None:
+            e_str = str(effort)
+            if e_str not in cls.ALLOWED_EFFORTS:
+                return False, f"Invalid effort: {effort!r} (must be one of {sorted(cls.ALLOWED_EFFORTS)})"
         return True, None
 
     @staticmethod
     def get_param(req: ExecRequest, key: str, default: Any = None) -> Any:
         return req.params.get(key, default)
 
-    @staticmethod
+    @classmethod
     def validate_confinement(
-        req: ExecRequest, mode: str, cwd: str | Path | None
+        cls, req: ExecRequest, mode: str, cwd: str | Path | None
     ) -> tuple[bool, str | None, Path | None]:
         """Validate edit mode confinement according to SEC1 rules.
 
@@ -579,6 +591,13 @@ class BaseCliAgentExecutor:
         inside an allowed root (meta.edit_roots, default FARM_DATA_DIR/workspaces).
         Never mkdir a caller path.
         """
+        effort = req.params.get("effort")
+        if effort is not None:
+            ok, err_msg = cls.validate_cli_identifiers(effort=effort)
+            if not ok:
+                return False, err_msg, None
+        _current_effort.set(str(effort) if effort is not None else None)
+
         if mode == "edit":
             meta = req.connection.meta or {}
             allow_edit = meta.get("allow_edit")
@@ -665,6 +684,8 @@ class BaseCliAgentExecutor:
         session_id: str | None = None,
         ai: str,
         model: str | None = None,
+        effort: str | None = None,
+        effort_applied: bool | None = None,
         connection: ConnectionView,
         raw_data: dict[str, Any] | None = None,
         parsed_json: Any = None,
@@ -678,6 +699,11 @@ class BaseCliAgentExecutor:
         cost_usd = extract_cost_usd(raw_data)
         latency_ms = int(duration_s * 1000)
 
+        effective_effort = effort if effort is not None else _current_effort.get()
+        effective_effort_applied = effort_applied
+        if effective_effort is not None and effective_effort_applied is None:
+            effective_effort_applied = False if ai in ("gemini", "agy", "hermes") else True
+
         data: dict[str, Any] | None = None
         if ok or text:
             data = {
@@ -685,6 +711,8 @@ class BaseCliAgentExecutor:
                 "json": parsed_json,
                 "ai": ai,
                 "model": model,
+                "effort": effective_effort,
+                "effort_applied": effective_effort_applied,
                 "connection_id": connection.id,
                 "session_id": session_id,
                 "usage": units_used,

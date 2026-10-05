@@ -30,7 +30,7 @@ from fastmcp import FastMCP
 from fastmcp.tools import ToolResult
 from pydantic import Field, ValidationError
 
-from farm.ai.accounts import list_ai_accounts
+from farm.ai.accounts import list_ai_accounts, load_accounts
 from farm.ai.failures import AiRequestError
 from farm.ai.jobs import JobManager
 from farm.capabilities.schemas import (
@@ -38,6 +38,7 @@ from farm.capabilities.schemas import (
     MAX_BATCH_JOBS,
     MAX_JOB_TIMEOUT_S,
     MAX_TASK_CHARS,
+    AiEffort,
     AiJobSpec,
     AiMode,
     AiProvider,
@@ -132,9 +133,38 @@ async def register_ai_tools(
 
     @server.tool(annotations={"readOnlyHint": True})
     async def list_ais() -> dict[str, Any]:
-        """List the AIs and their accounts: status, login state, models, limit/reset time, calls today,
-        active and queued jobs and the parallel jobs each account takes (max_parallel)."""
-        return await list_ai_accounts(ctx.pool, ctx.clock())
+        """List the AIs and their accounts: status, login state, models, supported efforts, limit/reset time,
+        calls today, active and queued jobs and the parallel jobs each account takes (max_parallel)."""
+        report = await list_ai_accounts(ctx.pool, ctx.clock())
+        accounts = await load_accounts(ctx.pool)
+        meta_by_id = {a.id: (a.ai, a.meta) for a in accounts}
+
+        def _efforts_for(ai: str, meta: Any) -> list[str]:
+            raw = (
+                meta.get("efforts")
+                if isinstance(meta, dict)
+                else getattr(meta, "get", lambda k: None)("efforts")
+            )
+            if isinstance(raw, list):
+                return [str(e) for e in raw]
+            if isinstance(raw, str):
+                return [raw]
+            if ai == "claude":
+                return ["low", "medium", "high", "xhigh", "max"]
+            if ai == "codex":
+                return ["low", "medium", "high"]
+            return []
+
+        for acc in report.get("accounts", []):
+            ai, meta = meta_by_id.get(acc["id"], (acc.get("provider_id", ""), {}))
+            acc["efforts"] = _efforts_for(ai, meta)
+
+        for provider in report.get("ais", []):
+            for acc in provider.get("accounts", []):
+                ai, meta = meta_by_id.get(acc["id"], (provider.get("id", ""), {}))
+                acc["efforts"] = _efforts_for(ai, meta)
+
+        return report
 
     @server.tool()
     async def ask_ai_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -170,6 +200,15 @@ async def register_ai_tools(
             ),
         ] = None,
         model: Annotated[str | None, Field(description="Model name; the account must offer it.")] = None,
+        effort: Annotated[
+            AiEffort | None,
+            Field(
+                description=(
+                    "Reasoning effort: low, medium, high, xhigh, max. Supported by Claude and Codex "
+                    "(xhigh/max map to high); ignored by Gemini/Hermes."
+                )
+            ),
+        ] = None,
         mode: Annotated[
             AiMode,
             Field(
@@ -208,6 +247,7 @@ async def register_ai_tools(
                 ai=ai,
                 account=account,
                 model=model,
+                effort=effort,
                 mode=mode,
                 cwd=cwd,
                 conversation_id=conversation_id,
@@ -367,6 +407,14 @@ async def register_ai_tools(
         timeout_s: Annotated[
             int | None, Field(ge=1, le=MAX_JOB_TIMEOUT_S, description="Default: the last job's timeout.")
         ] = None,
+        effort: Annotated[
+            AiEffort | None,
+            Field(
+                description=(
+                    "Reasoning effort: low, medium, high, xhigh, max. Default: carry over from conversation."
+                )
+            ),
+        ] = None,
     ) -> ToolResult:
         """Send a follow-up to the same worker: a new job on the same account and native session.
 
@@ -375,7 +423,9 @@ async def register_ai_tools(
         """
         try:
             (parsed,) = _uuids([conversation_id], "conversation_id")
-            started = await mgr.reply(parsed, message, timeout_s=timeout_s, caller=current_caller.get())
+            started = await mgr.reply(
+                parsed, message, timeout_s=timeout_s, effort=effort, caller=current_caller.get()
+            )
         except ValidationError as exc:
             return _refused(AiRequestError("bad_request", _problems(exc)))
         except AiRequestError as exc:

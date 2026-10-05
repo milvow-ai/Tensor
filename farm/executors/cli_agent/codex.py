@@ -27,21 +27,23 @@ class CodexCliExecutor(BaseCliAgentExecutor):
 
         task = str(req.params.get("task") or req.params.get("prompt", ""))
         model = req.params.get("model") or meta.get("model") or meta.get("default_model")
+        effort = req.params.get("effort") or meta.get("effort") or meta.get("default_effort")
         mode = req.params.get("mode", "answer")
         session_id = req.params.get("session_id")
         cwd = req.params.get("cwd")
         timeout_s = float(req.params.get("timeout_s", req.timeout_s))
         json_schema = req.params.get("json_schema")
 
-        ok, err_msg = self.validate_cli_identifiers(session_id=session_id, model=model)
+        ok, err_msg = self.validate_cli_identifiers(session_id=session_id, model=model, effort=effort)
         if not ok:
             return self.build_exec_result(
                 ok=False,
                 ai="codex",
                 model=str(model) if model else None,
+                effort=str(effort) if effort else None,
                 connection=req.connection,
                 error_kind=ErrorKind.BAD_REQUEST,
-                error=err_msg or "Invalid session_id or model",
+                error=err_msg or "Invalid session_id, model, or effort",
             )
 
         ok, err_msg, resolved_cwd = self.validate_confinement(req, mode, cwd)
@@ -50,6 +52,7 @@ class CodexCliExecutor(BaseCliAgentExecutor):
                 ok=False,
                 ai="codex",
                 model=str(model) if model else None,
+                effort=str(effort) if effort else None,
                 connection=req.connection,
                 error_kind=ErrorKind.BAD_REQUEST,
                 error=err_msg or "Confinement violation",
@@ -76,6 +79,11 @@ class CodexCliExecutor(BaseCliAgentExecutor):
 
         if model:
             argv.extend(["-m", str(model)])
+
+        if effort:
+            effort_str = str(effort).lower()
+            mapped_effort = "high" if effort_str in ("xhigh", "max") else effort_str
+            argv.extend(["-c", f"model_reasoning_effort={mapped_effort}"])
 
         if mode == "edit":
             argv.extend(["--sandbox", "workspace-write"])
@@ -260,6 +268,8 @@ class CodexCliExecutor(BaseCliAgentExecutor):
             session_id=str(extracted_session_id) if extracted_session_id else None,
             ai="codex",
             model=str(model) if model else None,
+            effort=str(effort) if effort else None,
+            effort_applied=True if effort else None,
             connection=req.connection,
             raw_data=raw_data,
             parsed_json=parsed_json,

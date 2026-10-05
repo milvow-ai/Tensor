@@ -467,6 +467,8 @@ class ClassifyOut(Sourced):
 
 # --- ask_ai (AI pool) ---------------------------------------------------------------------------------
 
+AiEffort = Literal["low", "medium", "high", "xhigh", "max"]
+AI_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 AiProvider = Literal["claude", "codex", "gemini", "hermes", "any"]
 AiMode = Literal["answer", "edit"]
 
@@ -474,6 +476,16 @@ AiMode = Literal["answer", "edit"]
 class AskAiIn(_Input):
     ai: AiProvider = "any"
     model: str | None = None
+    effort: Annotated[
+        AiEffort | None,
+        Field(
+            default=None,
+            description=(
+                "Reasoning effort: low, medium, high, xhigh, max. Supported by Claude and Codex "
+                "(xhigh/max map to high); ignored by Gemini/Hermes."
+            ),
+        ),
+    ] = None
     task: str = Field(min_length=1)
     mode: AiMode = "answer"
     cwd: str | None = None
@@ -496,6 +508,8 @@ class AskAiOut(BaseModel):
     json: Any = None
     ai: str
     model: str | None = None
+    effort: AiEffort | None = None
+    effort_applied: bool | None = None
     connection_id: str
     session_id: str | None = None
     usage: dict[str, float] = Field(default_factory=dict)
@@ -555,6 +569,16 @@ class AiJobSpec(_Input):
         description="Run on exactly this account (connection id such as claude-03). Default: the Farm picks.",
     )
     model: str | None = Field(default=None, description="Model name; the account must offer it.")
+    effort: Annotated[
+        AiEffort | None,
+        Field(
+            default=None,
+            description=(
+                "Reasoning effort: low, medium, high, xhigh, max. Supported by Claude and Codex "
+                "(xhigh/max map to high); ignored by Gemini/Hermes."
+            ),
+        ),
+    ] = None
     mode: AiMode = Field(
         default="answer", description="answer = read-only; edit = may change files under cwd (if allowed)."
     )
@@ -580,6 +604,13 @@ class AiJobSpec(_Input):
         ok, problem = BaseCliAgentExecutor.validate_cli_identifiers(model=value)
         if not ok:
             raise ValueError(problem or "invalid model")
+        return value
+
+    @field_validator("effort")
+    @classmethod
+    def _safe_effort(cls, value: str | None) -> str | None:
+        if value is not None and value not in AI_EFFORTS:
+            raise ValueError(f"invalid effort: {value!r} (must be one of {AI_EFFORTS})")
         return value
 
     @field_validator("conversation_id")
@@ -627,6 +658,7 @@ class AiStarted(BaseModel):
     account: str
     ai: str
     model: str | None = None
+    effort: AiEffort | None = None
     turn: int
     state: JobState
     jobs_ahead: int | None = None
@@ -655,6 +687,7 @@ class AiJobStatus(BaseModel):
     ai: str
     account: str
     model: str | None = None
+    effort: AiEffort | None = None
     mode: AiMode
     jobs_ahead: int | None = None
     """Queued jobs only: how many jobs (running, or queued earlier) must finish on its account first."""
@@ -674,6 +707,7 @@ class AiJobResult(AiJobStatus):
     model_config = ConfigDict(populate_by_name=True)
 
     ok: bool
+    effort_applied: bool | None = None
     text: str | None = None
     text_truncated: bool = False
     """True when ``text`` is only the preview of a result larger than ``FARM_AI_RESULT_INLINE_CHARS``."""

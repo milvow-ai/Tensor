@@ -76,6 +76,7 @@ from farm.ai.failures import AiRequestError, Busy, Failure, classify, retryable_
 from farm.capabilities.schemas import (
     TERMINAL_STATES,
     AiAttempt,
+    AiEffort,
     AiFailure,
     AiJobResult,
     AiJobSpec,
@@ -115,6 +116,7 @@ class JobRecord(BaseModel):
     ai: str
     account: str
     model: str | None
+    effort: AiEffort | None = None
     mode: str
     cwd: str | None
     state: str
@@ -154,7 +156,7 @@ class JobRecord(BaseModel):
 
 
 _JOB_COLUMNS: LiteralString = (
-    "id, conversation_id, turn, ai, account, model, mode, cwd, state, timeout_s, "
+    "id, conversation_id, turn, ai, account, model, effort, mode, cwd, state, timeout_s, "
     "retry_other_account, caller, "
     "task_chars, json_schema, resume_session_id, native_session_id, owner_id, heartbeat_at, "
     "cancel_requested_at, attempts, run_id, result_path, result_chars, json_valid, json_errors, "
@@ -229,13 +231,13 @@ class JobStore:
                     await cur2.execute(
                         """
                         insert into public.ai_jobs (
-                          id, conversation_id, turn, ai, account, model, mode, cwd, timeout_s,
-                          retry_other_account, caller, task_chars, json_schema, resume_session_id,
-                          owner_id, heartbeat_at, created_at)
+                          id, conversation_id, turn, ai, account, model, effort, mode, cwd,
+                          timeout_s, retry_other_account, caller, task_chars, json_schema,
+                          resume_session_id, owner_id, heartbeat_at, created_at)
                         values (
-                          %(id)s, %(conversation)s, %(turn)s, %(ai)s, %(account)s, %(model)s, %(mode)s,
-                          %(cwd)s, %(timeout)s, %(retry)s, %(caller)s, %(chars)s, %(schema)s, %(resume)s,
-                          %(owner)s, %(now)s, %(now)s)
+                          %(id)s, %(conversation)s, %(turn)s, %(ai)s, %(account)s, %(model)s,
+                          %(effort)s, %(mode)s, %(cwd)s, %(timeout)s, %(retry)s, %(caller)s,
+                          %(chars)s, %(schema)s, %(resume)s, %(owner)s, %(now)s, %(now)s)
                         """
                         + _JOB_RETURNING,
                         {
@@ -245,6 +247,7 @@ class JobStore:
                             "ai": ai,
                             "account": account,
                             "model": spec.model,
+                            "effort": spec.effort,
                             "mode": spec.mode,
                             "cwd": spec.cwd,
                             "timeout": spec.timeout_s,
@@ -472,6 +475,7 @@ def status_of(record: JobRecord, now: datetime, jobs_ahead: int | None = None) -
             "ai": record.ai,
             "account": record.account,
             "model": record.model,
+            "effort": record.effort,
             "mode": record.mode,
             "jobs_ahead": jobs_ahead if record.state == "queued" else None,
             "elapsed_s": _elapsed_s(record, now),
@@ -504,10 +508,14 @@ async def result_of(record: JobRecord, now: datetime, *, include_text: bool = Tr
                     truncated = len(text) < len(stored)
                 else:
                     text = stored
+    effort_applied: bool | None = None
+    if record.effort is not None:
+        effort_applied = record.ai not in ("gemini", "hermes", "agy")
     return AiJobResult.model_validate(
         {
             **status_of(record, now).model_dump(),
             "ok": record.state == "succeeded",
+            "effort_applied": effort_applied,
             "text": text,
             "text_truncated": truncated,
             "note": note,
@@ -599,6 +607,7 @@ class RouterTransport:
         params: dict[str, Any] = {"task": task, "mode": job.mode, "timeout_s": job.timeout_s}
         for key, value in (
             ("model", job.model),
+            ("effort", job.effort),
             ("cwd", job.cwd),
             ("json_schema", job.json_schema),
             ("session_id", job.resume_session_id),
@@ -738,9 +747,16 @@ class JobManager:
         return started
 
     async def reply(
-        self, conversation_id: UUID, message: str, *, timeout_s: int | None, caller: str
+        self,
+        conversation_id: UUID,
+        message: str,
+        *,
+        timeout_s: int | None,
+        effort: AiEffort | None = None,
+        caller: str,
     ) -> AiStarted:
-        """The next turn of a conversation: same account and session; mode, cwd and model carry over."""
+        """The next turn of a conversation: same account and session;
+        mode, cwd, model and effort carry over."""
         conv = await self.conversations.get(conversation_id)
         if conv is None:
             raise AiRequestError("not_found", f"conversation {conversation_id} does not exist")
@@ -753,6 +769,7 @@ class JobManager:
                 account=conv.account,
             )
         last = None if conv.last_job_id is None else await self.store.get(conv.last_job_id)
+        effective_effort = effort if effort is not None else (None if last is None else last.effort)
         spec = AiJobSpec.model_validate(
             {
                 "task": message,
@@ -760,6 +777,7 @@ class JobManager:
                 "mode": "answer" if last is None else last.mode,
                 "cwd": None if last is None else last.cwd,
                 "model": None if last is None else last.model,
+                "effort": effective_effort,
                 "timeout_s": timeout_s or (900 if last is None else last.timeout_s),
             }
         )
@@ -827,6 +845,7 @@ class JobManager:
             account=record.account,
             ai=record.ai,
             model=record.model,
+            effort=record.effort,
             turn=record.turn,
             state="queued",
             jobs_ahead=ahead,
