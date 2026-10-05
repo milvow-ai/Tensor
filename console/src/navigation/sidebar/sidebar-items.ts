@@ -35,29 +35,29 @@ export const sidebarItems: NavGroup[] = [
       { id: "overview", title: "Overview", url: "/overview", icon: LayoutDashboard },
       { id: "tools-pools", title: "Tools & Pools", url: "/pools/tools", icon: Wrench },
       { id: "ai-pools", title: "AI Pools", url: "/pools/ai", icon: Bot },
-      { id: "runs", title: "Runs", url: "/runs", icon: Activity, badge: "Soon" },
+      { id: "runs", title: "Runs", url: "/runs", icon: Activity },
     ],
   },
   {
     id: 2,
     label: "Control",
     items: [
-      { id: "routing", title: "Routing", url: "/routing", icon: GitFork, badge: "Soon" },
-      { id: "policies", title: "Policies & Budgets", url: "/policies", icon: ShieldCheck, badge: "Soon" },
-      { id: "billing", title: "Billing", url: "/billing", icon: CreditCard, badge: "Soon" },
+      { id: "routing", title: "Routing", url: "/routing", icon: GitFork },
+      { id: "policies", title: "Policies & Budgets", url: "/policies", icon: ShieldCheck },
+      { id: "billing", title: "Billing", url: "/billing", icon: CreditCard },
     ],
   },
   {
     id: 3,
     label: "Data",
-    items: [{ id: "memory", title: "Memory & Evidence", url: "/memory", icon: Database, badge: "Soon" }],
+    items: [{ id: "memory", title: "Memory & Evidence", url: "/memory", icon: Database }],
   },
   {
     id: 4,
     label: "Setup",
     items: [
-      { id: "integrations", title: "Integrations", url: "/integrations", icon: Blocks, badge: "Soon" },
-      { id: "settings", title: "Settings", url: "/settings", icon: Settings, badge: "Soon" },
+      { id: "integrations", title: "Integrations", url: "/integrations", icon: Blocks },
+      { id: "settings", title: "Settings", url: "/settings", icon: Settings },
     ],
   },
 ];
