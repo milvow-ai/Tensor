@@ -1,15 +1,18 @@
 """Google Antigravity (`agy`) CLI agent executor.
 
-Note on multiple accounts:
-As discovered from `agy --help` and Antigravity documentation, the Antigravity CLI
-does not currently expose a configuration directory flag or environment variable
-(its credentials and settings are stored globally in `~/.gemini/antigravity-cli`).
-Therefore, only a single global Antigravity account is supported at this time.
+Multiple accounts: `agy --help` shows no configuration-directory flag, and the binary reads no variable
+for one; it keeps its state (and, as far as is known, its login) under `~/.gemini/antigravity-cli`,
+resolved from the user's home directory. A connection with `meta.home` therefore runs `agy` with
+`USERPROFILE` and `HOME` pointing at that directory, so each connection owns a separate state and login
+(`farm ai login <connection>` starts `agy` the same way). Without `meta.home` the global login is used,
+as before. Not verified live: whether a login made under a redirected home stays there depends on where
+`agy` stores its token, so verify the first extra account with `farm ai test <connection>`.
 """
 
 import json
 import re
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from farm.executors.base import ErrorKind, ExecRequest, ExecResult
@@ -89,6 +92,19 @@ class AgyCliExecutor(BaseCliAgentExecutor):
             )
 
         env: dict[str, str] = {}
+        home = meta.get("home")
+        if home:
+            if not Path(str(home)).is_absolute():
+                return self.build_exec_result(
+                    ok=False,
+                    ai="gemini",
+                    model=str(model) if model else None,
+                    connection=req.connection,
+                    error_kind=ErrorKind.BAD_REQUEST,
+                    error=f"meta.home must be an absolute path, got {home!r}",
+                )
+            env["USERPROFILE"] = str(home)
+            env["HOME"] = str(home)
         if "env" in meta and isinstance(meta["env"], dict):
             for k, v in meta["env"].items():
                 env[str(k)] = str(v)
