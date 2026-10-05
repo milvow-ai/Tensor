@@ -129,7 +129,7 @@ test.describe("C3 — Console Control & Deploy Acceptance Tests", () => {
     const saveCapBtn = page.getByRole("button", { name: "Save" }).first();
     await saveCapBtn.click();
     await expect(
-      page.locator("[data-sonner-toast]", { hasText: "Global Farm spending budget updated." }),
+      page.locator("[data-sonner-toast]", { hasText: "Global Farm spending budget updated." }).first(),
     ).toBeVisible();
     await expect(page.getByText("$9,500")).toBeVisible();
 
@@ -138,7 +138,7 @@ test.describe("C3 — Console Control & Deploy Acceptance Tests", () => {
     await capInput.fill("7000");
     await saveCapBtn.click();
     await expect(
-      page.locator("[data-sonner-toast]", { hasText: "Global Farm spending budget updated." }),
+      page.locator("[data-sonner-toast]", { hasText: "Global Farm spending budget updated." }).first(),
     ).toBeVisible();
     await expect(page.getByText("$7,000")).toBeVisible();
 
