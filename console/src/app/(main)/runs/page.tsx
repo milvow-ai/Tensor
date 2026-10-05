@@ -1,27 +1,72 @@
-import { Activity } from "lucide-react";
 import type { Metadata } from "next";
 
-import { ComingSoon } from "@/components/farm/coming-soon";
+import { PageHeader } from "@/components/farm/page-header";
+import { ErrorState } from "@/components/farm/states";
+import { attempt } from "@/lib/farm/data";
+
+import { RunsTable } from "./_components/runs-table";
 
 export const metadata: Metadata = { title: "Runs" };
 
-export default function RunsPage() {
+export default async function RunsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const capability = typeof params.capability === "string" ? params.capability : undefined;
+  const status = typeof params.status === "string" ? params.status : undefined;
+  const caller = typeof params.caller === "string" ? params.caller : undefined;
+  const failuresOnly = params.failures_only === "true";
+  const page = typeof params.page === "string" ? Math.max(1, Number.parseInt(params.page, 10) || 1) : 1;
+
+  const result = await attempt(async (data) => {
+    const [runsPage, overview] = await Promise.all([
+      data.listRuns({
+        capability,
+        status,
+        caller,
+        failuresOnly,
+        page,
+        pageSize: 20,
+      }),
+      data.getOverview(),
+    ]);
+
+    // Unique capability names from capacity routes
+    const capSet = new Set<string>();
+    for (const c of overview.capacity) {
+      capSet.add(c.capability);
+    }
+    for (const r of overview.runs) {
+      capSet.add(r.capability);
+    }
+    const capabilities = Array.from(capSet).sort();
+
+    return { runsPage, capabilities };
+  });
+
+  if (!result.ok) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PageHeader
+          title="Runs"
+          description="Every capability request through the Farm, with routing decisions and execution trajectories."
+        />
+        <ErrorState message={result.message} />
+      </div>
+    );
+  }
+
+  const { runsPage, capabilities } = result.data;
+
   return (
-    <ComingSoon
-      title="Runs"
-      description="Every request through the Farm, with the routing decisions behind it."
-      milestone="C2"
-      icon={Activity}
-      will={[
-        "Open any request and see the plan, each account tried, every fallback and why, the cost and the evidence links.",
-        "Filter to failures and blocked calls to find what went wrong and which account caused it.",
-        "Follow one request from the capability call to the final answer, event by event.",
-      ]}
-      today={{
-        text: "The eight most recent runs, with result, account and cost, are on Overview. Each links to its run summary.",
-        href: "/overview",
-        label: "Open Overview",
-      }}
-    />
+    <div className="flex flex-col gap-4 md:gap-5">
+      <PageHeader
+        title="Runs"
+        description="Every capability request through the Farm, with routing decisions, fallbacks, and evidence links."
+      />
+      <RunsTable runsPage={runsPage} capabilities={capabilities} />
+    </div>
   );
 }

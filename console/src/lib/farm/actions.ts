@@ -35,3 +35,14 @@ export async function readCommand(id: string): Promise<ActionResult<FarmCommand 
     return { ok: false, error: error instanceof Error ? error.message : "Could not read the command." };
   }
 }
+
+/** Fetches full run detail including event trajectory and result envelope. */
+export async function fetchRunDetail(id: string) {
+  try {
+    await assertOwner();
+    const data = await getFarmData();
+    return { ok: true as const, data: await data.getRunDetail(id) };
+  } catch (error) {
+    return { ok: false as const, error: error instanceof Error ? error.message : "Could not fetch run detail." };
+  }
+}

@@ -324,6 +324,122 @@ export interface FarmOverview {
   commands: FarmCommand[];
 }
 
+// ---------------------------------------------------------------------------
+// C2: Billing and Runs types
+// ---------------------------------------------------------------------------
+
+export interface SpendDailyRow {
+  day: string; // YYYY-MM-DD
+  provider_id: string;
+  provider_name: string;
+  usage_usd: number;
+  billing_usd: number;
+  spend_usd: number;
+}
+
+export interface CostPerResultRow {
+  connection_id: string;
+  connection_label: string;
+  provider_id: string;
+  provider_name: string;
+  month_start: string;
+  spend_usd: number;
+  successful_results: number;
+  cost_per_result: number | null;
+}
+
+export interface RenewalRow {
+  connection_id: string;
+  connection_label: string;
+  provider_id: string;
+  provider_name: string;
+  plan_name: string | null;
+  price_usd: number;
+  billing_day: number | null;
+  renews_on: string;
+  days_until_renewal: number;
+  used: number | null;
+  limit_value: number | null;
+  usage_pct: number | null;
+}
+
+export interface IdlePaidRow {
+  connection_id: string;
+  connection_label: string;
+  provider_id: string;
+  provider_name: string;
+  plan_name: string | null;
+  plan_price_usd: number;
+  status: ConnectionStatus;
+  last_success_at: string | null;
+  days_idle: number;
+}
+
+export interface BudgetRow {
+  id: string;
+  scope: "global" | "provider" | "connection";
+  ref: string | null;
+  monthly_usd: number;
+  hard_stop: boolean;
+  spent_usd?: number;
+  forecast_usd?: number;
+}
+
+export type RunEventKind =
+  | "plan"
+  | "cache_hit"
+  | "single_flight_join"
+  | "policy_block"
+  | "candidate"
+  | "skip"
+  | "reserve"
+  | "reserve_failed"
+  | "execute"
+  | "success"
+  | "failure"
+  | "fallback"
+  | "commit"
+  | "release"
+  | "requeue";
+
+export interface RunEventRow {
+  id: number | string;
+  seq: number;
+  kind: RunEventKind;
+  connection_id: string | null;
+  data: JsonObject | null;
+  at: string;
+}
+
+export interface RunDetailRow extends RunRow {
+  params: JsonObject | null;
+  result: JsonObject | null;
+  events: RunEventRow[];
+  evidence_ids: string[];
+}
+
+export interface RunQuery {
+  page?: number;
+  pageSize?: number;
+  capability?: string;
+  status?: string;
+  failuresOnly?: boolean;
+  caller?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface BillingOverview {
+  spendMonth: SpendMonthRow[];
+  spendDaily: SpendDailyRow[];
+  budgets: BudgetRow[];
+  renewals: RenewalRow[];
+  costPerResult: CostPerResultRow[];
+  idlePaid: IdlePaidRow[];
+  paidAccountsCount: number;
+  idlePaidCount: number;
+}
+
 export type DataSourceKind = "supabase" | "fixtures";
 
 export interface FarmData {
@@ -339,4 +455,14 @@ export interface FarmData {
   listCommands(n?: number): Promise<FarmCommand[]>;
   getCommand(id: string): Promise<FarmCommand | null>;
   enqueueCommand(kind: CommandKind, payload: JsonObject): Promise<FarmCommand>;
+
+  // C2: Billing & Runs
+  getBillingOverview(dailyDays?: number): Promise<BillingOverview>;
+  listSpendDaily(days?: number): Promise<SpendDailyRow[]>;
+  listBudgets(): Promise<BudgetRow[]>;
+  listRenewals(days?: number): Promise<RenewalRow[]>;
+  listCostPerResult(): Promise<CostPerResultRow[]>;
+  listIdlePaid(): Promise<IdlePaidRow[]>;
+  listRuns(query?: RunQuery): Promise<Page<RunRow>>;
+  getRunDetail(id: string): Promise<RunDetailRow | null>;
 }

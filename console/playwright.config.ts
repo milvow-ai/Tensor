@@ -32,7 +32,7 @@ export default defineConfig({
     },
     {
       name: "behaviour",
-      testMatch: /(overview|pools|add-account|guard|auth)\.spec\.ts/,
+      testMatch: /(overview|pools|add-account|guard|auth|c2-billing-runs)\.spec\.ts/,
       dependencies: ["screens"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
