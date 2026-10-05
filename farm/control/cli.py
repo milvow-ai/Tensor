@@ -4,7 +4,7 @@ import os
 import re
 import sys
 from collections.abc import Coroutine
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -20,6 +20,9 @@ from farm.db.pool import get_db_url, is_local_db, run
 from farm.registry import RegistryError, export_json_schema, load_registry
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
+    from farm.ai.jobs import JobRecord
     from farm.context import FarmContext
     from farm.resources.reports import PoolCapacity
 
@@ -366,7 +369,7 @@ def commands_schema(
 
 
 def format_ai_list(data: dict[str, Any]) -> str:
-    rows: list[list[str]] = [["AI", "ACCOUNT", "STATUS", "MODELS", "RESET / COOLDOWN", "CALLS TODAY"]]
+    rows: list[list[str]] = [["AI", "ACCOUNT", "STATUS", "MODELS", "RESET / COOLDOWN", "CALLS TODAY", "JOBS"]]
     ais = data.get("ais", [])
     if not ais:
         return "no AI pools found: run `farm registry sync`"
@@ -374,7 +377,7 @@ def format_ai_list(data: dict[str, Any]) -> str:
         ai_name = ai.get("id", "")
         accounts = ai.get("accounts", [])
         if not accounts:
-            rows.append([ai_name, "-", "-", "-", "-", "-"])
+            rows.append([ai_name, "-", "-", "-", "-", "-", "-"])
             continue
         first = True
         for acc in accounts:
@@ -391,6 +394,10 @@ def format_ai_list(data: dict[str, Any]) -> str:
                 status_str = status
             models = ", ".join(acc.get("models", [])) or "-"
             calls = str(acc.get("todays_calls", 0))
+            queued = int(acc.get("queued_jobs", 0))
+            jobs = f"{int(acc.get('active_jobs', 0))}/{int(acc.get('max_parallel', 1))}" + (
+                f" +{queued} queued" if queued else ""
+            )
             rows.append([
                 ai_name if first else "",
                 acc.get("id", ""),
@@ -398,6 +405,7 @@ def format_ai_list(data: dict[str, Any]) -> str:
                 models,
                 reset_str,
                 calls,
+                jobs,
             ])
             first = False
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
@@ -407,7 +415,7 @@ def format_ai_list(data: dict[str, Any]) -> str:
 @ai_app.command(name="list")
 def ai_list(local: LocalOption = False) -> None:
     """List all AI accounts with their status, models, reset times, and today's calls."""
-    from farm.gateway.server import list_ai_accounts
+    from farm.ai.accounts import list_ai_accounts
 
     async def main() -> dict[str, Any]:
         ctx = await _context(local)
@@ -455,6 +463,167 @@ def ai_test(
         raise typer.Exit(code=1)
 
 
+def _stamp(at: datetime | None) -> str:
+    """A moment in UTC (the database hands datetimes back in its session time zone)."""
+    return "-" if at is None else at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def _since(at: datetime | None, now: datetime) -> str:
+    if at is None:
+        return "-"
+    seconds = max(0, int((now - at).total_seconds()))
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{seconds // size}{unit}"
+    return f"{seconds}s"
+
+
+def format_job_table(jobs: "list[JobRecord]", now: datetime) -> str:
+    """The ``farm ai jobs`` table: one row per job, newest first."""
+    rows: list[list[str]] = [["JOB", "STATE", "AI/ACCOUNT", "TURN", "AGE", "TOKENS", "COST", "ERROR"]]
+    for job in jobs:
+        error = "-"
+        if job.error_kind is not None:
+            error = job.error_kind + (f": {job.error_message[:48]}" if job.error_message else "")
+        rows.append(
+            [
+                str(job.id),
+                job.state,
+                f"{job.ai}/{job.account}",
+                str(job.turn),
+                _since(job.created_at, now),
+                "-" if job.tokens is None else str(job.tokens),
+                f"${job.cost_usd:.4f}" + ("~" if job.cost_estimated and job.finished else ""),
+                error,
+            ]
+        )
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    return "\n".join("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip() for row in rows)
+
+
+def _parse_job_id(value: str) -> "UUID":
+    from farm.capabilities.schemas import parse_uuid
+
+    try:
+        return parse_uuid(value, "job id")
+    except ValueError as exc:
+        raise _fail(str(exc), code=2) from None
+
+
+@ai_app.command(name="jobs")
+def ai_jobs(
+    state: Annotated[
+        str | None,
+        typer.Option(help="Only jobs in this state: queued, running, succeeded, failed or cancelled."),
+    ] = None,
+    limit: Annotated[int, typer.Option(min=1, max=500, help="How many jobs to show.")] = 20,
+    local: LocalOption = False,
+) -> None:
+    """List AI jobs, newest first: state, account, turn, age, tokens, cost (~ = estimated) and error."""
+    from farm.ai.jobs import JobStore
+    from farm.capabilities.schemas import TERMINAL_STATES
+
+    if state is not None and state not in {"queued", "running", *TERMINAL_STATES}:
+        raise _fail(f"unknown state '{state}'", code=2)
+
+    async def main() -> "tuple[list[JobRecord], datetime]":
+        ctx = await _context(local)
+        try:
+            return await JobStore(ctx.pool).newest(state=state, limit=limit), ctx.clock()
+        finally:
+            await ctx.aclose()
+
+    jobs, now = _run_farm(main())
+    typer.echo(format_job_table(jobs, now) if jobs else "no AI jobs")
+
+
+@ai_app.command(name="show")
+def ai_show(
+    job_id: Annotated[str, typer.Argument(help="A job id from `farm ai jobs` or ai_start.")],
+    full: Annotated[bool, typer.Option("--full", help="Print the whole result text, not a preview.")] = False,
+    local: LocalOption = False,
+) -> None:
+    """Show one AI job: where it ran, what it cost, every attempt, why it failed, and its result."""
+    import asyncio
+
+    from farm.ai import results
+    from farm.ai.jobs import JobStore
+
+    wanted = _parse_job_id(job_id)
+
+    async def main() -> "tuple[JobRecord | None, str | None]":
+        ctx = await _context(local)
+        try:
+            job = await JobStore(ctx.pool).get(wanted)
+            text = None
+            if job is not None and job.result_path:
+                text = await asyncio.to_thread(results.read_result, job.result_path)
+            return job, text
+        finally:
+            await ctx.aclose()
+
+    job, text = _run_farm(main())
+    if job is None:
+        raise _fail(f"there is no job {job_id}")
+    typer.echo(f"job          {job.id}")
+    typer.echo(f"conversation {job.conversation_id} (turn {job.turn})")
+    typer.echo(f"state        {job.state}")
+    typer.echo(f"worker       {job.ai} / {job.account}  model={job.model or '-'}  mode={job.mode}")
+    typer.echo(f"created      {_stamp(job.created_at)}   finished {_stamp(job.finished_at)}")
+    estimate = " (estimated)" if job.cost_estimated else " (reported)"
+    typer.echo(f"tokens/cost  {job.tokens if job.tokens is not None else '-'}  ${job.cost_usd:.6f}{estimate}")
+    typer.echo(f"session      {job.native_session_id or '-'}")
+    for attempt in job.attempts:
+        detail = f"{attempt.get('kind')}: {attempt.get('message')}" if attempt.get("kind") else ""
+        line = f"attempt {attempt.get('n')}    {attempt.get('account')} {attempt.get('outcome')} {detail}"
+        typer.echo(line.rstrip())
+    if job.error_kind is not None:
+        back = f" (retry at {_stamp(job.retry_at)})" if job.retry_at else ""
+        typer.echo(f"error        {job.error_kind}{back}: {job.error_message or ''}")
+    if job.files_changed:
+        typer.echo("files        " + ", ".join(job.files_changed))
+    if job.result_path:
+        typer.echo(f"result       {job.result_path} ({job.result_chars} chars)")
+    if text is not None:
+        shown = text if full else results.preview(text)[:2000]
+        cut = "" if full or len(shown) == len(text) else f" (first {len(shown)} chars)"
+        typer.echo(f"--- result{cut} ---")
+        typer.echo(shown)
+
+
+@ai_app.command(name="cancel")
+def ai_cancel(
+    job_id: Annotated[str, typer.Argument(help="A job id from `farm ai jobs`.")],
+    local: LocalOption = False,
+) -> None:
+    """Stop an AI job (a running Farm kills its process tree within seconds of the request)."""
+    from farm.ai.failures import AiRequestError
+    from farm.ai.jobs import JobManager
+
+    wanted = _parse_job_id(job_id)
+
+    async def main() -> "tuple[str, str, bool]":
+        ctx = await _context(local)
+        try:
+            outcome = await JobManager(ctx).cancel(wanted)
+        except AiRequestError as exc:
+            raise _fail(exc.message) from None
+        finally:
+            await ctx.aclose()
+        return outcome.job.state, str(outcome.job.id), outcome.cancelled
+
+    state, ident, cancelled = _run_farm(main())
+    if cancelled:
+        typer.echo(f"cancelled {ident}")
+    elif state in ("queued", "running"):
+        raise _fail(
+            f"cancel requested for {ident} but it is still {state}: the Farm process that runs it did not "
+            "acknowledge within 15 s (is it running?)"
+        )
+    else:
+        typer.echo(f"job {ident} had already finished ({state})")
+
+
 @ai_app.command(name="login")
 def ai_login(
     connection: Annotated[str, typer.Argument(help="Connection ID to log in, e.g. claude-02, codex-01.")],
@@ -484,7 +653,7 @@ def ai_login(
     meta = conn_info["meta"]
     cli_name = str(meta.get("cli") or conn_info["provider_id"]).lower()
 
-    config_dir_str = meta.get("config_dir")
+    config_dir_str = meta.get("home") or meta.get("config_dir")
     if not config_dir_str:
         config_dir = data_dir() / "ai" / connection
     else:
@@ -507,8 +676,16 @@ def ai_login(
         subprocess.run(["codex", "login"], env=env)
     elif cli_name in ("agy", "gemini"):
         typer.echo(f"Account: {connection} (Antigravity)")
-        typer.echo("Antigravity uses the global login on this machine.")
-        typer.echo("Command: agy")
+        if meta.get("home"):
+            # agy has no config-dir flag or variable; it keeps its login under the user's home directory, so
+            # this account gets its own home (the executor sets the same variables when it runs jobs).
+            env["USERPROFILE"] = str(config_dir)
+            env["HOME"] = str(config_dir)
+            typer.echo(f"Home directory: {config_dir}")
+            typer.echo(f"Command: USERPROFILE={config_dir} HOME={config_dir} agy")
+        else:
+            typer.echo("No meta.home on this connection: Antigravity uses the global login on this machine.")
+            typer.echo("Command: agy")
         subprocess.run(["agy"], env=env)
     elif cli_name == "hermes":
         profile = meta.get("profile", "farm-agent")

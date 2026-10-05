@@ -23,7 +23,7 @@ class CodexCliExecutor(BaseCliAgentExecutor):
     async def execute(self, req: ExecRequest) -> ExecResult:
         meta = req.connection.meta or {}
         cli_bin = meta.get("cli_path", "codex")
-        config_dir = meta.get("config_dir")
+        config_dir = meta.get("home") or meta.get("config_dir")  # one CODEX_HOME per connection
 
         task = str(req.params.get("task") or req.params.get("prompt", ""))
         model = req.params.get("model") or meta.get("model") or meta.get("default_model")

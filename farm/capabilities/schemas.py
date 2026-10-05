@@ -24,8 +24,9 @@ from __future__ import annotations
 import json
 import re
 import warnings
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 from urllib.parse import urlsplit
+from uuid import UUID
 
 # jsonschema ships no py.typed marker, so mypy cannot see its types; it is only used through the two typed
 # wrappers below (check_json_schema, json_schema_errors). It is already installed as a dependency of mcp.
@@ -37,8 +38,11 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    field_validator,
     model_validator,
 )
+
+from farm.executors.cli_agent.base import BaseCliAgentExecutor
 
 VerifyStatus = Literal["valid", "invalid", "risky", "catch_all", "unknown"]
 VERIFY_STATUSES: tuple[str, ...] = ("valid", "invalid", "risky", "catch_all", "unknown")
@@ -474,7 +478,7 @@ class AskAiIn(_Input):
     mode: AiMode = "answer"
     cwd: str | None = None
     session_id: str | None = None
-    timeout_s: int = Field(default=900, ge=1, le=3600)
+    timeout_s: int = Field(default=900, ge=1, le=7200)  # 7200 = the longest ai_start job (MAX_JOB_TIMEOUT_S)
     json_schema: dict[str, Any] | None = None
 
     @model_validator(mode="after")
@@ -497,6 +501,212 @@ class AskAiOut(BaseModel):
     usage: dict[str, float] = Field(default_factory=dict)
     cost_usd: float = 0.0
     duration_s: float = 0.0
+
+
+# --- AI jobs: non-blocking AI work (ai_start, ai_reply, ai_status, ai_wait, ai_result, ai_cancel) -----------
+
+JobState = Literal["queued", "running", "succeeded", "failed", "cancelled"]
+TERMINAL_STATES: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
+FailureKind = Literal[
+    "limit", "auth", "timeout", "crash", "bad_request", "cancelled", "farm_restart", "account_unavailable"
+]
+FAILURE_KINDS: tuple[str, ...] = get_args(FailureKind)
+RequestErrorKind = Literal[
+    "bad_request",
+    "not_found",
+    "conversation_busy",
+    "not_enough_accounts",
+    "account_unavailable",
+    "not_finished",
+]
+MAX_TASK_CHARS = 1_000_000
+MAX_JOB_TIMEOUT_S = 7200
+MAX_BATCH_JOBS = 50
+ACCOUNT_SLUG = r"^[a-z0-9][a-z0-9_-]{0,62}$"
+"""The shape of a connection id (registry ``Slug``, DB check ``check_connections_id_slug``)."""
+
+
+def parse_uuid(value: str, what: str) -> UUID:
+    """The canonical (hyphenated) UUID the Farm hands out as a job or conversation id.
+
+    Everything else is refused (braces, ``urn:``, bare hex, path-like text), so an id from a caller can never
+    be anything but a UUID by the time it reaches SQL or a file name.
+    """
+    try:
+        parsed = UUID(value.strip())
+    except (ValueError, AttributeError):
+        raise ValueError(f"{what} must be a UUID as returned by the Farm") from None
+    if str(parsed) != value.strip().lower():
+        raise ValueError(f"{what} must be a UUID as returned by the Farm")
+    return parsed
+
+
+class AiJobSpec(_Input):
+    """One unit of AI work: what ``ai_start`` takes and ``ai_start_many`` takes a list of."""
+
+    task: str = Field(min_length=1, max_length=MAX_TASK_CHARS, description="What the worker must do.")
+    ai: AiProvider = Field(
+        default="any",
+        description="claude, codex, gemini, hermes, or any (the first AI with a usable account).",
+    )
+    account: str | None = Field(
+        default=None,
+        pattern=ACCOUNT_SLUG,
+        description="Run on exactly this account (connection id such as claude-03). Default: the Farm picks.",
+    )
+    model: str | None = Field(default=None, description="Model name; the account must offer it.")
+    mode: AiMode = Field(
+        default="answer", description="answer = read-only; edit = may change files under cwd (if allowed)."
+    )
+    cwd: str | None = Field(default=None, description="Working directory (required for mode edit).")
+    conversation_id: str | None = Field(
+        default=None, description="Continue this conversation: same account, same native session."
+    )
+    json_schema: dict[str, Any] | None = Field(
+        default=None, description="Ask for JSON matching this schema; ai_result reports validation errors."
+    )
+    timeout_s: int = Field(
+        default=900, ge=1, le=MAX_JOB_TIMEOUT_S, description="Longest the worker may run, in seconds."
+    )
+    retry_other_account: bool = Field(
+        default=False,
+        description="First turn, answer mode only: if the account hits a limit, is logged out or crashes, "
+        "rerun on the next account.",
+    )
+
+    @field_validator("model")
+    @classmethod
+    def _safe_model(cls, value: str | None) -> str | None:
+        ok, problem = BaseCliAgentExecutor.validate_cli_identifiers(model=value)
+        if not ok:
+            raise ValueError(problem or "invalid model")
+        return value
+
+    @field_validator("conversation_id")
+    @classmethod
+    def _conversation_uuid(cls, value: str | None) -> str | None:
+        return None if value is None else str(parse_uuid(value, "conversation_id"))
+
+    @field_validator("json_schema")
+    @classmethod
+    def _usable_schema(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return None if value is None else check_json_schema(value)
+
+    @model_validator(mode="after")
+    def _retry_is_for_answers(self) -> AiJobSpec:
+        if self.retry_other_account and self.mode != "answer":
+            raise ValueError("retry_other_account is only for mode 'answer' (an edit may have changed files)")
+        return self
+
+
+class AiFailure(BaseModel):
+    """Why a worker failed, and which one: the same shape in every tool that reports a failed job."""
+
+    kind: FailureKind
+    ai: str
+    account: str
+    message: str
+    retry_at: AwareDatetime | None = None
+    cause: str | None = None
+    """For ``account_unavailable``: what is wrong with the account (limit, auth, paused, ...)."""
+
+
+class AiRequestFailure(BaseModel):
+    """A request the Farm refused before any worker ran (unknown id, no usable account, busy conversation)."""
+
+    kind: RequestErrorKind
+    message: str
+    ai: str | None = None
+    account: str | None = None
+    retry_at: AwareDatetime | None = None
+
+
+class AiStarted(BaseModel):
+    job_id: UUID
+    conversation_id: UUID
+    account: str
+    ai: str
+    model: str | None = None
+    turn: int
+    state: JobState
+    jobs_ahead: int | None = None
+
+
+class AiAttempt(BaseModel):
+    """One try of a job on one account (a job has several only with ``retry_other_account``)."""
+
+    n: int
+    account: str
+    run_id: UUID | None = None
+    outcome: Literal["succeeded", "failed", "cancelled"]
+    kind: FailureKind | None = None
+    message: str | None = None
+    retry_at: AwareDatetime | None = None
+    started_at: AwareDatetime
+    finished_at: AwareDatetime
+    cost_usd: float = 0.0
+
+
+class AiJobStatus(BaseModel):
+    job_id: UUID
+    conversation_id: UUID
+    turn: int
+    state: JobState
+    ai: str
+    account: str
+    model: str | None = None
+    mode: AiMode
+    jobs_ahead: int | None = None
+    """Queued jobs only: how many jobs (running, or queued earlier) must finish on its account first."""
+    elapsed_s: float
+    tokens: int | None = None
+    """Known once the job has finished: the CLIs report their usage at the end of a one-shot run."""
+    attempt_count: int
+    created_at: AwareDatetime
+    started_at: AwareDatetime | None = None
+    finished_at: AwareDatetime | None = None
+    error: AiFailure | None = None
+
+
+class AiJobResult(AiJobStatus):
+    """A finished job with its exact answer. ``text`` is the worker's final text, unmodified."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    ok: bool
+    text: str | None = None
+    text_truncated: bool = False
+    """True when ``text`` is only the preview of a result larger than ``FARM_AI_RESULT_INLINE_CHARS``."""
+    note: str | None = None
+    """Something the caller should know about this result (for example: the result file was deleted)."""
+    result_path: str | None = None
+    result_chars: int | None = None
+    json_data: Any = Field(default=None, alias="json")
+    json_valid: bool | None = None
+    json_errors: list[str] = Field(default_factory=list)
+    native_session_id: str | None = None
+    usage: dict[str, float] = Field(default_factory=dict)
+    cost_usd: float = 0.0
+    cost_estimated: bool = True
+    duration_s: float | None = None
+    files_changed: list[str] | None = None
+    run_id: UUID | None = None
+    attempts: list[AiAttempt] = Field(default_factory=list)
+
+
+class AiConversationView(BaseModel):
+    conversation_id: UUID
+    ai: str
+    account: str
+    native_session_id: str | None = None
+    turns: int
+    tokens: int
+    cost_usd: float
+    last_job_id: UUID | None = None
+    last_job_state: JobState | None = None
+    active_job_id: UUID | None = None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
 
 
 class CapabilityModelsDict(dict[str, tuple[type[BaseModel], type[BaseModel]]]):
