@@ -88,6 +88,14 @@ def test_farm_serve_over_stdio_lists_the_tools_and_answers_verify_email(
     seen = asyncio.run(asyncio.wait_for(talk(url, EMAIL), STARTUP_TIMEOUT_S))
 
     assert seen["tools"] == [
+        "ai_cancel",
+        "ai_conversations",
+        "ai_reply",
+        "ai_result",
+        "ai_start",
+        "ai_start_many",
+        "ai_status",
+        "ai_wait",
         "ask_ai",
         "ask_ai_batch",
         "get_capacity",

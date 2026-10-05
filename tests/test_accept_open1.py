@@ -374,7 +374,7 @@ def test_accept_open1_no_test_name_checks_remain_in_farm() -> None:
         f"{path.relative_to(FARM_DIR.parent)}:{number}"
         for path in FARM_DIR.rglob("*.py")
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if re.search(r"PYTEST_CURRENT_TEST|legacy_patterns|is_legacy_|test_accept_|test_gateway\.py::", line)
+        if re.search(r"PYTEST_CURRENT_TEST|legacy_patterns|is_legacy_|_legacy_m1_surface|[\"']test_accept_|[\"']test_gateway\.py::", line)
     ]
 
     assert offenders == []

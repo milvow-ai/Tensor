@@ -146,6 +146,8 @@ KEY_COLUMNS: dict[str, set[str]] = {
         "schema_hash",
         "synced_at",
     },
+    "ai_conversations": {"id", "ai", "account", "native_session_id", "turns", "tokens", "cost", "last_job_id"},
+    "ai_jobs": {"id", "conversation_id", "turn", "ai", "account", "mode", "state", "timeout_s", "attempts", "run_id"},
 }
 FAKE_PW = "hunter2-not-a-real-password"  # sentinel that must never appear in CLI output
 DEFAULT_WORKSPACE = "00000000-0000-0000-0000-000000000001"

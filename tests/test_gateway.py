@@ -70,6 +70,14 @@ async def test_a_tool_is_generated_for_every_capability_that_has_models_and_only
         "ask_ai",
         "ask_ai_batch",
         "list_ais",
+        "ai_cancel",
+        "ai_conversations",
+        "ai_reply",
+        "ai_result",
+        "ai_start",
+        "ai_start_many",
+        "ai_status",
+        "ai_wait",
         *INFRA_TOOLS,
     }
     assert "unmodelled" not in tools
