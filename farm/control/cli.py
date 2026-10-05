@@ -41,6 +41,12 @@ app.add_typer(ai_app, name="ai")
 mcp_app = typer.Typer(help="MCP servers: import them from Claude / Codex, sync their tools, log accounts in.")
 app.add_typer(mcp_app, name="mcp")
 
+token_app = typer.Typer(help="Client tokens: create, list, and revoke tokens for HTTP MCP clients.")
+app.add_typer(token_app, name="token")
+
+alert_app = typer.Typer(help="Alerts: dispatch and check alerts.")
+app.add_typer(alert_app, name="alert")
+
 
 ALEMBIC_INI = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
 DEFAULT_REGISTRY = Path(__file__).resolve().parent.parent.parent / "config" / "registry.yaml"
@@ -889,4 +895,321 @@ def mcp_login(
             await ctx.aclose()
 
     _run_farm(main())
+
+
+# --- RUN1: farm run, farm connect, farm token, farm alert send --------------------------------------------
+
+
+@app.command(name="run")
+def run_command(
+    host: Annotated[
+        str | None,
+        typer.Option("--host", help="HTTP host to bind (default: settings.http_host)."),
+    ] = None,
+    port: Annotated[
+        int | None,
+        typer.Option("--port", help="HTTP port to bind (default: settings.http_port)."),
+    ] = None,
+    local: LocalOption = False,
+) -> None:
+    """Run the composed 24/7 Harness Farm: HTTP MCP gateway, command consumer, and background workers."""
+    from farm.control.run import run_farm
+
+    _run_farm(run_farm(host=host, port=port, local=local))
+
+
+@token_app.command(name="create")
+def token_create(
+    client_name: Annotated[
+        str,
+        typer.Argument(help="Name of the client or IDE session (e.g. claude-1, cursor)."),
+    ],
+    local: LocalOption = False,
+) -> None:
+    """Create a new client token for HTTP MCP authentication."""
+    from farm.control.run import create_token
+
+    async def main() -> str:
+        ctx = await _context(local)
+        try:
+            return await create_token(ctx.pool, client_name)
+        finally:
+            await ctx.aclose()
+
+    tok = _run_farm(main())
+    typer.echo(f"Created token for '{client_name}':")
+    typer.echo(f"  {tok}")
+    typer.echo("Store this token in your environment (e.g. as FARM_TOKEN). It will not be shown again.")
+
+
+@token_app.command(name="list")
+def token_list(local: LocalOption = False) -> None:
+    """List all registered client tokens."""
+    from farm.control.run import list_tokens
+
+    async def main() -> list[dict[str, Any]]:
+        ctx = await _context(local)
+        try:
+            return await list_tokens(ctx.pool)
+        finally:
+            await ctx.aclose()
+
+    tokens = _run_farm(main())
+    if not tokens:
+        typer.echo("no client tokens: create one with 'farm token create <name>'")
+        return
+
+    rows: list[list[str]] = [["CLIENT", "HASH (SHA256)", "CREATED", "LAST USED"]]
+    for t in tokens:
+        h = str(t["token_hash"])
+        masked_hash = f"{h[:8]}...{h[-8:]}"
+        created = _stamp(t["created_at"])
+        last_used = _stamp(t["last_used"]) if t["last_used"] else "never"
+        rows.append([str(t["client_name"]), masked_hash, created, last_used])
+
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    formatted = [
+        "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip()
+        for row in rows
+    ]
+    typer.echo("\n".join(formatted))
+
+
+@token_app.command(name="revoke")
+def token_revoke(
+    identifier: Annotated[str, typer.Argument(help="Client name or token hash to revoke.")],
+    local: LocalOption = False,
+) -> None:
+    """Revoke a client token."""
+    from farm.control.run import revoke_token
+
+    async def main() -> bool:
+        ctx = await _context(local)
+        try:
+            return await revoke_token(ctx.pool, identifier)
+        finally:
+            await ctx.aclose()
+
+    revoked = _run_farm(main())
+    if revoked:
+        typer.echo(f"revoked token for '{identifier}'")
+    else:
+        typer.echo(f"no token found matching '{identifier}'", err=True)
+        raise typer.Exit(code=1)
+
+
+@alert_app.command(name="send")
+def alert_send(
+    message: Annotated[str, typer.Option("--message", "-m", help="Alert message text.")] = "",
+    kind: Annotated[
+        str,
+        typer.Option("--kind", "-k", help="Alert kind."),
+    ] = "farm_down",
+    severity: Annotated[
+        str,
+        typer.Option("--severity", "-s", help="Severity level: info, warn, critical."),
+    ] = "warn",
+    ref: Annotated[str | None, typer.Option("--ref", "-r", help="Deduplication reference key.")] = None,
+    local: LocalOption = False,
+) -> None:
+    """Send an alert to the database and Telegram."""
+    from farm.control.alerts import send_alert
+
+    if not message.strip():
+        raise _fail("alert message cannot be empty", code=2)
+
+    async def main() -> str:
+        ctx = await _context(local)
+        try:
+            aid = await send_alert(
+                ctx.pool,
+                kind=kind,
+                message=message,
+                severity=severity,
+                ref=ref,
+            )
+            return str(aid)
+        finally:
+            await ctx.aclose()
+
+    alert_id = _run_farm(main())
+    typer.echo(f"alert sent: {alert_id}")
+
+
+@app.command(name="connect")
+def connect_command(
+    target: Annotated[
+        str,
+        typer.Argument(help="Target IDE: claude-code, codex, cursor, gemini, antigravity, generic."),
+    ],
+    write: Annotated[
+        bool,
+        typer.Option("--write", help="Write configuration to the target IDE config file."),
+    ] = False,
+    host: Annotated[str | None, typer.Option(help="Farm HTTP host.")] = None,
+    port: Annotated[int | None, typer.Option(help="Farm HTTP port.")] = None,
+    env_var: Annotated[str, typer.Option(help="Environment variable holding the token.")] = "FARM_TOKEN",
+) -> None:
+    """Print or write the snippet to attach an IDE or agent to the running Farm."""
+    from farm.settings import http_host as get_http_host
+    from farm.settings import http_path as get_http_path
+    from farm.settings import http_port as get_http_port
+
+    target_clean = target.strip().lower().replace("_", "-")
+    h = host or get_http_host()
+    p = port or get_http_port()
+    path = get_http_path()
+    url = f"http://{h}:{p}{path}"
+
+    home = Path.home()
+    env = os.environ
+
+    if target_clean in ("claude-code", "claude"):
+        config_path = home / ".claude.json"
+        is_verified = True
+        typer.echo("=== Claude Code Connection [VERIFIED] ===")
+        typer.echo(f"Endpoint: {url}")
+        typer.echo(f"Token env var: {env_var}")
+        typer.echo()
+        typer.echo("Step 1: Set the token in your environment:")
+        typer.echo(f"  $env:{env_var}=\"<your-farm-token>\"  # PowerShell")
+        typer.echo(f"  export {env_var}=\"<your-farm-token>\"  # Bash / Zsh")
+        typer.echo()
+        typer.echo("Step 2: Add via Claude Code CLI:")
+        cli_cmd = (
+            f"  claude mcp add --transport http harness-farm {url} "
+            f"--header \"Authorization: Bearer ${{{env_var}}}\""
+        )
+        typer.echo(cli_cmd)
+        typer.echo()
+        typer.echo(f"Or add to {config_path}:")
+        snippet = {
+            "mcpServers": {
+                "harness-farm": {
+                    "type": "streamable-http",
+                    "url": url,
+                    "headers": {
+                        "Authorization": f"Bearer ${{{env_var}}}"
+                    },
+                }
+            }
+        }
+        typer.echo(json.dumps(snippet, indent=2))
+
+    elif target_clean == "codex":
+        config_dir = Path(env.get("CODEX_HOME") or home / ".codex")
+        config_path = config_dir / "config.toml"
+        is_verified = True
+        typer.echo("=== Codex Connection [VERIFIED] ===")
+        typer.echo(f"Endpoint: {url}")
+        typer.echo(f"Token env var: {env_var}")
+        typer.echo()
+        typer.echo("Step 1: Set the token in your environment:")
+        typer.echo(f"  $env:{env_var}=\"<your-farm-token>\"  # PowerShell")
+        typer.echo(f"  export {env_var}=\"<your-farm-token>\"  # Bash / Zsh")
+        typer.echo()
+        typer.echo(f"Step 2: Add to {config_path}:")
+        toml_snippet = (
+            f"[mcp_servers.harness-farm]\n"
+            f"url = \"{url}\"\n"
+            f"bearer_token_env_var = \"{env_var}\"\n"
+        )
+        typer.echo(toml_snippet)
+
+    elif target_clean == "cursor":
+        config_path = home / ".cursor" / "mcp.json"
+        is_verified = False
+        typer.echo("=== Cursor Connection [UNVERIFIED] ===")
+        typer.echo(f"Endpoint: {url}")
+        typer.echo("Note: Cursor MCP configuration format is unverified for header env-var expansion.")
+        typer.echo()
+        typer.echo(f"Add to {config_path}:")
+        snippet = {
+            "mcpServers": {
+                "harness-farm": {
+                    "url": url,
+                    "headers": {
+                        "Authorization": f"Bearer ${{{env_var}}}"
+                    },
+                }
+            }
+        }
+        typer.echo(json.dumps(snippet, indent=2))
+
+    elif target_clean in ("gemini", "antigravity", "agy"):
+        config_path = home / ".gemini" / "config" / "mcp_config.json"
+        is_verified = False
+        typer.echo("=== Antigravity / Gemini CLI Connection [UNVERIFIED] ===")
+        typer.echo(f"Endpoint: {url}")
+        typer.echo("Note: Antigravity remote HTTP MCP headers/env-var support is unverified.")
+        typer.echo()
+        typer.echo(f"Add to {config_path}:")
+        snippet = {
+            "mcpServers": {
+                "harness-farm": {
+                    "url": url,
+                    "headers": {
+                        "Authorization": f"Bearer ${{{env_var}}}"
+                    },
+                }
+            }
+        }
+        typer.echo(json.dumps(snippet, indent=2))
+
+    elif target_clean == "generic":
+        config_path = Path("mcp.json")
+        is_verified = False
+        typer.echo("=== Generic MCP Client Connection [UNVERIFIED] ===")
+        typer.echo(f"Endpoint URL: {url}")
+        typer.echo("Transport: streamable-http (or http)")
+        typer.echo(f"Authorization: Bearer ${{{env_var}}}")
+
+    else:
+        raise _fail(
+            f"unknown target '{target}': choose from claude-code, codex, cursor, "
+            "gemini, antigravity, generic",
+            code=2,
+        )
+
+    if write:
+        if not is_verified:
+            typer.echo(
+                f"\nCannot write: format and env-var support for '{target}' is unverified.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        confirmed = typer.confirm(f"\nWrite configuration to {config_path}?", default=False)
+        if not confirmed:
+            typer.echo("Cancelled.")
+            return
+
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        if target_clean in ("claude-code", "claude"):
+            existing: dict[str, Any] = {}
+            if config_path.is_file():
+                try:
+                    existing = json.loads(config_path.read_text(encoding="utf-8"))
+                except Exception:
+                    existing = {}
+            mcp_servers = existing.setdefault("mcpServers", {})
+            mcp_servers["harness-farm"] = {
+                "type": "streamable-http",
+                "url": url,
+                "headers": {
+                    "Authorization": f"Bearer ${{{env_var}}}"
+                },
+            }
+            config_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+            typer.echo(f"Wrote configuration to {config_path}")
+
+        elif target_clean == "codex":
+            existing_text = config_path.read_text(encoding="utf-8") if config_path.is_file() else ""
+            if "[mcp_servers.harness-farm]" in existing_text:
+                typer.echo(f"Configuration already contains [mcp_servers.harness-farm] in {config_path}")
+            else:
+                new_text = existing_text.rstrip() + ("\n\n" if existing_text.strip() else "") + toml_snippet
+                config_path.write_text(new_text, encoding="utf-8")
+                typer.echo(f"Wrote configuration to {config_path}")
+
 
