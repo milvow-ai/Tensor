@@ -1,0 +1,35 @@
+{
+  "numStartups": 12,
+  "theme": "dark",
+  "mcpServers": {
+    "linear": {"type": "http", "url": "https://mcp.linear.app/mcp"},
+    "sentry": {"type": "sse", "url": "https://mcp.sentry.dev/sse"},
+    "api": {
+      "type": "http",
+      "url": "https://api.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer SENTINEL-code-bearer-91d2",
+        "X-Team": "SENTINEL-code-team-44ab"
+      }
+    },
+    "hook": {"type": "http", "url": "https://hooks.example.com/mcp/s/SENTINEL-code-url-secret?token=SENTINEL-code-query-5e5e"}
+  },
+  "projects": {
+    "D:/work/app": {
+      "mcpServers": {
+        "local-tools": {
+          "type": "stdio",
+          "command": "node",
+          "args": ["tools.js"],
+          "env": {"APP_SECRET": "SENTINEL-code-project-secret-5c1e"}
+        }
+      },
+      "disabledMcpServers": []
+    },
+    "D:/work/other": {
+      "mcpServers": {
+        "local-tools": {"command": "node", "args": ["other.js"]}
+      }
+    }
+  }
+}

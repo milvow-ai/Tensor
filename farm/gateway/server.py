@@ -16,6 +16,7 @@ shows up after a restart (``farm serve`` is cheap to restart; the tool list is n
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Any
 from uuid import UUID
@@ -29,6 +30,7 @@ from pydantic import BaseModel, Field, PrivateAttr, create_model
 from farm.capabilities.schemas import CAPABILITY_MODELS
 from farm.context import FarmContext
 from farm.db.pool import DbPool
+from farm.gateway.mcp_tools import register_mcp_tools
 from farm.gateway.middleware import (
     AuthMiddleware,
     PolicyCheck,
@@ -36,7 +38,7 @@ from farm.gateway.middleware import (
     TrajectoryMiddleware,
     current_caller,
 )
-from farm.registry.models import STRATEGIES
+from farm.registry.models import MCP_CAPABILITY_PREFIX, STRATEGIES
 from farm.resources import reports
 from farm.resources.router import RouteOutcome, route
 from farm.resources.trajectory import fetch_run
@@ -137,32 +139,24 @@ def _register_infra_tools(server: FastMCP, ctx: FarmContext) -> None:
         """What the last N days consumed and cost, per account and unit, and how many runs ended how."""
         return await reports.usage_report(ctx.pool, ctx.clock(), days)
 
-    import os
+    @server.tool(annotations={"readOnlyHint": True})
+    async def list_ais() -> dict[str, Any]:
+        """List AI providers, accounts, status, models, cooldown/reset times, and today's calls."""
+        return await list_ai_accounts(ctx.pool, ctx.clock())
 
-    test_name = os.environ.get("PYTEST_CURRENT_TEST", "")
-    legacy_patterns = ("test_accept_m1", "test_gateway.py::test_a_tool_is_generated")
-    is_legacy_m1 = any(t in test_name for t in legacy_patterns)
+    @server.tool()
+    async def ask_ai_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+        """Run multiple AI tasks across the AI pool respecting gates and concurrency."""
 
-    if not is_legacy_m1:
+        async def run_one(task_args: dict[str, Any]) -> dict[str, Any]:
+            args = dict(task_args)
+            strategy = args.pop(ROUTING_ARGUMENT, None)
+            outcome = await route(ctx, "ask_ai", args, strategy=strategy, caller=current_caller.get())
+            return outcome.envelope()
 
-        @server.tool(annotations={"readOnlyHint": True})
-        async def list_ais() -> dict[str, Any]:
-            """List AI providers, accounts, status, models, cooldown/reset times, and today's calls."""
-            return await list_ai_accounts(ctx.pool, ctx.clock())
-
-        @server.tool()
-        async def ask_ai_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
-            """Run multiple AI tasks across the AI pool respecting gates and concurrency."""
-
-            async def run_one(task_args: dict[str, Any]) -> dict[str, Any]:
-                args = dict(task_args)
-                strategy = args.pop(ROUTING_ARGUMENT, None)
-                outcome = await route(ctx, "ask_ai", args, strategy=strategy, caller=current_caller.get())
-                return outcome.envelope()
-
-            envelopes = await asyncio.gather(*(run_one(t) for t in tasks))
-            all_ok = all(e.get("ok", False) for e in envelopes)
-            return {"ok": all_ok, "tasks": list(envelopes)}
+        envelopes = await asyncio.gather(*(run_one(t) for t in tasks))
+        all_ok = all(e.get("ok", False) for e in envelopes)
+        return {"ok": all_ok, "tasks": list(envelopes)}
 
 
 async def list_ai_accounts(pool: DbPool, now: datetime) -> dict[str, Any]:
@@ -259,12 +253,18 @@ async def list_ai_accounts(pool: DbPool, now: datetime) -> dict[str, Any]:
 
 
 async def build_server(
-    ctx: FarmContext, *, token: str | None = None, policy: PolicyCheck | None = None
+    ctx: FarmContext,
+    *,
+    token: str | None = None,
+    policy: PolicyCheck | None = None,
+    mcp_direct_limit: int = 40,
+    mcp_pinned: Sequence[str] = (),
 ) -> FastMCP:
     """The ``harness-farm`` server for ``ctx``.
 
     ``token``: bearer token required over HTTP (stdio is local trust and ignores it). ``policy``: optional
-    gate ``(caller, tool, arguments) -> reason to refuse | None``.
+    gate ``(caller, tool, arguments) -> reason to refuse | None``. ``mcp_direct_limit`` / ``mcp_pinned``:
+    ``settings.mcp_direct_limit`` / ``settings.mcp_pinned`` of the registry (which MCP tools are listed).
     """
     server = FastMCP(SERVER_NAME, instructions=INSTRUCTIONS)
     server.add_middleware(AuthMiddleware(token))
@@ -274,19 +274,15 @@ async def build_server(
     async with ctx.pool.connection() as conn:
         cur = await conn.execute("select name, description from public.capabilities order by name")
         capabilities = await cur.fetchall()
-    import os
-
-    test_name = os.environ.get("PYTEST_CURRENT_TEST", "")
-    legacy_patterns = ("test_accept_m1", "test_gateway.py::test_a_tool_is_generated")
-    is_legacy_m1 = any(t in test_name for t in legacy_patterns)
 
     for name, description in capabilities:
-        if is_legacy_m1 and name == "ask_ai":
-            continue
+        if name.startswith(MCP_CAPABILITY_PREFIX):
+            continue  # a pass-through capability: its tools come from register_mcp_tools
         models = CAPABILITY_MODELS.get(name)
         if models is None:
             log.info("gateway.capability_without_tool", capability=name, reason="no input/output models yet")
             continue
         server.add_tool(CapabilityTool.create(ctx, name, description or name, *models))
     _register_infra_tools(server, ctx)
+    await register_mcp_tools(server, ctx, direct_limit=mcp_direct_limit, pinned=mcp_pinned)
     return server

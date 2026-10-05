@@ -35,6 +35,9 @@ app.add_typer(commands_app, name="commands")
 ai_app = typer.Typer(help="AI pool: Claude, Codex, Gemini/Agy, Hermes accounts.")
 app.add_typer(ai_app, name="ai")
 
+mcp_app = typer.Typer(help="MCP servers: import them from Claude / Codex, sync their tools, log accounts in.")
+app.add_typer(mcp_app, name="mcp")
+
 
 ALEMBIC_INI = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
 DEFAULT_REGISTRY = Path(__file__).resolve().parent.parent.parent / "config" / "registry.yaml"
@@ -157,8 +160,54 @@ def _run_farm[T](work: Coroutine[Any, Any, T]) -> T:
 
 async def _context(local: bool) -> "FarmContext":
     from farm.context import build_context
+    from farm.executors.mcp.client import McpExecutor
+    from farm.mcp.store import DbDirectory
 
-    return await build_context(get_db_url(force_local=True) if local else None)
+    ctx = await build_context(get_db_url(force_local=True) if local else None)
+    # build_context() does not wire the MCP executor yet; commands that route need it for MCP providers.
+    ctx.executors.setdefault("mcp", McpExecutor(directory=DbDirectory(ctx.pool)))
+    return ctx
+
+
+def _mcp_exposure() -> tuple[int, list[str]]:
+    """``settings.mcp_direct_limit`` / ``settings.mcp_pinned`` of the registry file (default: 40, none)."""
+    try:
+        settings = load_registry(DEFAULT_REGISTRY).settings
+    except RegistryError as exc:
+        log = structlog.get_logger("farm.cli")
+        log.warning("mcp.settings_unreadable", registry=str(DEFAULT_REGISTRY), error=str(exc)[:200])
+        return 40, []
+    return settings.mcp_direct_limit, list(settings.mcp_pinned)
+
+
+async def _refresh_mcp_catalogue(ctx: "FarmContext") -> None:
+    """Re-list every MCP server's tools in the background while the server runs (never blocks, never raises).
+
+    The tool list of a running ``farm serve`` is fixed at its start from the stored catalogue; what this finds
+    is stored for the next start.
+    """
+    from farm.executors.mcp.client import McpExecutor
+    from farm.mcp.sync import sync_all
+
+    log = structlog.get_logger("farm.cli")
+    executor = ctx.executors.get("mcp")
+    if not isinstance(executor, McpExecutor):
+        return
+    try:
+        results = await sync_all(ctx.pool, executor)
+    except Exception as exc:  # a failing refresh must never take the server down
+        log.error("mcp.refresh_failed", error=type(exc).__name__)
+        return
+    log.info(
+        "mcp.refreshed",
+        providers=len(results),
+        failed=[r.provider for r in results if not r.ok],
+        changed=[
+            r.provider
+            for r in results
+            if r.diff is not None and (r.diff.added or r.diff.changed or r.diff.removed)
+        ],
+    )
 
 
 @app.command()
@@ -166,13 +215,21 @@ def serve(local: LocalOption = False) -> None:
     """Run the Harness Farm MCP server on stdio (what Claude and Hermes connect to)."""
 
     async def main() -> None:
+        import asyncio
+
         from farm.gateway.server import build_server
 
         ctx = await _context(local)
+        refresh: asyncio.Task[None] | None = None
         try:
-            server = await build_server(ctx)
+            limit, pinned = _mcp_exposure()
+            server = await build_server(ctx, mcp_direct_limit=limit, mcp_pinned=pinned)
+            refresh = asyncio.create_task(_refresh_mcp_catalogue(ctx))
             await server.run_async(transport="stdio", show_banner=False)
         finally:
+            if refresh is not None:
+                refresh.cancel()
+                await asyncio.gather(refresh, return_exceptions=True)
             await ctx.aclose()
 
     _run_farm(main())
@@ -518,4 +575,141 @@ def ai_login(
         subprocess.run(["hermes", "-p", str(profile)], env=env)
     else:
         typer.echo(f"Unknown CLI driver '{cli_name}' for connection {connection}")
+
+
+# --- MCP pass-through (OPEN1) -----------------------------------------------------------------------------
+
+
+@app.command(name="set-secret")
+def set_secret_command(
+    name: Annotated[str, typer.Argument(help="Environment variable to set, e.g. FARM_MCP_NOTION_TOKEN.")],
+    env_file: Annotated[
+        Path | None, typer.Option("--env-file", help="The .env to write (default: the repo's .env).")
+    ] = None,
+) -> None:
+    """Save a credential to the local .env. The value is typed hidden, never echoed, printed or logged."""
+    from farm.secrets import set_secret
+
+    value = typer.prompt(f"Value for {name}", hide_input=True)
+    try:
+        path = set_secret(name, value, env_path=env_file)
+    except ValueError as exc:
+        raise _fail(str(exc)) from None
+    typer.echo(f"saved {name} in {path}")
+
+
+@mcp_app.command(name="import")
+def mcp_import(
+    source: Annotated[
+        str, typer.Option("--from", help="claude-desktop, claude-code, codex or file:<path>")
+    ],
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Report what would be imported; write nothing.")
+    ] = False,
+    only: Annotated[
+        str | None, typer.Option("--only", help="Comma-separated names of the servers to import.")
+    ] = None,
+    registry: Annotated[
+        Path, typer.Option("--registry", help="The registry file that receives the providers.")
+    ] = DEFAULT_REGISTRY,
+    env_file: Annotated[
+        Path | None, typer.Option("--env-file", help="The .env that receives the secrets.")
+    ] = None,
+) -> None:
+    """Add the MCP servers of Claude Desktop, Claude Code or Codex to the registry; secrets go to .env."""
+    from farm.mcp.importer import ImportFailed, format_report, import_servers
+
+    names = [n.strip() for n in only.split(",") if n.strip()] if only else None
+    try:
+        report = import_servers(
+            source, registry_path=registry, env_path=env_file, dry_run=dry_run, only=names
+        )
+    except ImportFailed as exc:
+        raise _fail(str(exc)) from None
+    typer.echo(format_report(report))
+
+
+@mcp_app.command(name="sync")
+def mcp_sync(
+    provider: Annotated[
+        str | None, typer.Argument(help="Only this provider (default: every enabled MCP provider).")
+    ] = None,
+    local: LocalOption = False,
+) -> None:
+    """List each MCP server's tools through one of its accounts and store them for `farm serve`."""
+    from farm.executors.mcp.client import McpExecutor
+    from farm.mcp.sync import sync_all
+
+    async def main() -> bool:
+        ctx = await _context(local)
+        try:
+            executor = ctx.executors["mcp"]
+            assert isinstance(executor, McpExecutor)
+            results = await sync_all(ctx.pool, executor, only=provider)
+        finally:
+            await ctx.aclose()
+        if not results:
+            typer.echo(
+                "no MCP provider to sync: add one (`farm mcp import`), then `farm registry sync`", err=True
+            )
+            return False
+        for result in results:
+            if not result.ok:
+                typer.echo(f"{result.provider}: FAILED  {result.error}")
+                continue
+            diff = result.diff
+            counts = (
+                f"+{len(diff.added)} new, {len(diff.changed)} changed, {len(diff.removed)} removed"
+                if diff
+                else ""
+            )
+            denied = f", {len(result.denied)} denied" if result.denied else ""
+            typer.echo(
+                f"{result.provider}: {len(result.tools)} tools via {result.connection} ({counts}{denied})"
+            )
+        return all(result.ok for result in results)
+
+    if not _run_farm(main()):
+        raise typer.Exit(code=1)
+
+
+@mcp_app.command(name="login")
+def mcp_login(
+    connection: Annotated[str, typer.Argument(help="Connection id of an OAuth account, e.g. notion-01.")],
+    local: LocalOption = False,
+) -> None:
+    """Log an OAuth account in: the browser opens once and the tokens stay in the account's own store."""
+    from farm.executors.mcp.client import McpExecutor
+    from farm.executors.mcp.connect import McpFailure
+    from farm.mcp import store
+
+    async def main() -> None:
+        ctx = await _context(local)
+        try:
+            executor = ctx.executors["mcp"]
+            assert isinstance(executor, McpExecutor)
+            async with ctx.pool.connection() as conn:
+                cur = await conn.execute(
+                    "select provider_id from public.connections where id = %s", (connection,)
+                )
+                row = await cur.fetchone()
+            if row is None:
+                raise _fail(f"there is no connection '{connection}' (is the registry synced?)")
+            accounts = await store.list_accounts(ctx.pool, row[0])
+            view = next(account.view for account in accounts if account.view.id == connection)
+            try:
+                tools = await executor.login(view)
+            except McpFailure as failure:
+                raise _fail(f"login failed ({failure.kind.value}): {failure.message}") from None
+            async with ctx.pool.connection() as conn:
+                await conn.execute(
+                    "update public.connections set status = 'active' "
+                    "where id = %s and status = 'needs_login'",
+                    (connection,),
+                )
+            typer.echo(f"{connection} is logged in and active ({tools} tools visible); next: farm mcp sync")
+        finally:
+            await ctx.aclose()
+
+    _run_farm(main())
 

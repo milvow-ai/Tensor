@@ -55,14 +55,24 @@ async def test_a_tool_is_generated_for_every_capability_that_has_models_and_only
     registry.capabilities["find_email"] = CapabilitySpec(
         kind="tool", routes=["reoon"], description="Find an email."
     )
-    ctx = await farm_factory(registry)  # ask_ai is in the registry too, but has no models yet
+    registry.capabilities["unmodelled"] = CapabilitySpec(
+        kind="tool", routes=["reoon"], description="A capability nobody wrote models for."
+    )
+    ctx = await farm_factory(registry)  # ask_ai has models (M3e); "unmodelled" has none
     server = await build_server(ctx)
 
     async with Client(server) as client:
         tools = {t.name: t for t in await client.list_tools()}
 
-    assert set(tools) == {"verify_email", "find_email", *INFRA_TOOLS}  # generated, not hand-written
-    assert "ask_ai" not in tools
+    assert set(tools) == {  # generated, not hand-written
+        "verify_email",
+        "find_email",
+        "ask_ai",
+        "ask_ai_batch",
+        "list_ais",
+        *INFRA_TOOLS,
+    }
+    assert "unmodelled" not in tools
     schema = tools["find_email"].input_schema
     assert schema["properties"]["routing_strategy"]["enum"]
     assert set(schema["properties"]) > {"routing_strategy"} and schema.get("required")  # plus the model's own

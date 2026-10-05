@@ -135,6 +135,17 @@ KEY_COLUMNS: dict[str, set[str]] = {
     "ai_sessions": {"session_id", "connection_id", "ai", "model", "created_at", "last_used_at"},
     "farm_commands": {"id", "kind", "payload", "status", "result", "created_by", "created_at", "done_at"},
     "audit_events": {"id", "actor", "action", "target", "before", "after", "at"},
+    "mcp_tools": {
+        "provider",
+        "name",
+        "description",
+        "input_schema",
+        "output_schema",
+        "annotations",
+        "definition",
+        "schema_hash",
+        "synced_at",
+    },
 }
 FAKE_PW = "hunter2-not-a-real-password"  # sentinel that must never appear in CLI output
 DEFAULT_WORKSPACE = "00000000-0000-0000-0000-000000000001"

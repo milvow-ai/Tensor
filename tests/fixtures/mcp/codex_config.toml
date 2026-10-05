@@ -1,0 +1,24 @@
+model = "gpt-5"
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp"]
+enabled_tools = ["resolve-library-id", "get-library-docs"]
+
+[mcp_servers.context7.env]
+CONTEXT7_API_KEY = "SENTINEL-codex-context7-key-2b8d"
+
+[mcp_servers.figma]
+url = "https://mcp.figma.com/mcp"
+bearer_token_env_var = "FIGMA_OAUTH_TOKEN"
+http_headers = { "X-Figma-Region" = "us-east-1" }
+env_http_headers = { "X-Figma-Token" = "FIGMA_PERSONAL_TOKEN" }
+tool_timeout_sec = 90
+
+[mcp_servers.old]
+command = "old-server"
+enabled = false
+
+[mcp_servers.leaky]
+command = "docker"
+args = ["run", "-i", "--rm", "-e", "API_TOKEN=SENTINEL-codex-arg-secret-77aa", "some/image"]

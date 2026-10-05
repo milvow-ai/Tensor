@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "D:/projects"]
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "SENTINEL-desktop-github-token-7f3a",
+        "GITHUB_API_URL": "https://api.github.com"
+      }
+    },
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.notion.com/mcp"],
+      "env": {"MCP_REMOTE_CONFIG_DIR": "${NOTION_AUTH_DIR}"}
+    }
+  }
+}
