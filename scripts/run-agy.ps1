@@ -11,7 +11,7 @@ $outDir = "D:\dev-cache\runs\$id"; New-Item -ItemType Directory -Force $outDir |
 $out = Join-Path $outDir "agy.json"
 $prompt = "You are a builder. Execute the brief in $Brief exactly, following its rules. Do not touch any other file. Run every command in the foreground and wait for it to finish; never start a command in the background and poll it (each poll re-sends your whole context). Finish with the reply format the brief asks for."
 $sw = [Diagnostics.Stopwatch]::StartNew()
-$raw = agy -p $prompt --model $Model --dangerously-skip-permissions --output-format json --print-timeout 2400s 2>&1 | Out-String
+$raw = agy -p $prompt --model $Model --dangerously-skip-permissions --output-format json --print-timeout 3600s 2>&1 | Out-String
 [IO.File]::WriteAllText($out, $raw)
 "agy exit=$LASTEXITCODE secs=$([int]$sw.Elapsed.TotalSeconds) out=$out"
 $i = $raw.IndexOf('{"conversation')
