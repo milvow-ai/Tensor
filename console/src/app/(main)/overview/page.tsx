@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { Server } from "lucide-react";
 
 import { CommandsFeed } from "@/components/farm/commands-feed";
 import { PageHeader } from "@/components/farm/page-header";
-import { ErrorState } from "@/components/farm/states";
+import { EmptyState, ErrorState } from "@/components/farm/states";
+import { Button } from "@/components/ui/button";
 import { attempt } from "@/lib/farm/data";
 import { summarizeOverview } from "@/lib/farm/state";
 
@@ -29,6 +32,27 @@ export default async function OverviewPage() {
   }
 
   const overview = result.data;
+
+  if (overview.pools.length === 0) {
+    return (
+      <div className="flex flex-col gap-4 md:gap-5">
+        <PageHeader
+          title="Overview"
+          description="Capacity, spend, health and alerts across every tool pool and AI pool."
+        />
+        <EmptyState
+          icon={Server}
+          title="Welcome to your Farm"
+          description="Your Farm starts blank with zero providers. Connect your first MCP server, AI CLI account, or OpenAPI provider to see live capacity and routing."
+        >
+          <Button asChild>
+            <Link href="/integrations">Add your first MCP server</Link>
+          </Button>
+        </EmptyState>
+      </div>
+    );
+  }
+
   const summary = summarizeOverview(overview);
   const total = overview.spend.find((row) => row.provider_id === "total");
 

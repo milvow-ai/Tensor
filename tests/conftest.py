@@ -217,6 +217,12 @@ def zerobounce_body(status: str = "valid", email: str = "jane.doe@example.com") 
     return {"address": email, "status": status, "sub_status": ""}
 
 
+@pytest.fixture(autouse=True)
+def _owner_registry_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The self-serve commands rewrite the owner's registry file: no test may touch the real config/registry.yaml."""
+    monkeypatch.setenv("FARM_REGISTRY_PATH", str(tmp_path / "owner-registry.yaml"))
+
+
 @pytest.fixture
 def provider_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     """The keys the fixture registry points at; the values are fake (no network in tests)."""

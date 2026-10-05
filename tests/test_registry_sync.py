@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, open_pool
 from farm.registry import Registry, RegistryError, load_registry
 from farm.registry.sync import export_registry, sync_registry
 from tests.farm_helpers import normalise
 
 REAL_REGISTRY = Path(__file__).parent.parent / "config" / "registry.yaml"
+EXAMPLE_REGISTRY = Path(__file__).parent.parent / "config" / "registry.example.yaml"
 FIXTURE_REGISTRY = Path(__file__).parent / "fixtures" / "registry.yaml"
 
 
@@ -29,7 +31,9 @@ async def count(pool: DbPool, table: str) -> int:
     return int(row[0])
 
 
-@pytest.mark.parametrize("path", [REAL_REGISTRY, FIXTURE_REGISTRY], ids=["config", "fixture"])
+@pytest.mark.parametrize(
+    "path", [REAL_REGISTRY, EXAMPLE_REGISTRY, FIXTURE_REGISTRY], ids=["blank", "example", "fixture"]
+)
 async def test_sync_then_export_round_trips(pool: DbPool, path: Path) -> None:
     registry = load_registry(path)
     report = await sync_registry(pool, registry)
@@ -110,9 +114,34 @@ async def test_a_failing_sync_leaves_the_database_untouched(pool: DbPool, regist
     assert await count(pool, "audit_events") == audit
 
 
-async def test_export_of_an_unsynced_database_is_a_clear_error(pool: DbPool) -> None:
-    with pytest.raises(RegistryError, match="farm registry sync"):
-        await export_registry(pool)
+async def test_export_of_a_migrated_but_unsynced_database_is_a_blank_registry(pool: DbPool) -> None:
+    """Blank start: an empty Farm is valid, and nothing is made up for it (no capability is injected)."""
+    exported = await export_registry(pool)
+
+    assert exported.providers == {} and exported.capabilities == {}
+    assert exported.settings.owner_email
+
+
+async def test_export_of_a_database_that_was_never_seeded_is_a_clear_error(pool: DbPool) -> None:
+    async with pool.connection() as conn:
+        await conn.execute("delete from public.farm_settings")
+    try:
+        with pytest.raises(RegistryError, match="farm registry sync"):
+            await export_registry(pool)
+    finally:  # the singleton row is shared by every test of the session
+        async with pool.connection() as conn:
+            await conn.execute("insert into public.farm_settings (id) values (1) on conflict (id) do nothing")
+
+
+async def test_export_of_a_database_that_was_never_migrated_is_a_clear_error(
+    scratch_db: Callable[[], str],
+) -> None:
+    empty = await open_pool(scratch_db())
+    try:
+        with pytest.raises(RegistryError, match="farm db migrate"):
+            await export_registry(empty)
+    finally:
+        await empty.close()
 
 
 async def test_capability_schemas_are_stored_for_the_console(pool: DbPool, registry: Registry) -> None:

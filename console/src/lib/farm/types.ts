@@ -52,7 +52,10 @@ export type CommandKind =
   | "cancel_ai_job"
   | "set_max_parallel"
   | "set_mcp_tool_access"
-  | "sync_mcp_tools";
+  | "sync_mcp_tools"
+  | "add_provider"
+  | "update_provider"
+  | "remove_provider";
 
 export type CommandStatus = "queued" | "running" | "done" | "rejected" | "failed";
 

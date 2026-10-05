@@ -21,7 +21,9 @@
         "title": "Reason"
       }
     },
-    "required": ["connection_id"],
+    "required": [
+      "connection_id"
+    ],
     "title": "PausePayload",
     "type": "object"
   },
@@ -35,7 +37,9 @@
         "type": "string"
       }
     },
-    "required": ["connection_id"],
+    "required": [
+      "connection_id"
+    ],
     "title": "ResumePayload",
     "type": "object"
   },
@@ -54,7 +58,10 @@
         "type": "integer"
       }
     },
-    "required": ["connection_id", "priority"],
+    "required": [
+      "connection_id",
+      "priority"
+    ],
     "title": "SetPriorityPayload",
     "type": "object"
   },
@@ -62,7 +69,15 @@
     "additionalProperties": false,
     "properties": {
       "strategy": {
-        "enum": ["failover", "most_remaining", "round_robin", "parallel_split", "sticky", "fit_check", "pin"],
+        "enum": [
+          "failover",
+          "most_remaining",
+          "round_robin",
+          "parallel_split",
+          "sticky",
+          "fit_check",
+          "pin"
+        ],
         "title": "Strategy",
         "type": "string"
       },
@@ -109,7 +124,9 @@
         "title": "Capability"
       }
     },
-    "required": ["strategy"],
+    "required": [
+      "strategy"
+    ],
     "title": "SetStrategyPayload",
     "type": "object"
   },
@@ -117,7 +134,11 @@
     "additionalProperties": false,
     "properties": {
       "scope": {
-        "enum": ["global", "provider", "connection"],
+        "enum": [
+          "global",
+          "provider",
+          "connection"
+        ],
         "title": "Scope",
         "type": "string"
       },
@@ -154,7 +175,10 @@
         "type": "boolean"
       }
     },
-    "required": ["scope", "monthly_usd"],
+    "required": [
+      "scope",
+      "monthly_usd"
+    ],
     "title": "SetBudgetPayload",
     "type": "object"
   },
@@ -179,7 +203,16 @@
           },
           "period": {
             "default": "month",
-            "enum": ["minute", "hour", "day", "week", "month", "rolling_5h", "total", "none"],
+            "enum": [
+              "minute",
+              "hour",
+              "day",
+              "week",
+              "month",
+              "rolling_5h",
+              "total",
+              "none"
+            ],
             "title": "Period",
             "type": "string"
           },
@@ -199,7 +232,11 @@
           },
           "charged_on": {
             "default": "attempt",
-            "enum": ["attempt", "success", "found"],
+            "enum": [
+              "attempt",
+              "success",
+              "found"
+            ],
             "title": "Charged On",
             "type": "string"
           },
@@ -266,7 +303,15 @@
       "strategy": {
         "anyOf": [
           {
-            "enum": ["failover", "most_remaining", "round_robin", "parallel_split", "sticky", "fit_check", "pin"],
+            "enum": [
+              "failover",
+              "most_remaining",
+              "round_robin",
+              "parallel_split",
+              "sticky",
+              "fit_check",
+              "pin"
+            ],
             "type": "string"
           },
           {
@@ -297,7 +342,13 @@
       },
       "status": {
         "default": "active",
-        "enum": ["active", "paused", "needs_login", "exhausted", "disabled"],
+        "enum": [
+          "active",
+          "paused",
+          "needs_login",
+          "exhausted",
+          "disabled"
+        ],
         "title": "Status",
         "type": "string"
       },
@@ -324,7 +375,11 @@
         "type": "object"
       }
     },
-    "required": ["provider_id", "id", "auth_ref"],
+    "required": [
+      "provider_id",
+      "id",
+      "auth_ref"
+    ],
     "title": "AddConnectionPayload",
     "type": "object"
   },
@@ -392,7 +447,15 @@
       "strategy": {
         "anyOf": [
           {
-            "enum": ["failover", "most_remaining", "round_robin", "parallel_split", "sticky", "fit_check", "pin"],
+            "enum": [
+              "failover",
+              "most_remaining",
+              "round_robin",
+              "parallel_split",
+              "sticky",
+              "fit_check",
+              "pin"
+            ],
             "type": "string"
           },
           {
@@ -431,7 +494,13 @@
       "status": {
         "anyOf": [
           {
-            "enum": ["active", "paused", "needs_login", "exhausted", "disabled"],
+            "enum": [
+              "active",
+              "paused",
+              "needs_login",
+              "exhausted",
+              "disabled"
+            ],
             "type": "string"
           },
           {
@@ -468,7 +537,9 @@
         "title": "Meta"
       }
     },
-    "required": ["connection_id"],
+    "required": [
+      "connection_id"
+    ],
     "title": "UpdateConnectionPayload",
     "type": "object"
   },
@@ -482,7 +553,9 @@
         "type": "string"
       }
     },
-    "required": ["connection_id"],
+    "required": [
+      "connection_id"
+    ],
     "title": "RemoveConnectionPayload",
     "type": "object"
   },
@@ -512,7 +585,10 @@
         "type": "boolean"
       }
     },
-    "required": ["capability", "provider_id"],
+    "required": [
+      "capability",
+      "provider_id"
+    ],
     "title": "SetRoutePayload",
     "type": "object"
   },
@@ -540,7 +616,9 @@
         "title": "Capability"
       }
     },
-    "required": ["connection_id"],
+    "required": [
+      "connection_id"
+    ],
     "title": "TestConnectionPayload",
     "type": "object"
   },
@@ -560,7 +638,9 @@
         "title": "Alert Id"
       }
     },
-    "required": ["alert_id"],
+    "required": [
+      "alert_id"
+    ],
     "title": "AckAlertPayload",
     "type": "object"
   },
@@ -580,7 +660,9 @@
         "title": "Job Id"
       }
     },
-    "required": ["job_id"],
+    "required": [
+      "job_id"
+    ],
     "title": "CancelAiJobPayload",
     "type": "object"
   },
@@ -622,7 +704,9 @@
         "type": "integer"
       }
     },
-    "required": ["max_parallel"],
+    "required": [
+      "max_parallel"
+    ],
     "title": "SetMaxParallelPayload",
     "type": "object"
   },
@@ -649,7 +733,10 @@
       "access": {
         "anyOf": [
           {
-            "enum": ["allow", "deny"],
+            "enum": [
+              "allow",
+              "deny"
+            ],
             "type": "string"
           },
           {
@@ -660,7 +747,10 @@
         "title": "Access"
       }
     },
-    "required": ["provider_id", "tool"],
+    "required": [
+      "provider_id",
+      "tool"
+    ],
     "title": "SetMcpToolAccessPayload",
     "type": "object"
   },
@@ -683,6 +773,564 @@
       }
     },
     "title": "SyncMcpToolsPayload",
+    "type": "object"
+  },
+  "add_provider": {
+    "$defs": {
+      "CommandUnitSpec": {
+        "additionalProperties": false,
+        "description": "Specification of a consumption unit for a connection.",
+        "properties": {
+          "limit": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Limit"
+          },
+          "period": {
+            "default": "month",
+            "enum": [
+              "minute",
+              "hour",
+              "day",
+              "week",
+              "month",
+              "rolling_5h",
+              "total",
+              "none"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "anchor": {
+            "anyOf": [
+              {
+                "maximum": 31,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Anchor"
+          },
+          "charged_on": {
+            "default": "attempt",
+            "enum": [
+              "attempt",
+              "success",
+              "found"
+            ],
+            "title": "Charged On",
+            "type": "string"
+          },
+          "unit_cost_usd": {
+            "default": 0.0,
+            "minimum": 0,
+            "title": "Unit Cost Usd",
+            "type": "number"
+          },
+          "estimate_per_call": {
+            "default": 1.0,
+            "minimum": 0,
+            "title": "Estimate Per Call",
+            "type": "number"
+          }
+        },
+        "title": "CommandUnitSpec",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "provider_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+        "title": "Provider Id",
+        "type": "string"
+      },
+      "name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Name"
+      },
+      "kind": {
+        "default": "tool",
+        "enum": [
+          "tool",
+          "ai"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "executor": {
+        "default": "mcp",
+        "enum": [
+          "api",
+          "mcp",
+          "llm",
+          "cli_agent",
+          "agent",
+          "browser",
+          "local",
+          "human"
+        ],
+        "title": "Executor",
+        "type": "string"
+      },
+      "default_strategy": {
+        "default": "failover",
+        "enum": [
+          "failover",
+          "most_remaining",
+          "round_robin",
+          "parallel_split",
+          "sticky",
+          "fit_check",
+          "pin"
+        ],
+        "title": "Default Strategy",
+        "type": "string"
+      },
+      "enabled": {
+        "default": true,
+        "title": "Enabled",
+        "type": "boolean"
+      },
+      "config": {
+        "additionalProperties": true,
+        "title": "Config",
+        "type": "object"
+      },
+      "mcp": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Mcp"
+      },
+      "command": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Command"
+      },
+      "args": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Args",
+        "type": "array"
+      },
+      "cwd": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Cwd"
+      },
+      "env": {
+        "anyOf": [
+          {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        ],
+        "title": "Env"
+      },
+      "url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Url"
+      },
+      "headers": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "title": "Headers",
+        "type": "object"
+      },
+      "auth": {
+        "default": "none",
+        "enum": [
+          "none",
+          "env",
+          "oauth"
+        ],
+        "title": "Auth",
+        "type": "string"
+      },
+      "namespace": {
+        "anyOf": [
+          {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Namespace"
+      },
+      "exposure": {
+        "default": "auto",
+        "enum": [
+          "direct",
+          "discovery",
+          "auto"
+        ],
+        "title": "Exposure",
+        "type": "string"
+      },
+      "timeout_s": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Timeout S"
+      },
+      "cli": {
+        "anyOf": [
+          {
+            "enum": [
+              "claude",
+              "codex",
+              "gemini",
+              "agy",
+              "hermes"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Cli"
+      },
+      "account_id": {
+        "anyOf": [
+          {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Account Id"
+      },
+      "label": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Label"
+      },
+      "models": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Models",
+        "type": "array"
+      },
+      "max_parallel": {
+        "default": 1,
+        "minimum": 1,
+        "title": "Max Parallel",
+        "type": "integer"
+      },
+      "spec": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Spec"
+      },
+      "auth_env": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Auth Env"
+      },
+      "connection_id": {
+        "anyOf": [
+          {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Connection Id"
+      },
+      "auth_ref": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Auth Ref"
+      },
+      "priority": {
+        "default": 100,
+        "minimum": 0,
+        "title": "Priority",
+        "type": "integer"
+      },
+      "concurrency": {
+        "default": 1,
+        "minimum": 1,
+        "title": "Concurrency",
+        "type": "integer"
+      },
+      "rate_per_min": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Rate Per Min"
+      },
+      "status": {
+        "anyOf": [
+          {
+            "enum": [
+              "active",
+              "paused",
+              "needs_login",
+              "exhausted",
+              "disabled"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Status"
+      },
+      "plan": {
+        "additionalProperties": true,
+        "title": "Plan",
+        "type": "object"
+      },
+      "meta": {
+        "additionalProperties": true,
+        "title": "Meta",
+        "type": "object"
+      },
+      "units": {
+        "patternProperties": {
+          "^[a-z0-9][a-z0-9_-]{0,62}$": {
+            "$ref": "#/$defs/CommandUnitSpec"
+          }
+        },
+        "propertyNames": {
+          "maxLength": 63
+        },
+        "title": "Units",
+        "type": "object"
+      }
+    },
+    "required": [
+      "provider_id"
+    ],
+    "title": "AddProviderPayload",
+    "type": "object"
+  },
+  "update_provider": {
+    "additionalProperties": false,
+    "properties": {
+      "provider_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+        "title": "Provider Id",
+        "type": "string"
+      },
+      "name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Name"
+      },
+      "enabled": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Enabled"
+      },
+      "default_strategy": {
+        "anyOf": [
+          {
+            "enum": [
+              "failover",
+              "most_remaining",
+              "round_robin",
+              "parallel_split",
+              "sticky",
+              "fit_check",
+              "pin"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Default Strategy"
+      },
+      "config": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Config"
+      },
+      "mcp": {
+        "anyOf": [
+          {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Mcp"
+      }
+    },
+    "required": [
+      "provider_id"
+    ],
+    "title": "UpdateProviderPayload",
+    "type": "object"
+  },
+  "remove_provider": {
+    "additionalProperties": false,
+    "properties": {
+      "provider_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+        "title": "Provider Id",
+        "type": "string"
+      },
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "provider_id"
+    ],
+    "title": "RemoveProviderPayload",
     "type": "object"
   }
 }

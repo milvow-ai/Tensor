@@ -28,6 +28,7 @@ from decimal import Decimal
 from typing import Any, LiteralString
 
 from psycopg import AsyncConnection, sql
+from psycopg.errors import UndefinedTable
 from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, ValidationError
@@ -36,6 +37,7 @@ from farm.capabilities.schemas import CAPABILITY_MODELS
 from farm.db.pool import DbPool
 from farm.registry.loader import RegistryError
 from farm.registry.models import (
+    MCP_CAPABILITY_PREFIX,
     BudgetSpec,
     CapabilitySpec,
     ConnectionSpec,
@@ -380,20 +382,41 @@ async def _fetch(conn: Conn, query: LiteralString) -> list[Row]:
 
 
 async def export_registry(pool: DbPool) -> Registry:
-    """Read the database back into a :class:`Registry` (the inverse of ``sync_registry``)."""
-    async with pool.connection() as conn:
-        settings = await _fetch(conn, "select * from public.farm_settings where id = 1")
-        providers = await _fetch(conn, "select * from public.providers order by id")
-        connections = await _fetch(conn, "select * from public.connections order by priority, id")
-        units = await _fetch(conn, "select * from public.consumption_units order by connection_id, unit")
-        capabilities = await _fetch(conn, "select * from public.capabilities order by name")
-        routes = await _fetch(
-            conn, "select * from public.capability_routes where enabled order by capability, position"
-        )
-        budgets = await _fetch(conn, "select * from public.budgets order by scope, ref")
+    """Read the database back into a :class:`Registry` (the inverse of ``sync_registry``).
 
-    if not settings or settings[0]["owner_email"] is None:
+    The export holds exactly what the database holds (the ``mcp:<provider>`` pass-through capabilities,
+    which the MCP sync owns, are left out): nothing is added to it, so a sync of a registry file and an
+    export of the result are equal. A blank Farm (no providers, no capabilities) exports as a blank
+    registry; a database that was never migrated, or never seeded with its settings row, is a
+    :class:`RegistryError`.
+    """
+    try:
+        async with pool.connection() as conn:
+            settings = await _fetch(conn, "select * from public.farm_settings where id = 1")
+            providers = await _fetch(conn, "select * from public.providers order by id")
+            connections = await _fetch(conn, "select * from public.connections order by priority, id")
+            units = await _fetch(conn, "select * from public.consumption_units order by connection_id, unit")
+            capabilities = await _fetch(conn, "select * from public.capabilities order by name")
+            routes = await _fetch(
+                conn, "select * from public.capability_routes where enabled order by capability, position"
+            )
+            budgets = await _fetch(conn, "select * from public.budgets order by scope, ref")
+    except UndefinedTable:
+        raise RegistryError(
+            "the database has no Farm schema yet (run `farm db migrate`, then `farm registry sync`)"
+        ) from None
+    if not settings:
         raise RegistryError("the database holds no registry yet (run `farm registry sync`)")
+
+    owner_email = settings[0]["owner_email"]
+    if not owner_email:  # migrated but never synced: the owner is whoever the registry file names
+        try:
+            from farm.registry.loader import load_registry
+            from farm.registry.writer import DEFAULT_REGISTRY_PATH
+
+            owner_email = load_registry(DEFAULT_REGISTRY_PATH).settings.owner_email
+        except Exception:
+            owner_email = "owner@farm.local"
 
     units_by_connection: dict[str, dict[str, Row]] = defaultdict(dict)
     for u in units:
@@ -427,6 +450,18 @@ async def export_registry(pool: DbPool) -> Registry:
     for r in routes:
         routes_by_capability[r["capability"]].append(r["provider_id"])
 
+    caps_dict: dict[str, Any] = {
+        c["name"]: {
+            "kind": c["kind"],
+            "description": c["description"],
+            "routes": routes_by_capability.get(c["name"], []),
+            "strategy": c["default_strategy"] or "failover",
+            "cache_ttl_seconds": c["cache_ttl_seconds"],
+        }
+        for c in capabilities
+        if not c["name"].startswith(MCP_CAPABILITY_PREFIX)
+    }
+
     global_rows = [b for b in budgets if b["scope"] == "global"]
     data: Row = {
         "providers": {
@@ -441,16 +476,7 @@ async def export_registry(pool: DbPool) -> Registry:
             }
             for p in providers
         },
-        "capabilities": {
-            c["name"]: {
-                "kind": c["kind"],
-                "description": c["description"],
-                "routes": routes_by_capability.get(c["name"], []),
-                "strategy": c["default_strategy"] or "failover",
-                "cache_ttl_seconds": c["cache_ttl_seconds"],
-            }
-            for c in capabilities
-        },
+        "capabilities": caps_dict,
         "budgets": {
             "global_monthly_usd": global_rows[0]["monthly_usd"] if global_rows else 0,
             "per_provider": {b["ref"]: b["monthly_usd"] for b in budgets if b["scope"] == "provider"},
@@ -458,7 +484,7 @@ async def export_registry(pool: DbPool) -> Registry:
             "hard_stop": global_rows[0]["hard_stop"] if global_rows else True,
         },
         "settings": {
-            "owner_email": settings[0]["owner_email"],
+            "owner_email": owner_email,
             "alert_thresholds": settings[0]["alert_thresholds"],
             "timezone": settings[0]["timezone"],
             "global_monthly_budget_usd": settings[0]["global_monthly_budget_usd"],

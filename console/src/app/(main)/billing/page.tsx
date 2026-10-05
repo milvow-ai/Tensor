@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { Receipt } from "lucide-react";
 
 import { CommandsProvider } from "@/components/farm/commands-provider";
 import { PageHeader } from "@/components/farm/page-header";
-import { ErrorState } from "@/components/farm/states";
+import { EmptyState, ErrorState } from "@/components/farm/states";
+import { Button } from "@/components/ui/button";
 import { attempt } from "@/lib/farm/data";
 
 import { BillingKpiRow } from "./_components/billing-kpi-row";
@@ -33,6 +36,29 @@ export default async function BillingPage() {
   }
 
   const { overview, pools } = result.data;
+
+  if (pools.length === 0) {
+    return (
+      <CommandsProvider>
+        <div className="flex flex-col gap-4 md:gap-5">
+          <PageHeader
+            title="Billing"
+            description="Budgets, spend, projected month-end totals, renewals calendar, and idle accounts."
+          />
+          <EmptyState
+            icon={Receipt}
+            title="No billing activity yet"
+            description="Budgets, spend, and renewal forecasts will appear here once you connect providers and accounts."
+          >
+            <Button asChild>
+              <Link href="/integrations">Add your first MCP server</Link>
+            </Button>
+          </EmptyState>
+        </div>
+      </CommandsProvider>
+    );
+  }
+
   const totalSpendRow = overview.spendMonth.find((r) => r.provider_id === "total") ?? {
     provider_id: "total",
     provider_name: "Total",

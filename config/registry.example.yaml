@@ -1,0 +1,350 @@
+# Harness Farm registry: providers (pools), connections (accounts), capabilities, budgets.
+# Seeds the database; after that the DB is the source of truth and the Console edits it via farm_commands.
+# Validated by farm.registry (uv run python -c "from farm.registry import load_registry; load_registry('config/registry.yaml')").
+#
+# Secrets never live here: auth_ref is env:NAME (a variable in the owner's .env), token-store:ID or cli:PROFILE.
+# limit: null means "unlimited / not tracked yet" - the owner fills real plan numbers in the Console.
+# Lower `priority` is tried first. status needs_login = account exists but is not logged in / has no key yet.
+
+settings:
+  owner_email: milvow.ai@gmail.com
+  alert_thresholds: [50, 80, 100]
+
+# --------------------------------------------------------------------------------------------------
+# Tool pools (kind: tool)
+# --------------------------------------------------------------------------------------------------
+providers:
+  reoon:
+    name: Reoon
+    kind: tool
+    executor: api
+    default_strategy: failover
+    connections:
+      - id: reoon-01
+        label: Reoon free (20 credits/day)
+        auth_ref: env:REOON_API_KEY
+        priority: 1
+        concurrency: 2            # Reoon asks for at most 5 parallel single verifications
+        meta: {mode: power}       # power = real mailbox check (can take up to a minute); quick only checks the domain
+        plan: {name: free, price_usd: 0}
+        units:
+          credits: {limit: 20, period: day, charged_on: success}   # unknown results are refunded
+
+  zerobounce:
+    name: ZeroBounce
+    kind: tool
+    executor: api
+    default_strategy: failover
+    connections:
+      - id: zerobounce-01
+        label: ZeroBounce free (100 credits/month)
+        auth_ref: env:ZEROBOUNCE_API_KEY
+        priority: 1
+        plan: {name: free, price_usd: 0}
+        units:
+          credits: {limit: 100, period: month, anchor: 1, charged_on: success}   # unknown is never charged
+
+  apollo:
+    name: Apollo
+    kind: tool
+    executor: api
+    default_strategy: failover
+    connections:
+      - id: apollo-01
+        label: Apollo
+        auth_ref: env:APOLLO_API_KEY
+        status: needs_login
+        priority: 1
+        rate_per_min: 50          # Free plan: 50/min per endpoint (docs.apollo.io/reference/rate-limits)
+        units:
+          # people search 0, organization enrich 1, people match 1 when a person is matched. The adapter
+          # reports the real charge, so success commits exactly that. Fill the plan's allowance here.
+          credits: {limit: null, charged_on: success}
+
+  hunter:
+    name: Hunter
+    kind: tool
+    executor: api
+    default_strategy: failover
+    connections:
+      - id: hunter-01
+        label: Hunter
+        auth_ref: env:HUNTER_API_KEY
+        priority: 1
+        concurrency: 2            # the verifier can hold a request for 20 s
+        units:
+          # Fill the plan's allowance (and period) from Hunter's account page; GET /v2/account reports them.
+          searches: {limit: null, charged_on: found}            # email finder: 1 only when an email is found
+          verifications: {limit: null, charged_on: success}     # email verifier: 1 per answer
+
+  pagespeed:
+    name: Google PageSpeed Insights
+    kind: tool
+    executor: api
+    default_strategy: failover
+    connections:
+      - id: pagespeed-01
+        label: PageSpeed Insights API key
+        auth_ref: env:GOOGLE_PAGESPEED_API_KEY
+        priority: 1
+        concurrency: 3            # one run takes 10-30 s
+        plan: {name: free, price_usd: 0}
+        units:
+          requests: {limit: 25000, period: day, charged_on: attempt}
+
+  adzuna:
+    name: Adzuna
+    kind: tool
+    executor: api
+    default_strategy: failover
+    connections:
+      - id: adzuna-01
+        label: Adzuna (250 hits/day, 25/min)
+        auth_ref: env:ADZUNA_APP_KEY
+        priority: 1
+        rate_per_min: 25
+        meta: {app_id_ref: "env:ADZUNA_APP_ID"}   # Adzuna wants an app id and an app key; both stay in .env
+        plan: {name: free, price_usd: 0}
+        units:
+          # Adzuna also caps 1,000/week and 2,500/month; only the daily cap is tracked here, the others
+          # surface as a 429 from Adzuna.
+          requests: {limit: 250, period: day, charged_on: attempt}
+
+  ats_public:
+    name: Public job boards (Greenhouse, Lever, Ashby)
+    kind: tool
+    executor: api
+    default_strategy: failover
+    connections:
+      - id: ats-public-01
+        label: Public ATS job-board JSON (no key, no quota)
+        auth_ref: "cli:none"      # needs no credential; the schema requires an auth_ref and this one is never resolved
+        priority: 1
+        concurrency: 4
+        units:
+          requests: {limit: null}
+
+  llm:
+    name: LLM via Bifrost
+    kind: tool
+    executor: llm
+    default_strategy: failover
+    # Every connection uses the one Bifrost virtual key (env:BIFROST_FARM_VK): the Farm never holds an LLM
+    # provider key. Bifrost owns the provider keys, the key's spend budget and its rate limits. The model is
+    # meta.model; meta.structured_output is "prompt" (default) or "json_schema" (also send response_format).
+    connections:
+      - id: llm-or-free
+        label: OpenRouter free model (20/min, 50/day until $10 of credits are bought)
+        auth_ref: env:BIFROST_FARM_VK
+        priority: 1
+        rate_per_min: 20
+        meta: {model: "openrouter/qwen/qwen3.8-27b:free"}
+        plan: {name: free, price_usd: 0}
+        units:
+          requests: {limit: 50, period: day, charged_on: attempt}   # 1,000/day after ~$10 of credits
+          tokens: {limit: null, charged_on: attempt}
+      - id: llm-or-flash
+        label: OpenRouter DeepSeek V4 Flash (paid per token, billed through the Bifrost key budget)
+        auth_ref: env:BIFROST_FARM_VK
+        priority: 2
+        concurrency: 2
+        meta: {model: "openrouter/deepseek/deepseek-v4-flash"}
+        units:
+          requests: {limit: null, charged_on: attempt}
+          tokens: {limit: null, charged_on: attempt}
+      - id: llm-groq
+        label: Groq free (30/min, 1,000/day) - needs a Groq key in Bifrost
+        auth_ref: env:BIFROST_FARM_VK
+        status: needs_login       # until a Groq key exists and Bifrost has it
+        priority: 3
+        rate_per_min: 30
+        meta: {model: "groq/qwen/qwen3.8-27b"}
+        plan: {name: free, price_usd: 0}
+        units:
+          requests: {limit: 1000, period: day, charged_on: attempt}
+          tokens: {limit: null, charged_on: attempt}
+      - id: llm-bedrock
+        label: AWS Bedrock (paid; capped at $20 by the Bifrost key budget)
+        auth_ref: env:BIFROST_FARM_VK
+        status: paused            # the owner enables it in the Console
+        priority: 4
+        meta: {model: "bedrock_mantle/qwen.qwen3-coder-next"}   # must be a model the Bifrost key may use
+        units:
+          requests: {limit: null, charged_on: attempt}
+          tokens: {limit: null, charged_on: attempt}
+
+  clay:
+    name: Clay
+    kind: tool
+    executor: mcp
+    default_strategy: sticky          # Clay tables live per workspace, so keep a job on one account
+    connections:
+      - {id: clay-01, auth_ref: "token-store:clay-01", status: needs_login, priority: 1, units: {credits: {limit: null}}}
+      - {id: clay-02, auth_ref: "token-store:clay-02", status: needs_login, priority: 2, units: {credits: {limit: null}}}
+      - {id: clay-03, auth_ref: "token-store:clay-03", status: needs_login, priority: 3, units: {credits: {limit: null}}}
+      - {id: clay-04, auth_ref: "token-store:clay-04", status: needs_login, priority: 4, units: {credits: {limit: null}}}
+      - {id: clay-05, auth_ref: "token-store:clay-05", status: needs_login, priority: 5, units: {credits: {limit: null}}}
+      - {id: clay-06, auth_ref: "token-store:clay-06", status: needs_login, priority: 6, units: {credits: {limit: null}}}
+      - {id: clay-07, auth_ref: "token-store:clay-07", status: needs_login, priority: 7, units: {credits: {limit: null}}}
+
+# --------------------------------------------------------------------------------------------------
+# AI pools (kind: ai): CLI agents the main Claude can delegate to through the Farm
+# --------------------------------------------------------------------------------------------------
+  claude:
+    name: Claude
+    kind: ai
+    executor: cli_agent
+    default_strategy: failover
+    connections:
+      - id: claude-02
+        auth_ref: "cli:claude-02"
+        status: needs_login
+        priority: 1
+        meta: {cli: claude, config_dir: "D:/farm-data/ai/claude-02", models: [sonnet, opus, haiku]}
+        units:
+          requests: {limit: null, period: rolling_5h}
+      - id: claude-03
+        auth_ref: "cli:claude-03"
+        status: needs_login
+        priority: 2
+        meta: {cli: claude, config_dir: "D:/farm-data/ai/claude-03", models: [sonnet, opus, haiku]}
+        units:
+          requests: {limit: null, period: rolling_5h}
+      - id: claude-04
+        auth_ref: "cli:claude-04"
+        status: needs_login
+        priority: 3
+        meta: {cli: claude, config_dir: "D:/farm-data/ai/claude-04", models: [sonnet, opus, haiku]}
+        units:
+          requests: {limit: null, period: rolling_5h}
+
+  gemini:
+    name: Gemini (agy)
+    kind: ai
+    executor: cli_agent
+    default_strategy: failover
+    connections:
+      - id: agy-01
+        auth_ref: "cli:agy-01"
+        status: active
+        priority: 1
+        meta: {cli: agy, models: [gemini-3.8-flash-high, gemini-3.1-pro-high]}
+        units:
+          requests: {limit: null}
+
+  codex:
+    name: Codex
+    kind: ai
+    executor: cli_agent
+    default_strategy: failover
+    connections:
+      - id: codex-01
+        auth_ref: "cli:codex-01"
+        status: needs_login
+        priority: 1
+        meta: {cli: codex}
+        units:
+          requests: {limit: null}
+
+  hermes:
+    name: Hermes
+    kind: ai
+    executor: cli_agent
+    default_strategy: failover
+    connections:
+      - id: hermes-01
+        auth_ref: "cli:farm-agent"       # the Hermes profile this connection runs under
+        status: active
+        priority: 1
+        meta: {cli: hermes, profile: farm-agent, models: [openrouter/deepseek/deepseek-v4-flash]}
+        units:
+          requests: {limit: null}        # tokens are billed through OpenRouter: set unit_cost_usd once measured
+
+# --------------------------------------------------------------------------------------------------
+# Capabilities: each route is an ordered list of provider pools
+# --------------------------------------------------------------------------------------------------
+capabilities:
+  verify_email:
+    kind: tool
+    description: Verify that an email address exists and can receive mail.
+    routes: [reoon, zerobounce, hunter]
+    strategy: failover
+    cache_ttl_seconds: 5184000          # 60 days
+
+  find_person:
+    kind: tool
+    description: Find people at a company by domain, optionally filtered by job title and seniority.
+    routes: [apollo, clay]
+    strategy: failover
+    cache_ttl_seconds: 604800           # 7 days
+
+  find_email:
+    kind: tool
+    description: Find a person's work email from first name, last name and company domain.
+    routes: [hunter, apollo]
+    strategy: failover
+    cache_ttl_seconds: 2592000          # 30 days
+
+  enrich_company:
+    kind: tool
+    description: Company profile from a domain (name, industry, size, location, socials, technologies).
+    routes: [apollo, clay]
+    strategy: failover
+    cache_ttl_seconds: 2592000          # 30 days
+
+  pagespeed:
+    kind: tool
+    description: PageSpeed Insights for a URL, with real-user Core Web Vitals (CrUX) and Lighthouse lab metrics kept apart.
+    routes: [pagespeed]
+    strategy: failover
+    cache_ttl_seconds: 86400            # 1 day
+
+  jobs_lookup:
+    kind: tool
+    description: Open job postings of a company (public ATS boards) or matching a search (Adzuna).
+    routes: [ats_public, adzuna]
+    strategy: failover
+    cache_ttl_seconds: 21600            # 6 hours
+
+  extract:
+    kind: tool
+    description: Pull structured data out of text, validated against a JSON Schema (LLM through Bifrost).
+    routes: [llm]
+    strategy: failover
+    cache_ttl_seconds: 86400            # 1 day; temperature 0, so identical input gives the same answer
+
+  classify:
+    kind: tool
+    description: Pick one label for a text from a given list, with a self-reported confidence (LLM through Bifrost).
+    routes: [llm]
+    strategy: failover
+    cache_ttl_seconds: 86400            # 1 day
+
+  ask_ai:
+    kind: ai
+    description: Ask another AI (Claude, Gemini, Codex or Hermes) to do a task and return its answer.
+    routes: [claude, gemini, codex, hermes]
+    strategy: failover
+    cache_ttl_seconds: 0
+
+# --------------------------------------------------------------------------------------------------
+# Budgets (monthly, USD). 0 = hard stop on any paid call; free calls (cost 0) still run.
+# The owner sets the real numbers in the Console.
+# --------------------------------------------------------------------------------------------------
+budgets:
+  global_monthly_usd: 0
+  hard_stop: true
+  per_provider:
+    reoon: 0
+    zerobounce: 0
+    apollo: 0
+    hunter: 0
+    pagespeed: 0
+    adzuna: 0
+    ats_public: 0
+    llm: 0
+    clay: 0
+    claude: 0
+    gemini: 0
+    codex: 0
+    hermes: 0

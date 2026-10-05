@@ -9,10 +9,12 @@ Rejects unknown kinds, invalid payloads, or raw secrets in auth_ref.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from decimal import Decimal
+from pathlib import Path
 from typing import Annotated, Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import structlog
 from psycopg.types.json import Jsonb
@@ -27,9 +29,18 @@ from pydantic import (
 )
 
 from farm.db.pool import DbPool
-from farm.executors.base import ConnectionView
-from farm.registry.models import Strategy
-from farm.secrets import AuthRefError, resolve_auth
+from farm.executors.base import ConnectionView, ErrorKind, ExecRequest
+from farm.registry.models import (
+    ExecutorKind,
+    McpAuth,
+    McpExpose,
+    McpProviderSpec,
+    ProviderKind,
+    Strategy,
+    looks_like_secret,
+)
+from farm.secrets import AuthRefError, redact, resolve_auth, resolve_token_store
+from farm.settings import data_dir
 
 log = structlog.get_logger(__name__)
 
@@ -91,6 +102,28 @@ def validate_auth_ref(val: str) -> str:
             raise ValueError(f"Invalid environment variable name in auth_ref: '{rest}'")
 
     return text
+
+
+def _assert_no_raw_secrets(obj: Any) -> None:
+    """Recursively verify that no raw secrets are embedded in payload data."""
+    if isinstance(obj, str):
+        if looks_like_secret(obj):
+            raise ValueError(
+                f"Raw secret values are rejected: {redact(obj)}. "
+                "Keep credentials in .env and use env:NAME references."
+            )
+        if obj.startswith("env:"):
+            rest = obj.split(":", 1)[1]
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", rest):
+                raise ValueError(f"Invalid environment variable name in reference: '{rest}'")
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, str) and looks_like_secret(k):
+                raise ValueError("Secret-looking string in key rejected.")
+            _assert_no_raw_secrets(v)
+    elif isinstance(obj, (list, tuple, set)):
+        for item in obj:
+            _assert_no_raw_secrets(item)
 
 
 # --- Payload Models ---
@@ -243,6 +276,109 @@ class SyncMcpToolsPayload(BaseModel):
     provider_id: Slug | None = None
 
 
+class AddProviderPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: Slug
+    name: str | None = None
+    kind: ProviderKind = "tool"
+    executor: ExecutorKind = "mcp"
+    default_strategy: Strategy = "failover"
+    enabled: bool = True
+    config: dict[str, Any] = Field(default_factory=dict)
+
+    # MCP options (nested block or shorthand fields)
+    mcp: dict[str, Any] | None = None
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    cwd: str | None = None
+    env: dict[str, str] | list[str] = Field(default_factory=dict)
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    auth: McpAuth = "none"
+    namespace: Slug | None = None
+    exposure: McpExpose = "auto"
+    timeout_s: float | None = None
+
+    # AI CLI options
+    cli: Literal["claude", "codex", "gemini", "agy", "hermes"] | None = None
+    account_id: Slug | None = None
+    label: str | None = None
+    models: list[str] = Field(default_factory=list)
+    max_parallel: int = Field(default=1, ge=1)
+
+    # OpenAPI options
+    spec: str | None = None
+    auth_env: str | None = None
+
+    # First connection options
+    connection_id: Slug | None = None
+    auth_ref: str | None = None
+    priority: int = Field(default=100, ge=0)
+    concurrency: int = Field(default=1, ge=1)
+    rate_per_min: int | None = Field(default=None, ge=1)
+    status: Literal["active", "paused", "needs_login", "exhausted", "disabled"] | None = None
+    plan: dict[str, Any] = Field(default_factory=dict)
+    meta: dict[str, Any] = Field(default_factory=dict)
+    units: dict[Slug, CommandUnitSpec] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_no_secrets(self) -> AddProviderPayload:
+        _assert_no_raw_secrets(self.model_dump())
+        return self
+
+
+class UpdateProviderPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: Slug
+    name: str | None = None
+    enabled: bool | None = None
+    default_strategy: Strategy | None = None
+    config: dict[str, Any] | None = None
+    mcp: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_no_secrets(self) -> UpdateProviderPayload:
+        _assert_no_raw_secrets(self.model_dump())
+        return self
+
+
+class RemoveProviderPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: Slug
+    force: bool = False
+
+
+_ACTIVE_GATEWAYS: list[tuple[Any, Any]] = []
+
+
+def register_active_gateway(server: Any, ctx: Any) -> None:
+    """Register an active FastMCP gateway server for dynamic tool refreshing."""
+    entry = (server, ctx)
+    if entry not in _ACTIVE_GATEWAYS:
+        _ACTIVE_GATEWAYS.append(entry)
+
+
+def unregister_active_gateway(server: Any, ctx: Any) -> None:
+    """Unregister an active FastMCP gateway server."""
+    entry = (server, ctx)
+    if entry in _ACTIVE_GATEWAYS:
+        _ACTIVE_GATEWAYS.remove(entry)
+
+
+async def refresh_active_gateways() -> None:
+    """Refresh MCP tools across all active gateway servers without restarting."""
+    from farm.gateway.mcp_tools import register_mcp_tools
+
+    for server, ctx in list(_ACTIVE_GATEWAYS):
+        try:
+            await register_mcp_tools(server, ctx)
+        except Exception as exc:
+            log.warning("gateway.refresh_failed", error=str(exc))
+
+
 PAYLOAD_VALIDATORS: dict[str, type[BaseModel]] = {
     "pause": PausePayload,
     "resume": ResumePayload,
@@ -259,6 +395,9 @@ PAYLOAD_VALIDATORS: dict[str, type[BaseModel]] = {
     "set_max_parallel": SetMaxParallelPayload,
     "set_mcp_tool_access": SetMcpToolAccessPayload,
     "sync_mcp_tools": SyncMcpToolsPayload,
+    "add_provider": AddProviderPayload,
+    "update_provider": UpdateProviderPayload,
+    "remove_provider": RemoveProviderPayload,
 }
 
 
@@ -285,6 +424,548 @@ async def _emit_audit(
             Jsonb(after) if after is not None else None,
         ),
     )
+
+
+async def execute_provider_command(
+    pool: DbPool,
+    kind: str,
+    payload: AddProviderPayload | UpdateProviderPayload | RemoveProviderPayload | dict[str, Any],
+    actor: str = "console",
+    registry_path: Path | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Shared provider command executor for Console commands and CLI.
+
+    Handles 'add_provider', 'update_provider', and 'remove_provider'.
+    Validates with registry models, rejects literal secrets, syncs DB, writes registry file,
+    emits audit events, and runs OPEN1 tool sync for MCP servers.
+    """
+    from farm.registry.writer import write_registry_file
+
+    if kind == "add_provider":
+        if isinstance(payload, dict):
+            try:
+                cmd = AddProviderPayload.model_validate(payload)
+            except ValidationError as err:
+                return "rejected", {"error": f"Invalid add_provider payload: {err}"}
+        else:
+            assert isinstance(payload, AddProviderPayload)
+            cmd = payload
+
+        # Determine provider characteristics
+        provider_id = cmd.provider_id
+        is_ai = cmd.kind == "ai" or cmd.cli is not None or cmd.executor == "cli_agent"
+        is_openapi = cmd.spec is not None or (cmd.executor == "api" and not is_ai)
+        is_mcp = (
+            (cmd.executor == "mcp" or cmd.mcp is not None or cmd.command is not None or cmd.url is not None)
+            and not is_ai
+            and not is_openapi
+        )
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "select id, kind, executor, config from public.providers where id = %s",
+                (provider_id,),
+            )
+            existing_provider = await cur.fetchone()
+
+        if is_ai:
+            driver = cmd.cli or provider_id
+            account_id = cmd.account_id or cmd.connection_id or f"{provider_id}-01"
+            label = cmd.label or account_id
+
+            # Verify connection does not already exist
+            async with pool.connection() as conn:
+                cur_c = await conn.execute(
+                    "select id from public.connections where id = %s",
+                    (account_id,),
+                )
+                if await cur_c.fetchone() is not None:
+                    return "rejected", {"error": f"Connection '{account_id}' already exists"}
+
+            # Meta and config dir per AI driver
+            meta = dict(cmd.meta)
+            meta["cli"] = driver
+            if cmd.models:
+                meta["models"] = cmd.models
+            meta["max_parallel"] = cmd.max_parallel
+
+            ai_data_dir = data_dir() / "ai" / account_id
+            if driver in ("claude", "codex"):
+                meta.setdefault("config_dir", str(ai_data_dir))
+            elif driver in ("gemini", "agy"):
+                meta.setdefault("home", str(ai_data_dir))
+            elif driver == "hermes":
+                meta.setdefault("profile", f"farm-{account_id}")
+
+            status = cmd.status or "needs_login"
+            auth_ref = cmd.auth_ref or f"cli:{account_id}"
+
+            async with pool.connection() as conn:
+                if existing_provider is None:
+                    await conn.execute(
+                        "insert into public.providers "
+                        "(id, name, kind, executor, default_strategy, enabled, config) "
+                        "values (%s, %s, %s, %s, %s, %s, %s)",
+                        (
+                            provider_id,
+                            cmd.name or provider_id.capitalize(),
+                            "ai",
+                            "cli_agent",
+                            cmd.default_strategy,
+                            cmd.enabled,
+                            Jsonb(cmd.config),
+                        ),
+                    )
+                await conn.execute(
+                    "insert into public.connections (id, provider_id, label, auth_ref, scope, priority, "
+                    "strategy, concurrency, rate_per_min, status, plan, meta) "
+                    "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        account_id,
+                        provider_id,
+                        label,
+                        auth_ref,
+                        ["internal"],
+                        cmd.priority,
+                        None,
+                        cmd.max_parallel,
+                        cmd.rate_per_min,
+                        status,
+                        Jsonb(cmd.plan),
+                        Jsonb(meta),
+                    ),
+                )
+                # Ensure capability routes for ask_ai and agent_task
+                for cap_name in ("ask_ai", "agent_task"):
+                    cur_cap = await conn.execute(
+                        "select name from public.capabilities where name = %s",
+                        (cap_name,),
+                    )
+                    if await cur_cap.fetchone() is not None:
+                        cur_pos = await conn.execute(
+                            "select coalesce(max(position), -1) "
+                            "from public.capability_routes where capability = %s",
+                            (cap_name,),
+                        )
+                        pos_row = await cur_pos.fetchone()
+                        max_pos = int(pos_row[0]) if pos_row is not None else -1
+                        await conn.execute(
+                            "insert into public.capability_routes "
+                            "(capability, provider_id, position, enabled) "
+                            "values (%s, %s, %s, true) on conflict (capability, provider_id) do nothing",
+                            (cap_name, provider_id, max_pos + 1),
+                        )
+                await _emit_audit(
+                    conn,
+                    actor,
+                    "add_provider",
+                    provider_id,
+                    None,
+                    {"account_id": account_id, "kind": "ai", "status": status},
+                )
+                await conn.commit()
+
+            await write_registry_file(pool, registry_path)
+            next_step = f"farm ai login {account_id}"
+            return "done", {
+                "provider_id": provider_id,
+                "connection_id": account_id,
+                "status": status,
+                "next_step": next_step,
+            }
+
+        elif is_mcp:
+            if existing_provider is not None:
+                return "rejected", {"error": f"Provider '{provider_id}' already exists"}
+
+            # Build MCP spec
+            if cmd.mcp is not None:
+                mcp_raw = dict(cmd.mcp)
+            else:
+                transport = "stdio" if cmd.command else ("http" if cmd.url else "stdio")
+                if transport == "stdio":
+                    if not cmd.command:
+                        return "rejected", {"error": "stdio MCP server requires command"}
+                    env_dict = {}
+                    if isinstance(cmd.env, list):
+                        for e in cmd.env:
+                            env_dict[str(e)] = f"env:{e}"
+                    elif isinstance(cmd.env, dict):
+                        for k, v in cmd.env.items():
+                            env_dict[str(k)] = v if v.startswith("env:") else f"env:{v}"
+                    mcp_raw = {
+                        "transport": "stdio",
+                        "command": cmd.command,
+                        "args": cmd.args,
+                        "cwd": cmd.cwd,
+                        "env": env_dict,
+                        "auth": "none",
+                    }
+                else:
+                    if not cmd.url:
+                        return "rejected", {"error": "http MCP server requires url"}
+                    headers_dict = {}
+                    for k, v in cmd.headers.items():
+                        headers_dict[str(k)] = v if v.startswith("env:") else f"env:{v}"
+                    mcp_raw = {
+                        "transport": "http",
+                        "url": cmd.url,
+                        "headers": headers_dict,
+                        "auth": cmd.auth,
+                    }
+                if cmd.namespace:
+                    mcp_raw["namespace"] = cmd.namespace
+                if cmd.exposure:
+                    mcp_raw["expose"] = cmd.exposure
+                if cmd.timeout_s:
+                    mcp_raw["timeout_s"] = cmd.timeout_s
+
+            try:
+                mcp_spec = McpProviderSpec.model_validate(mcp_raw)
+            except Exception as e:
+                return "rejected", {"error": f"Invalid MCP spec: {e}"}
+
+            conn_id = cmd.connection_id or f"{provider_id}-01"
+            auth_type = mcp_spec.auth
+            next_step = "farm mcp sync"
+
+            if auth_type == "oauth":
+                auth_ref = cmd.auth_ref or f"token-store:{conn_id}"
+                status = "needs_login"
+                next_step = f"farm mcp login {conn_id}"
+            elif auth_type == "env":
+                auth_ref = cmd.auth_ref or f"env:{provider_id.upper()}_KEY"
+                env_var = auth_ref.split(":", 1)[1]
+                if env_var in os.environ and os.environ[env_var].strip():
+                    status = "active"
+                    next_step = "farm mcp sync"
+                else:
+                    status = "needs_login"
+                    next_step = f"farm set-secret {env_var}"
+            else:
+                auth_ref = cmd.auth_ref or "cli:none"
+                missing_vars = [
+                    v.split(":", 1)[1]
+                    for v in mcp_spec.env.values()
+                    if v.startswith("env:") and not os.environ.get(v.split(":", 1)[1])
+                ]
+                if missing_vars:
+                    status = "needs_login"
+                    next_step = f"farm set-secret {missing_vars[0]}"
+                else:
+                    status = "active"
+                    next_step = "farm mcp sync"
+
+            config = {**cmd.config, "mcp": mcp_spec.model_dump(mode="json")}
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "insert into public.providers "
+                    "(id, name, kind, executor, default_strategy, enabled, config) "
+                    "values (%s, %s, 'tool', 'mcp', %s, %s, %s)",
+                    (
+                        provider_id,
+                        cmd.name or provider_id,
+                        cmd.default_strategy,
+                        cmd.enabled,
+                        Jsonb(config),
+                    ),
+                )
+                await conn.execute(
+                    "insert into public.connections (id, provider_id, label, auth_ref, scope, priority, "
+                    "strategy, concurrency, rate_per_min, status, plan, meta) "
+                    "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        conn_id,
+                        provider_id,
+                        cmd.label or conn_id,
+                        auth_ref,
+                        ["internal"],
+                        cmd.priority,
+                        None,
+                        cmd.concurrency,
+                        cmd.rate_per_min,
+                        status,
+                        Jsonb(cmd.plan),
+                        Jsonb(cmd.meta),
+                    ),
+                )
+                for u_name, u_spec in cmd.units.items():
+                    await conn.execute(
+                        "insert into public.consumption_units (connection_id, unit, limit_value, period, "
+                        "reset_anchor, charged_on, unit_cost_usd, estimate_per_call) "
+                        "values (%s, %s, %s, %s, %s, %s, %s, %s)",
+                        (
+                            conn_id,
+                            u_name,
+                            u_spec.limit,
+                            u_spec.period,
+                            u_spec.anchor,
+                            u_spec.charged_on,
+                            u_spec.unit_cost_usd,
+                            u_spec.estimate_per_call,
+                        ),
+                    )
+                # Ensure capability mcp:<provider_id>
+                mcp_cap = f"mcp:{provider_id}"
+                await conn.execute(
+                    "insert into public.capabilities (name, kind, description) values (%s, 'tool', %s) "
+                    "on conflict (name) do nothing",
+                    (mcp_cap, f"Pass-through MCP tools of {provider_id}"),
+                )
+                await conn.execute(
+                    "insert into public.capability_routes (capability, provider_id, position, enabled) "
+                    "values (%s, %s, 0, true) on conflict (capability, provider_id) do nothing",
+                    (mcp_cap, provider_id),
+                )
+                await _emit_audit(
+                    conn,
+                    actor,
+                    "add_provider",
+                    provider_id,
+                    None,
+                    {"connection_id": conn_id, "kind": "mcp", "status": status},
+                )
+                await conn.commit()
+
+            await write_registry_file(pool, registry_path)
+
+            # Sync tools via OPEN1 sync
+            tools_count = 0
+            sync_error = None
+            if status == "active":
+                from farm.executors.mcp.client import McpExecutor
+                from farm.mcp import store as mcp_store
+                from farm.mcp.sync import sync_provider
+
+                provider_entry = mcp_store.McpProvider(
+                    id=provider_id,
+                    name=cmd.name or provider_id,
+                    enabled=cmd.enabled,
+                    spec=mcp_spec,
+                )
+                executor = McpExecutor(directory=mcp_store.DbDirectory(pool))
+                try:
+                    sync_res = await sync_provider(pool, executor, provider_entry)
+                    tools_count = len(sync_res.tools)
+                    if not sync_res.ok:
+                        sync_error = sync_res.error
+                finally:
+                    await executor.aclose()
+
+                await refresh_active_gateways()
+
+            return "done", {
+                "provider_id": provider_id,
+                "connection_id": conn_id,
+                "status": status,
+                "next_step": next_step,
+                "tools_count": tools_count,
+                "restart_required": False,
+                "sync_error": sync_error,
+            }
+
+        elif is_openapi:
+            if existing_provider is not None:
+                return "rejected", {"error": f"Provider '{provider_id}' already exists"}
+
+            conn_id = cmd.connection_id or f"{provider_id}-01"
+            auth_env = cmd.auth_env
+            if auth_env:
+                auth_ref = f"env:{auth_env}"
+                if auth_env in os.environ and os.environ[auth_env].strip():
+                    status = "active"
+                    next_step = "Connection ready"
+                else:
+                    status = "needs_login"
+                    next_step = f"farm set-secret {auth_env}"
+            else:
+                auth_ref = cmd.auth_ref or "cli:none"
+                status = "active"
+                next_step = "Connection ready"
+
+            config = {**cmd.config, "spec": cmd.spec}
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "insert into public.providers "
+                    "(id, name, kind, executor, default_strategy, enabled, config) "
+                    "values (%s, %s, 'tool', 'api', %s, %s, %s)",
+                    (
+                        provider_id,
+                        cmd.name or provider_id,
+                        cmd.default_strategy,
+                        cmd.enabled,
+                        Jsonb(config),
+                    ),
+                )
+                await conn.execute(
+                    "insert into public.connections (id, provider_id, label, auth_ref, scope, priority, "
+                    "strategy, concurrency, rate_per_min, status, plan, meta) "
+                    "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        conn_id,
+                        provider_id,
+                        cmd.label or conn_id,
+                        auth_ref,
+                        ["internal"],
+                        cmd.priority,
+                        None,
+                        cmd.concurrency,
+                        cmd.rate_per_min,
+                        status,
+                        Jsonb(cmd.plan),
+                        Jsonb(cmd.meta),
+                    ),
+                )
+                await _emit_audit(
+                    conn,
+                    actor,
+                    "add_provider",
+                    provider_id,
+                    None,
+                    {"connection_id": conn_id, "kind": "openapi", "status": status},
+                )
+                await conn.commit()
+
+            await write_registry_file(pool, registry_path)
+            return "done", {
+                "provider_id": provider_id,
+                "connection_id": conn_id,
+                "status": status,
+                "next_step": next_step,
+            }
+
+        return "rejected", {"error": "Unrecognized provider configuration"}
+
+    elif kind == "update_provider":
+        if isinstance(payload, dict):
+            try:
+                cmd_up = UpdateProviderPayload.model_validate(payload)
+            except ValidationError as err:
+                return "rejected", {"error": f"Invalid update_provider payload: {err}"}
+        else:
+            assert isinstance(payload, UpdateProviderPayload)
+            cmd_up = payload
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "select id, name, enabled, default_strategy, config from public.providers where id = %s",
+                (cmd_up.provider_id,),
+            )
+            row = await cur.fetchone()
+            if row is None:
+                return "rejected", {"error": f"Provider '{cmd_up.provider_id}' not found"}
+
+            before = {
+                "name": row[1],
+                "enabled": row[2],
+                "default_strategy": row[3],
+                "config": row[4],
+            }
+
+            updates: dict[str, Any] = {}
+            if cmd_up.name is not None:
+                updates["name"] = cmd_up.name
+            if cmd_up.enabled is not None:
+                updates["enabled"] = cmd_up.enabled
+            if cmd_up.default_strategy is not None:
+                updates["default_strategy"] = cmd_up.default_strategy
+
+            config = dict(row[4] or {})
+            if cmd_up.config is not None:
+                config.update(cmd_up.config)
+                updates["config"] = Jsonb(config)
+            if cmd_up.mcp is not None:
+                config["mcp"] = cmd_up.mcp
+                updates["config"] = Jsonb(config)
+
+            if updates:
+                set_clauses = [f"{k} = %s" for k in updates]
+                values = list(updates.values()) + [cmd_up.provider_id]
+                await conn.execute(
+                    f"update public.providers set {', '.join(set_clauses)} where id = %s",
+                    values,
+                )
+
+            after = {**before, **{k: getattr(cmd_up, k) for k in updates if hasattr(cmd_up, k)}}
+            await _emit_audit(conn, actor, "update_provider", cmd_up.provider_id, before, after)
+            await conn.commit()
+
+        await write_registry_file(pool, registry_path)
+        return "done", {"provider_id": cmd_up.provider_id, "updated": list(updates.keys())}
+
+    elif kind == "remove_provider":
+        if isinstance(payload, dict):
+            try:
+                cmd_rm = RemoveProviderPayload.model_validate(payload)
+            except ValidationError as err:
+                return "rejected", {"error": f"Invalid remove_provider payload: {err}"}
+        else:
+            assert isinstance(payload, RemoveProviderPayload)
+            cmd_rm = payload
+
+        async with pool.connection() as conn:
+            cur = await conn.execute(
+                "select id from public.providers where id = %s",
+                (cmd_rm.provider_id,),
+            )
+            if await cur.fetchone() is None:
+                return "rejected", {"error": f"Provider '{cmd_rm.provider_id}' not found"}
+
+            if not cmd_rm.force:
+                cur_res = await conn.execute(
+                    "select count(*) from public.quota_reservations qr "
+                    "join public.connections c on qr.connection_id = c.id "
+                    "where c.provider_id = %s and qr.status = 'reserved'",
+                    (cmd_rm.provider_id,),
+                )
+                res_row = await cur_res.fetchone()
+                res_count = int(res_row[0]) if res_row is not None else 0
+
+                cur_jobs = await conn.execute(
+                    "select count(*) from public.ai_jobs aj "
+                    "where (aj.ai = %s or aj.account in ("
+                    "  select id from public.connections where provider_id = %s"
+                    ")) and aj.state in ('queued', 'running')",
+                    (cmd_rm.provider_id, cmd_rm.provider_id),
+                )
+                jobs_row = await cur_jobs.fetchone()
+                jobs_count = int(jobs_row[0]) if jobs_row is not None else 0
+
+                if res_count > 0 or jobs_count > 0:
+                    return "rejected", {
+                        "error": (
+                            f"Provider '{cmd_rm.provider_id}' has {res_count} active reservation(s) "
+                            f"and {jobs_count} running job(s); use force=True to remove anyway"
+                        )
+                    }
+
+            await conn.execute(
+                "delete from public.capability_routes where provider_id = %s",
+                (cmd_rm.provider_id,),
+            )
+            await conn.execute(
+                "delete from public.capabilities where name = %s",
+                (f"mcp:{cmd_rm.provider_id}",),
+            )
+            await conn.execute(
+                "delete from public.mcp_tools where provider = %s",
+                (cmd_rm.provider_id,),
+            )
+            await conn.execute(
+                "delete from public.connections where provider_id = %s",
+                (cmd_rm.provider_id,),
+            )
+            await conn.execute(
+                "delete from public.providers where id = %s",
+                (cmd_rm.provider_id,),
+            )
+            await _emit_audit(conn, actor, "remove_provider", cmd_rm.provider_id, None, {"status": "deleted"})
+            await conn.commit()
+
+        await write_registry_file(pool, registry_path)
+        return "done", {"provider_id": cmd_rm.provider_id, "status": "deleted"}
+
+    return "rejected", {"error": f"Unhandled provider command kind '{kind}'"}
 
 
 async def execute_command(
@@ -634,7 +1315,7 @@ async def execute_command(
             elif kind == "test_connection":
                 assert isinstance(payload, TestConnectionPayload)
                 cur = await conn.execute(
-                    "select id, provider_id, auth_ref, meta, concurrency, rate_per_min "
+                    "select id, provider_id, auth_ref, meta, concurrency, rate_per_min, status "
                     "from public.connections where id = %s",
                     (payload.connection_id,),
                 )
@@ -642,27 +1323,91 @@ async def execute_command(
                 if row is None:
                     return "rejected", {"error": f"Connection '{payload.connection_id}' not found"}
 
+                conn_id, provider_id, auth_ref, meta, concurrency, rate_per_min, curr_status = row
+                meta = meta or {}
                 conn_view = ConnectionView(
-                    id=row[0],
-                    provider_id=row[1],
-                    auth_ref=row[2],
-                    meta=row[3] or {},
-                    concurrency=row[4] or 1,
-                    rate_per_min=row[5],
+                    id=conn_id,
+                    provider_id=provider_id,
+                    auth_ref=auth_ref,
+                    meta=meta,
+                    concurrency=concurrency or 1,
+                    rate_per_min=rate_per_min,
                 )
 
-                try:
-                    resolve_auth(conn_view.auth_ref)
+                auth_ok = False
+                auth_err = None
+
+                if auth_ref.startswith("env:"):
+                    try:
+                        resolve_auth(conn_view.auth_ref)
+                        auth_ok = True
+                    except AuthRefError as aerr:
+                        auth_ok = False
+                        auth_err = str(aerr)
+                elif auth_ref == "cli:none":
                     auth_ok = True
-                    auth_err = None
-                except AuthRefError as aerr:
-                    auth_ok = False
-                    auth_err = str(aerr)
+                elif auth_ref.startswith("cli:"):
+                    if meta.get("logged_in") is True:
+                        auth_ok = True
+                    else:
+                        try:
+                            from farm.executors.cli_agent import CliAgentExecutor
+
+                            executor = CliAgentExecutor()
+                            req = ExecRequest(
+                                request_id=uuid4(),
+                                capability=payload.capability or "ask_ai",
+                                params={"task": "ping", "prompt": "ping", "mode": "answer"},
+                                connection=conn_view,
+                                timeout_s=10.0,
+                            )
+                            res = await executor.execute(req)
+                            if res.ok:
+                                auth_ok = True
+                            elif res.error_kind in (ErrorKind.NEEDS_LOGIN, ErrorKind.AUTH):
+                                auth_ok = False
+                                auth_err = res.error or "Login required"
+                            else:
+                                auth_ok = False
+                                auth_err = res.error
+                        except Exception as e:
+                            auth_ok = False
+                            auth_err = str(e)
+                elif auth_ref.startswith("token-store:"):
+                    try:
+                        token_dir = resolve_token_store(auth_ref)
+                        if any(token_dir.iterdir()):
+                            auth_ok = True
+                        else:
+                            auth_ok = False
+                            auth_err = f"token-store '{auth_ref}' is empty; login required"
+                    except Exception as e:
+                        auth_ok = False
+                        auth_err = str(e)
+                else:
+                    try:
+                        resolve_auth(conn_view.auth_ref)
+                        auth_ok = True
+                    except Exception as aerr:
+                        auth_ok = False
+                        auth_err = str(aerr)
+
+                if auth_ok and curr_status == "needs_login":
+                    await conn.execute(
+                        "update public.connections set status = 'active' where id = %s",
+                        (payload.connection_id,),
+                    )
+                    curr_status = "active"
+                    from farm.registry.writer import write_registry_file
+
+                    await conn.commit()
+                    await write_registry_file(pool)
 
                 result_data = {
                     "connection_id": payload.connection_id,
                     "auth_ok": auth_ok,
                     "auth_error": auth_err,
+                    "status": curr_status,
                 }
                 await _emit_audit(
                     conn,
@@ -840,11 +1585,11 @@ async def execute_command(
                 from farm.mcp.sync import sync_all
 
                 target = payload.provider_id or "all"
-                executor = McpExecutor(directory=DbDirectory(pool))
+                mcp_exec = McpExecutor(directory=DbDirectory(pool))
                 try:
-                    results = await sync_all(pool, executor, only=payload.provider_id)
+                    results = await sync_all(pool, mcp_exec, only=payload.provider_id)
                 finally:
-                    await executor.aclose()
+                    await mcp_exec.aclose()
 
                 res_list = [
                     {
@@ -861,6 +1606,10 @@ async def execute_command(
                 await _emit_audit(conn, actor, "sync_mcp_tools", target, None, after)
                 all_ok = all(r.ok for r in results) if results else True
                 return ("done" if all_ok else "failed"), {"target": target, "results": res_list}
+
+            elif kind in ("add_provider", "update_provider", "remove_provider"):
+                assert isinstance(payload, (AddProviderPayload, UpdateProviderPayload, RemoveProviderPayload))
+                return await execute_provider_command(pool, kind, payload, actor=actor)
 
             return "rejected", {"error": f"Unhandled kind '{kind}'"}
 

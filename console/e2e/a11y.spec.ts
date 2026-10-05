@@ -15,7 +15,8 @@ const PAGES = [
 
 async function useTheme(page: Page, theme: "light" | "dark") {
   // The Console stores the theme in a cookie and applies it before first paint.
-  await page.context().addCookies([{ name: "theme_mode", value: theme, url: "http://127.0.0.1:3100" }]);
+  const origin = `http://127.0.0.1:${process.env.FARM_E2E_PORT ?? 3100}`;
+  await page.context().addCookies([{ name: "theme_mode", value: theme, url: origin }]);
 }
 
 for (const theme of ["light", "dark"] as const) {

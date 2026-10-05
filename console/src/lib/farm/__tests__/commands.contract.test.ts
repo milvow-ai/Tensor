@@ -20,7 +20,6 @@ import {
   buildUpdateConnectionPayload,
   createContractExamplePayloads,
 } from "../commands";
-import type { CommandKind } from "../types";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -29,7 +28,7 @@ describe("Farm command contract validation", () => {
   ajv.addFormat("uuid", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   const schemas = commandSchemas as Record<string, Record<string, unknown>>;
 
-  const allKinds: CommandKind[] = [
+  const allKinds = [
     "pause",
     "resume",
     "set_priority",
@@ -45,7 +44,7 @@ describe("Farm command contract validation", () => {
     "set_max_parallel",
     "set_mcp_tool_access",
     "sync_mcp_tools",
-  ];
+  ] as const;
 
   it("exports schemas for all 15 command kinds", () => {
     for (const kind of allKinds) {
@@ -54,7 +53,7 @@ describe("Farm command contract validation", () => {
   });
 
   const buildersAndInvalidPayloads: Record<
-    CommandKind,
+    (typeof allKinds)[number],
     {
       builder: () => Record<string, unknown>;
       invalidPayloads: Record<string, unknown>[];

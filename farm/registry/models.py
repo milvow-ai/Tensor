@@ -365,7 +365,7 @@ class ProviderSpec(_Model):
 class CapabilitySpec(_Model):
     kind: ProviderKind
     description: str = ""
-    routes: list[Slug] = Field(min_length=1, description="Provider ids, in router order")
+    routes: list[Slug] = Field(default_factory=list, description="Provider ids, in router order")
     strategy: Strategy = "failover"
     cache_ttl_seconds: int = Field(default=0, ge=0)
 
@@ -436,8 +436,8 @@ def _secret_paths(value: Any, path: str = "") -> Iterator[str]:
 
 
 class Registry(_Model):
-    providers: dict[Slug, ProviderSpec]
-    capabilities: dict[Slug, CapabilitySpec]
+    providers: dict[Slug, ProviderSpec] = Field(default_factory=dict)
+    capabilities: dict[Slug, CapabilitySpec] = Field(default_factory=dict)
     budgets: BudgetSpec = Field(default_factory=BudgetSpec)
     settings: SettingsSpec
 

@@ -2,10 +2,12 @@
 
 import { useEffect, useState, useTransition } from "react";
 
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
-import { ChevronLeft, ChevronRight, Radio, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Play, Radio, X } from "lucide-react";
 
+import { EmptyState } from "@/components/farm/states";
 import { ToneBadge } from "@/components/farm/status";
 import { RelativeTime } from "@/components/farm/time";
 import { Button } from "@/components/ui/button";
@@ -71,6 +73,21 @@ export function RunsTable({ runsPage, capabilities }: { runsPage: Page<RunRow>; 
   }
 
   const totalPages = Math.max(1, Math.ceil(runsPage.total / runsPage.pageSize));
+  const isBlank = runsPage.total === 0 && !currentCapability && !currentStatus && !currentCaller && !failuresOnly;
+
+  if (isBlank) {
+    return (
+      <EmptyState
+        icon={Play}
+        title="No runs yet"
+        description="Every capability request through the Farm will appear here with execution trajectories and costs."
+      >
+        <Button asChild>
+          <Link href="/integrations">Add your first MCP server</Link>
+        </Button>
+      </EmptyState>
+    );
+  }
 
   return (
     <>

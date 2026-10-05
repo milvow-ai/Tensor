@@ -1248,6 +1248,46 @@ export function buildWorld(now: number = Date.now()): World {
   return world;
 }
 
+export function buildEmptyWorld(now: number = Date.now()): World {
+  const ownerEmail = "owner@farm.local";
+  return {
+    builtAt: now,
+    ownerEmail,
+    providers: [],
+    connections: [],
+    capabilities: [
+      {
+        name: "ask_ai",
+        kind: "ai",
+        description: "Natural-language task routing across the AI pool",
+        defaultStrategy: "failover",
+      },
+      {
+        name: "agent_task",
+        kind: "ai",
+        description: "Multi-turn agent task execution",
+        defaultStrategy: "failover",
+      },
+    ],
+    routes: [],
+    runs: [],
+    alerts: [],
+    commands: [],
+    providerBudgets: {},
+    providerBudgetHardStops: {},
+    globalBudgetUsd: 1000,
+    globalBudgetHardStop: true,
+    spend: {},
+    entities: [],
+    evidence: [],
+    facts: [],
+    auditEvents: [],
+    mcpTools: [],
+    aiJobs: [],
+    aiConversations: [],
+  };
+}
+
 function buildEntities(_now: number): WorldEntity[] {
   return [
     { id: "ent-001", kind: "company", canonicalKey: "acme.corp", name: "Acme Corporation" },
