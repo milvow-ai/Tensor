@@ -6,11 +6,24 @@ and credit signals, as well as a generic MCP server for non-Clay capability test
 
 from __future__ import annotations
 
+import asyncio
+import base64
 from dataclasses import dataclass, field
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import McpError, ToolError
+from fastmcp.server.middleware import Middleware
+from fastmcp.tools import ToolResult
+from mcp_types import (
+    INVALID_PARAMS,
+    AudioContent,
+    EmbeddedResource,
+    ImageContent,
+    ResourceLink,
+    TextContent,
+    TextResourceContents,
+)
 
 
 @dataclass
@@ -213,4 +226,105 @@ def create_fake_generic_server(name: str = "fake-generic") -> FastMCP:
             "source": "fake-weather",
         }
 
+    return server
+
+
+# --- OPEN1: a rich generic server for pass-through tests -------------------------------------------------
+
+FAKE_PNG_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nopen1-test-image").decode("ascii")
+FAKE_WAV_B64 = base64.b64encode(b"RIFF\x00\x00\x00\x00WAVEopen1").decode("ascii")
+
+
+@dataclass
+class RichServerState:
+    calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    """``(tool, arguments)`` exactly as the server received them."""
+
+
+class _RejectsAtTheProtocolLevel(Middleware):
+    """Answers ``tools/call`` of ``rejected`` with a JSON-RPC error (invalid params), as strict servers do."""
+
+    async def on_call_tool(self, context: Any, call_next: Any) -> Any:
+        if context.message.name == "rejected":
+            raise McpError(INVALID_PARAMS, "the server rejected this request")
+        return await call_next(context)
+
+
+def create_fake_rich_server(name: str = "fake-rich", *, page_size: int | None = None) -> FastMCP:
+    """A server with every kind of answer a client has to relay: text, image, audio, embedded resource,
+    resource link, ``structuredContent``, ``_meta``, an ``isError`` tool, a slow tool, a tool whose output
+    violates its own schema, and ``whoami`` (the server's name, to see which account answered)."""
+    server = FastMCP(name, **({"list_page_size": page_size} if page_size else {}))
+    state = RichServerState()
+    server.state = state  # type: ignore[attr-defined]
+
+    @server.tool(name="echo", title="Echo", annotations={"readOnlyHint": True, "idempotentHint": True})
+    def echo(message: str) -> str:
+        """Echo the message back."""
+        state.calls.append(("echo", {"message": message}))
+        return f"echo: {message}"
+
+    @server.tool(name="add")
+    def add(a: int, b: int) -> int:
+        """Add two integers."""
+        state.calls.append(("add", {"a": a, "b": b}))
+        return a + b
+
+    @server.tool(name="rich_echo")
+    def rich_echo(message: str) -> ToolResult:
+        """Answer with text, an image, audio, an embedded resource and a resource link."""
+        state.calls.append(("rich_echo", {"message": message}))
+        return ToolResult(
+            content=[
+                TextContent(type="text", text=f"rich: {message}"),
+                ImageContent(type="image", data=FAKE_PNG_B64, mime_type="image/png"),
+                AudioContent(type="audio", data=FAKE_WAV_B64, mime_type="audio/wav"),
+                EmbeddedResource(
+                    type="resource",
+                    resource=TextResourceContents(uri="memo://note", text="a note", mime_type="text/plain"),
+                ),
+                ResourceLink(type="resource_link", name="Doc", uri="https://example.com/doc"),
+            ],
+            structured_content={"message": message, "blocks": 5},
+            meta={"origin": name},
+        )
+
+    @server.tool(name="soft_error")
+    def soft_error(detail: str) -> ToolResult:
+        """Report a failure of its own (isError), not a protocol error."""
+        state.calls.append(("soft_error", {"detail": detail}))
+        return ToolResult(
+            content=[TextContent(type="text", text=f"remote failure: {detail}")],
+            structured_content={"detail": detail},
+            is_error=True,
+        )
+
+    @server.tool(name="slow")
+    async def slow(seconds: float = 1.0) -> str:
+        """Take a while to answer."""
+        state.calls.append(("slow", {"seconds": seconds}))
+        await asyncio.sleep(seconds)
+        return "done"
+
+    @server.tool(
+        name="schema_violation",
+        output_schema={"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]},
+    )
+    def schema_violation() -> ToolResult:
+        """Declares an integer result and returns a string (a server that breaks its own contract)."""
+        state.calls.append(("schema_violation", {}))
+        return ToolResult(content=[TextContent(type="text", text="n is x")], structured_content={"n": "x"})
+
+    @server.tool(name="whoami")
+    def whoami() -> str:
+        """The name of this server."""
+        state.calls.append(("whoami", {}))
+        return name
+
+    @server.tool(name="rejected")
+    def rejected() -> str:
+        """A tool the server itself refuses at the protocol level (a JSON-RPC error, not an isError result)."""
+        return "unreachable"
+
+    server.add_middleware(_RejectsAtTheProtocolLevel())
     return server

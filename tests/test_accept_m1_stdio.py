@@ -87,7 +87,24 @@ def test_farm_serve_over_stdio_lists_the_tools_and_answers_verify_email(
 
     seen = asyncio.run(asyncio.wait_for(talk(url, EMAIL), STARTUP_TIMEOUT_S))
 
-    assert seen["tools"] == ["get_capacity", "get_run", "get_usage", "list_resources", "verify_email"]
+    assert seen["tools"] == [
+        "ai_cancel",
+        "ai_conversations",
+        "ai_reply",
+        "ai_result",
+        "ai_start",
+        "ai_start_many",
+        "ai_status",
+        "ai_wait",
+        "ask_ai",
+        "ask_ai_batch",
+        "get_capacity",
+        "get_run",
+        "get_usage",
+        "list_ais",
+        "list_resources",
+        "verify_email",
+    ]  # the AI tools included: the server no longer hides them from tests by test name
     envelope = seen["envelope"]
     assert envelope["ok"] is True and envelope["result"] == answer["data"]
     assert envelope["source"] == {"provider": "reoon", "connection_id": "reoon-01", "cached": True}

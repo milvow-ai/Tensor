@@ -17,7 +17,7 @@ shows up after a restart (``farm serve`` is cheap to restart; the tool list is n
 
 from __future__ import annotations
 
-import os
+from collections.abc import Sequence
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field, PrivateAttr, create_model
 from farm.capabilities.schemas import CAPABILITY_MODELS
 from farm.context import FarmContext
 from farm.gateway.ai_tools import register_ai_tools
+from farm.gateway.mcp_tools import register_mcp_tools
 from farm.gateway.middleware import (
     AuthMiddleware,
     PolicyCheck,
@@ -37,7 +38,7 @@ from farm.gateway.middleware import (
     TrajectoryMiddleware,
     current_caller,
 )
-from farm.registry.models import STRATEGIES
+from farm.registry.models import MCP_CAPABILITY_PREFIX, STRATEGIES
 from farm.resources import reports
 from farm.resources.router import RouteOutcome, route
 from farm.resources.trajectory import fetch_run
@@ -142,24 +143,19 @@ def _register_infra_tools(server: FastMCP, ctx: FarmContext) -> None:
         return await reports.usage_report(ctx.pool, ctx.clock(), days)
 
 
-def _legacy_m1_surface() -> bool:
-    """True while an M1 acceptance test runs that asserts the exact tool list of the server.
-
-    Those tests (``test_accept_m1_*``, ``test_gateway.py::test_a_tool_is_generated...``, also through the
-    ``farm serve`` child process, which inherits the variable) predate the AI tools and expect only the M1
-    surface. Delete this, and update their expected lists, once they should see the AI tools.
-    """
-    test_name = os.environ.get("PYTEST_CURRENT_TEST", "")
-    return any(t in test_name for t in ("test_accept_m1", "test_gateway.py::test_a_tool_is_generated"))
-
-
 async def build_server(
-    ctx: FarmContext, *, token: str | None = None, policy: PolicyCheck | None = None
+    ctx: FarmContext,
+    *,
+    token: str | None = None,
+    policy: PolicyCheck | None = None,
+    mcp_direct_limit: int = 40,
+    mcp_pinned: Sequence[str] = (),
 ) -> FastMCP:
     """The ``harness-farm`` server for ``ctx``.
 
     ``token``: bearer token required over HTTP (stdio is local trust and ignores it). ``policy``: optional
-    gate ``(caller, tool, arguments) -> reason to refuse | None``.
+    gate ``(caller, tool, arguments) -> reason to refuse | None``. ``mcp_direct_limit`` / ``mcp_pinned``:
+    ``settings.mcp_direct_limit`` / ``settings.mcp_pinned`` of the registry (which MCP tools are listed).
     """
     server = FastMCP(SERVER_NAME, instructions=INSTRUCTIONS)
     server.add_middleware(AuthMiddleware(token))
@@ -169,17 +165,16 @@ async def build_server(
     async with ctx.pool.connection() as conn:
         cur = await conn.execute("select name, description from public.capabilities order by name")
         capabilities = await cur.fetchall()
-    legacy = _legacy_m1_surface()
 
     for name, description in capabilities:
-        if legacy and name == "ask_ai":
-            continue
+        if name.startswith(MCP_CAPABILITY_PREFIX):
+            continue  # a pass-through capability: its tools come from register_mcp_tools
         models = CAPABILITY_MODELS.get(name)
         if models is None:
             log.info("gateway.capability_without_tool", capability=name, reason="no input/output models yet")
             continue
         server.add_tool(CapabilityTool.create(ctx, name, description or name, *models))
     _register_infra_tools(server, ctx)
-    if not legacy:
-        await register_ai_tools(server, ctx, routing_argument=ROUTING_ARGUMENT)
+    await register_ai_tools(server, ctx, routing_argument=ROUTING_ARGUMENT)
+    await register_mcp_tools(server, ctx, direct_limit=mcp_direct_limit, pinned=mcp_pinned)
     return server

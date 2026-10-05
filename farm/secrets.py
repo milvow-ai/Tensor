@@ -35,6 +35,7 @@ __all__ = [
     "register_secret",
     "resolve_auth",
     "resolve_token_store",
+    "set_secret",
 ]
 
 MASK = "***"
@@ -231,3 +232,66 @@ def register_env_secrets() -> None:
 
 
 
+
+
+def _env_file_value(value: str) -> str:
+    """The text after ``NAME=`` that ``farm.settings.load_env`` reads back as exactly ``value``.
+
+    The loader strips surrounding whitespace and one pair of matching quotes, so a value that would not
+    survive that is wrapped in the quote character it does not contain.
+    """
+    fragile = value != value.strip() or (len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'")
+    if not fragile:
+        return value
+    for quote_char in ('"', "'"):
+        if quote_char not in value:
+            return f"{quote_char}{value}{quote_char}"
+    raise ValueError("this value cannot be stored in a .env file (it contains both kinds of quote)")
+
+
+def set_secret(name: str, value: str, *, env_path: Path | None = None) -> Path:
+    """Write ``name=value`` into the local ``.env`` (the line is replaced when it exists) and return its path.
+
+    This is the one way the Farm writes a credential (``farm set-secret`` and ``farm mcp import`` both come
+    here): the value is never printed or logged, is registered so :func:`redact` masks it from now on, and
+    the file is replaced atomically so a crash cannot leave a half-written ``.env``. Other lines, comments
+    and the file's line endings are kept. Nothing is done to the process environment.
+    """
+    if not _ENV_NAME.fullmatch(name):
+        raise ValueError("the secret's name must be a valid environment variable name")
+    if not value.strip():
+        raise ValueError(f"the value of {name} is empty")
+    if any(char in value for char in "\r\n\0"):
+        raise ValueError(f"the value of {name} contains a line break, which a .env file cannot hold")
+
+    from farm.settings import DEFAULT_ENV_PATH
+
+    path = env_path or DEFAULT_ENV_PATH
+    existing = path.read_bytes().decode("utf-8") if path.is_file() else ""
+    newline = "\r\n" if "\r\n" in existing else "\n"
+    lines = existing.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    lines = [line.removesuffix("\r") for line in lines]
+
+    entry = f"{name}={_env_file_value(value)}"
+    replaced = False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and stripped.partition("=")[0].strip() == name:
+            lines[index] = entry
+            replaced = True
+    if not replaced:
+        lines.append(entry)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temp.write_bytes((newline.join(lines) + newline).encode("utf-8"))
+        if os.name != "nt" and not path.exists():
+            os.chmod(temp, 0o600)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+    register_secret(value)
+    return path

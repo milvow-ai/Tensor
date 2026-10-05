@@ -26,6 +26,17 @@ from tests.farm_helpers import EMAIL, fetch, only_reoon_01
 
 type Make = Callable[..., Awaitable[FarmContext]]
 
+AI_JOB_TOOLS = {
+    "ai_cancel",
+    "ai_conversations",
+    "ai_reply",
+    "ai_result",
+    "ai_start",
+    "ai_start_many",
+    "ai_status",
+    "ai_wait",
+}  # AIP2 (non-blocking AI jobs)
+
 
 async def remaining_credits(client: Client[Any], connection_id: str) -> float:
     capacity = (await client.call_tool("get_capacity", {"capability": "verify_email"})).structured_content
@@ -53,7 +64,15 @@ async def test_claude_calls_verify_email_gets_the_envelope_reads_the_trajectory_
         server, client_info=mcp_types.Implementation(name="claude-code", version="2.1")
     ) as client:
         names = {t.name for t in await client.list_tools()}
-        assert names == {"verify_email", *INFRA_TOOLS}  # and no admin tool
+        # the AI tools are part of the surface now (the server no longer hides them from tests by test name)
+        assert names == {
+            "verify_email",
+            "ask_ai",
+            "ask_ai_batch",
+            "list_ais",
+            *AI_JOB_TOOLS,
+            *INFRA_TOOLS,
+        }  # no admin tool
 
         assert await remaining_credits(client, "reoon-01") == 20
         with caplog.at_level(logging.ERROR):
