@@ -92,6 +92,95 @@ export interface WorldSpend {
   billingUsd: number;
 }
 
+export interface WorldEntity {
+  id: string;
+  kind: string;
+  canonicalKey: string;
+  name: string;
+}
+
+export interface WorldFact {
+  id: string;
+  entityId: string;
+  attribute: string;
+  value: unknown;
+  sourceConnectionId: string | null;
+  observedAt: string;
+  expiresAt: string | null;
+  confidence: number;
+  evidenceIds: string[];
+}
+
+export interface WorldEvidence {
+  id: string;
+  sha256: string;
+  path: string;
+  url: string | null;
+  thumbPath: string | null;
+  capturedAt: string;
+  toolVersion: string | null;
+  robotsDecision: string;
+}
+
+export interface WorldAuditEvent {
+  id: number;
+  actor: string;
+  action: string;
+  target: string;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  at: string;
+}
+
+export interface WorldMcpTool {
+  id: string;
+  workspaceId: string;
+  provider: string;
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown> | null;
+  annotations: Record<string, unknown> | null;
+  schemaHash: string;
+  syncedAt: string;
+  enabled: boolean;
+  readOnly: boolean;
+}
+
+export interface WorldAiJob {
+  id: string;
+  task: string;
+  ai: string;
+  account: string;
+  model: string;
+  mode: "answer" | "edit";
+  cwd: string | null;
+  conversationId: string | null;
+  jsonSchema: Record<string, unknown> | null;
+  timeoutS: number;
+  state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  elapsedS: number;
+  tokens: number;
+  costUsd: number;
+  nativeSessionId: string | null;
+  error: { kind: string; message: string; retry_at?: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorldAiConversation {
+  id: string;
+  ai: string;
+  account: string;
+  nativeSessionId: string;
+  turns: number;
+  tokens: number;
+  costUsd: number;
+  lastJobId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface World {
   builtAt: number;
   ownerEmail: string;
@@ -107,6 +196,13 @@ export interface World {
   globalBudgetUsd: number;
   globalBudgetHardStop: boolean;
   spend: Record<string, WorldSpend | undefined>;
+  entities: WorldEntity[];
+  facts: WorldFact[];
+  evidence: WorldEvidence[];
+  auditEvents: WorldAuditEvent[];
+  mcpTools: WorldMcpTool[];
+  aiJobs: WorldAiJob[];
+  aiConversations: WorldAiConversation[];
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +350,11 @@ const PROVIDERS: WorldProvider[] = [
   { id: "gemini", name: "Gemini", kind: "ai", executor: "cli_agent", defaultStrategy: "failover", enabled: true },
   { id: "codex", name: "Codex", kind: "ai", executor: "cli_agent", defaultStrategy: "failover", enabled: true },
   { id: "hermes", name: "Hermes", kind: "ai", executor: "agent", defaultStrategy: "failover", enabled: true },
+  { id: "notion", name: "Notion", kind: "tool", executor: "mcp", defaultStrategy: "failover", enabled: true },
+  { id: "github", name: "GitHub", kind: "tool", executor: "mcp", defaultStrategy: "round_robin", enabled: true },
+  { id: "linear", name: "Linear", kind: "tool", executor: "mcp", defaultStrategy: "failover", enabled: true },
+  { id: "local-tools", name: "Local Tools", kind: "tool", executor: "mcp", defaultStrategy: "failover", enabled: true },
+  { id: "resend", name: "Resend", kind: "tool", executor: "api", defaultStrategy: "failover", enabled: true },
 ];
 
 const CAPABILITIES: WorldCapability[] = [
@@ -636,7 +737,13 @@ function connectionSeeds(now: number): ConnSeed[] {
       authRef: "cli:claude-01",
       priority: 1,
       plan: { name: "Max 5x", price: 100, day: 5 },
-      meta: { cli: "claude", config_dir: "D:/farm-data/ai/claude-01", models: ["sonnet", "opus", "haiku"] },
+      meta: {
+        cli: "claude",
+        email: "owner@farm.dev",
+        max_parallel: 1,
+        config_dir: "D:/farm-data/ai/claude-01",
+        models: ["sonnet", "opus", "haiku"],
+      },
       units: [
         {
           unit: "messages",
@@ -663,7 +770,13 @@ function connectionSeeds(now: number): ConnSeed[] {
       priority: 2,
       status: "needs_login",
       plan: { name: "Max 5x", price: 100, day: 12 },
-      meta: { cli: "claude", config_dir: "D:/farm-data/ai/claude-02", models: ["sonnet", "opus", "haiku"] },
+      meta: {
+        cli: "claude",
+        email: "standby@farm.dev",
+        max_parallel: 1,
+        config_dir: "D:/farm-data/ai/claude-02",
+        models: ["sonnet", "opus", "haiku"],
+      },
       units: [{ unit: "messages", period: "rolling_5h", limit: 225, used: 0, resetInMs: 5 * HOUR }],
       success: 388,
       failure: 5,
@@ -686,7 +799,13 @@ function connectionSeeds(now: number): ConnSeed[] {
       priority: 3,
       status: "exhausted",
       plan: { name: "Pro", price: 20, day: 20 },
-      meta: { cli: "claude", config_dir: "D:/farm-data/ai/claude-03", models: ["sonnet", "haiku"] },
+      meta: {
+        cli: "claude",
+        email: "overflow@farm.dev",
+        max_parallel: 1,
+        config_dir: "D:/farm-data/ai/claude-03",
+        models: ["sonnet", "haiku"],
+      },
       units: [{ unit: "messages", period: "rolling_5h", limit: 45, used: 45, resetInMs: 1 * HOUR + 52 * MINUTE }],
       success: 241,
       failure: 12,
@@ -707,7 +826,13 @@ function connectionSeeds(now: number): ConnSeed[] {
       authRef: "cli:gemini-01",
       priority: 1,
       plan: { name: "AI Pro", price: 20, day: 3 },
-      meta: { cli: "agy", config_dir: "D:/farm-data/ai/gemini-01", models: ["gemini-3-pro", "gemini-3-flash"] },
+      meta: {
+        cli: "agy",
+        email: "owner-gemini@farm.dev",
+        max_parallel: 2,
+        config_dir: "D:/farm-data/ai/gemini-01",
+        models: ["gemini-3-pro", "gemini-3-flash"],
+      },
       units: [{ unit: "requests", period: "day", limit: 1500, used: 212, reserved: 1 }],
       success: 744,
       failure: 21,
@@ -723,7 +848,13 @@ function connectionSeeds(now: number): ConnSeed[] {
       authRef: "cli:codex-01",
       priority: 1,
       plan: { name: "Plus", price: 20, day: 8 },
-      meta: { cli: "codex", config_dir: "D:/farm-data/ai/codex-01", models: ["gpt-5-codex", "gpt-5"] },
+      meta: {
+        cli: "codex",
+        email: "owner-codex@farm.dev",
+        max_parallel: 1,
+        config_dir: "D:/farm-data/ai/codex-01",
+        models: ["gpt-5-codex", "gpt-5"],
+      },
       units: [{ unit: "messages", period: "rolling_5h", limit: 40, used: 11, resetInMs: 3 * HOUR + 31 * MINUTE }],
       success: 203,
       failure: 7,
@@ -739,7 +870,13 @@ function connectionSeeds(now: number): ConnSeed[] {
       authRef: "cli:hermes-01",
       priority: 1,
       plan: { name: "Metered via Bifrost", price: 0, day: 1 },
-      meta: { cli: "hermes", config_dir: "D:/farm-data/ai/hermes-01", models: ["farm-agent"] },
+      meta: {
+        cli: "hermes",
+        email: "owner-hermes@farm.dev",
+        max_parallel: 1,
+        config_dir: "D:/farm-data/ai/hermes-01",
+        models: ["farm-agent"],
+      },
       units: [{ unit: "budget_usd", period: "month", limit: 25, used: 6.42, anchor: 1, cost: 1, est: 0.05 }],
       success: 118,
       failure: 9,
@@ -747,6 +884,98 @@ function connectionSeeds(now: number): ConnSeed[] {
       lastSuccessMinAgo: 52,
       sessions: 21,
       callsToday: 6,
+    },
+    // --- MCP Providers: Notion, GitHub, Linear, Local Tools ---
+    {
+      id: "notion-01",
+      providerId: "notion",
+      label: "Notion Workspace 01",
+      authRef: "token-store:notion-01",
+      priority: 1,
+      plan: { name: "Plus", price: 12, day: 5 },
+      meta: { auth_type: "oauth", namespace: "notion", expose: "discovery" },
+      units: [{ unit: "requests", period: "month", limit: 50000, used: 12400, chargedOn: "attempt" }],
+      success: 1240,
+      failure: 4,
+      p50: 420,
+      lastSuccessMinAgo: 6,
+      callsToday: 42,
+    },
+    {
+      id: "notion-02",
+      providerId: "notion",
+      label: "Notion Workspace 02",
+      authRef: "token-store:notion-02",
+      priority: 2,
+      plan: { name: "Plus", price: 12, day: 18 },
+      meta: { auth_type: "oauth", namespace: "notion", expose: "discovery" },
+      units: [{ unit: "requests", period: "month", limit: 50000, used: 4100, chargedOn: "attempt" }],
+      success: 410,
+      failure: 1,
+      p50: 450,
+      lastSuccessMinAgo: 32,
+      callsToday: 11,
+    },
+    {
+      id: "github-01",
+      providerId: "github",
+      label: "GitHub Machine User",
+      authRef: "env:GITHUB_TOKEN",
+      priority: 1,
+      plan: { name: "Enterprise", price: 21, day: 1 },
+      meta: { auth_type: "env", namespace: "github", expose: "direct" },
+      units: [{ unit: "requests", period: "hour", limit: 5000, used: 340, chargedOn: "attempt" }],
+      success: 3200,
+      failure: 12,
+      p50: 310,
+      lastSuccessMinAgo: 2,
+      callsToday: 95,
+    },
+    {
+      id: "linear-01",
+      providerId: "linear",
+      label: "Linear Product Workspace",
+      authRef: "token-store:linear-01",
+      priority: 1,
+      plan: { name: "Standard", price: 10, day: 14 },
+      meta: { auth_type: "oauth", namespace: "linear", expose: "auto" },
+      units: [{ unit: "requests", period: "month", limit: 100000, used: 18900, chargedOn: "attempt" }],
+      success: 1890,
+      failure: 5,
+      p50: 390,
+      lastSuccessMinAgo: 12,
+      callsToday: 54,
+    },
+    {
+      id: "local-tools-01",
+      providerId: "local-tools",
+      label: "Local CLI Stdio",
+      authRef: "token-store:local-tools-01",
+      priority: 1,
+      plan: { name: "Local", price: 0, day: 1 },
+      meta: { transport: "stdio", command: "node ./tools/mcp-server.js", namespace: "local", expose: "direct" },
+      units: [],
+      success: 540,
+      failure: 0,
+      p50: 45,
+      lastSuccessMinAgo: 1,
+      callsToday: 38,
+    },
+    // --- OpenAPI Provider: Resend ---
+    {
+      id: "resend-01",
+      providerId: "resend",
+      label: "Resend Marketing",
+      authRef: "env:RESEND_API_KEY",
+      priority: 1,
+      plan: { name: "Pro", price: 20, day: 10 },
+      meta: { openapi: "https://api.resend.com/openapi.json", auth_type: "env", namespace: "resend" },
+      units: [{ unit: "emails", period: "month", limit: 50000, used: 8430, chargedOn: "attempt", cost: 0.0004 }],
+      success: 8430,
+      failure: 14,
+      p50: 210,
+      lastSuccessMinAgo: 18,
+      callsToday: 110,
     },
   ];
 }
@@ -982,6 +1211,11 @@ export function buildWorld(now: number = Date.now()): World {
     gemini: 25,
     codex: 25,
     hermes: 40,
+    notion: 50,
+    github: 30,
+    linear: 20,
+    "local-tools": 0,
+    resend: 30,
   };
 
   const world: World = {
@@ -1001,10 +1235,537 @@ export function buildWorld(now: number = Date.now()): World {
     globalBudgetUsd: 7000,
     globalBudgetHardStop: true,
     spend,
+    entities: buildEntities(now),
+    evidence: buildEvidence(now),
+    facts: buildFacts(now),
+    auditEvents: buildAuditEvents(now),
+    mcpTools: buildMcpTools(now),
+    aiJobs: buildAiJobs(now),
+    aiConversations: buildAiConversations(now),
   };
   world.alerts = buildAlerts(world, now);
   world.commands = buildCommandHistory(ownerEmail, now);
   return world;
+}
+
+function buildEntities(_now: number): WorldEntity[] {
+  return [
+    { id: "ent-001", kind: "company", canonicalKey: "acme.corp", name: "Acme Corporation" },
+    { id: "ent-002", kind: "company", canonicalKey: "stripe.com", name: "Stripe Inc." },
+    { id: "ent-003", kind: "person", canonicalKey: "jane.smith@acme.corp", name: "Jane Smith" },
+    { id: "ent-004", kind: "person", canonicalKey: "john.doe@stripe.com", name: "John Doe" },
+  ];
+}
+
+function buildEvidence(now: number): WorldEvidence[] {
+  return [
+    {
+      id: "ev-001",
+      sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      path: "/data/evidence/acme-landing.png",
+      url: "https://acme.corp",
+      thumbPath: "/data/evidence/acme-landing-thumb.png",
+      capturedAt: iso(now - 2 * DAY),
+      toolVersion: "crawl4ai-v0.4",
+      robotsDecision: "allowed",
+    },
+    {
+      id: "ev-002",
+      sha256: "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
+      path: "/data/evidence/stripe-pricing.png",
+      url: "https://stripe.com/pricing",
+      thumbPath: "/data/evidence/stripe-pricing-thumb.png",
+      capturedAt: iso(now - 1 * DAY),
+      toolVersion: "crawl4ai-v0.4",
+      robotsDecision: "allowed",
+    },
+    {
+      id: "ev-003",
+      sha256: "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+      path: "/data/evidence/jane-linkedin.png",
+      url: "https://linkedin.com/in/janesmith",
+      thumbPath: "/data/evidence/jane-linkedin-thumb.png",
+      capturedAt: iso(now - 5 * DAY),
+      toolVersion: "agent-hermes",
+      robotsDecision: "allowed",
+    },
+  ];
+}
+
+function buildFacts(now: number): WorldFact[] {
+  return [
+    {
+      id: "fact-001",
+      entityId: "ent-001",
+      attribute: "tech_stack",
+      value: { cms: "Next.js", hosting: "Vercel", cdn: "Cloudflare" },
+      sourceConnectionId: "apollo-01",
+      observedAt: iso(now - 2 * DAY),
+      expiresAt: iso(now + 28 * DAY),
+      confidence: 0.98,
+      evidenceIds: ["ev-001"],
+    },
+    {
+      id: "fact-002",
+      entityId: "ent-001",
+      attribute: "headcount",
+      value: { count: 320, range: "250-500", engineering: 85 },
+      sourceConnectionId: "clay-01",
+      observedAt: iso(now - 35 * DAY),
+      expiresAt: null,
+      confidence: 0.85,
+      evidenceIds: ["ev-001"],
+    },
+    {
+      id: "fact-003",
+      entityId: "ent-002",
+      attribute: "pricing_model",
+      value: { transaction_pct: 2.9, fixed_fee: 0.3, currency: "USD" },
+      sourceConnectionId: "apollo-01",
+      observedAt: iso(now - 1 * DAY),
+      expiresAt: iso(now + 90 * DAY),
+      confidence: 1.0,
+      evidenceIds: ["ev-002"],
+    },
+    {
+      id: "fact-004",
+      entityId: "ent-003",
+      attribute: "work_email",
+      value: { email: "jane.smith@acme.corp", deliverability: "valid", mx_valid: true },
+      sourceConnectionId: "reoon-01",
+      observedAt: iso(now - 3 * DAY),
+      expiresAt: iso(now + 60 * DAY),
+      confidence: 0.99,
+      evidenceIds: ["ev-003"],
+    },
+    {
+      id: "fact-005",
+      entityId: "ent-004",
+      attribute: "former_role",
+      value: { company: "PayCo Inc.", title: "Staff Engineer", until: "2024" },
+      sourceConnectionId: "clay-02",
+      observedAt: iso(now - 180 * DAY),
+      expiresAt: iso(now - 10 * DAY),
+      confidence: 0.7,
+      evidenceIds: [],
+    },
+  ];
+}
+
+function buildAuditEvents(now: number): WorldAuditEvent[] {
+  return [
+    {
+      id: 101,
+      actor: "owner@farm.dev",
+      action: "set_budget",
+      target: "provider:clay",
+      before: { monthly_usd: 1500, hard_stop: true },
+      after: { monthly_usd: 2000, hard_stop: true },
+      at: iso(now - 4 * HOUR),
+    },
+    {
+      id: 102,
+      actor: "owner@farm.dev",
+      action: "set_route",
+      target: "capability:verify_email",
+      before: { order: ["reoon", "zerobounce"] },
+      after: { order: ["zerobounce", "reoon"] },
+      at: iso(now - 12 * HOUR),
+    },
+    {
+      id: 103,
+      actor: "system:account_manager",
+      action: "pause_account",
+      target: "connection:claude-03",
+      before: { status: "active" },
+      after: { status: "exhausted" },
+      at: iso(now - 68 * MINUTE),
+    },
+    {
+      id: 104,
+      actor: "owner@farm.dev",
+      action: "add_connection",
+      target: "connection:notion-02",
+      before: null,
+      after: { id: "notion-02", provider: "notion", plan: "Plus" },
+      at: iso(now - 1 * DAY),
+    },
+    {
+      id: 105,
+      actor: "owner@farm.dev",
+      action: "update_strategy",
+      target: "provider:github",
+      before: { strategy: "failover" },
+      after: { strategy: "round_robin" },
+      at: iso(now - 2 * DAY),
+    },
+  ];
+}
+
+function buildMcpTools(now: number): WorldMcpTool[] {
+  const syncedAt = iso(now - 30 * MINUTE);
+  return [
+    // Notion tools
+    {
+      id: "tool-notion-01",
+      workspaceId: "default",
+      provider: "notion",
+      name: "search",
+      description: "Search all pages and databases in the Notion workspace by title or content.",
+      inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      outputSchema: null,
+      annotations: { readOnly: true },
+      schemaHash: "h_notion_search",
+      syncedAt,
+      enabled: true,
+      readOnly: true,
+    },
+    {
+      id: "tool-notion-02",
+      workspaceId: "default",
+      provider: "notion",
+      name: "read_page",
+      description: "Retrieve rich text and block contents of a Notion page.",
+      inputSchema: { type: "object", properties: { page_id: { type: "string" } }, required: ["page_id"] },
+      outputSchema: null,
+      annotations: { readOnly: true },
+      schemaHash: "h_notion_read_page",
+      syncedAt,
+      enabled: true,
+      readOnly: true,
+    },
+    {
+      id: "tool-notion-03",
+      workspaceId: "default",
+      provider: "notion",
+      name: "create_page",
+      description: "Create a new page in a database or under a parent page.",
+      inputSchema: {
+        type: "object",
+        properties: { parent_id: { type: "string" }, title: { type: "string" }, content: { type: "string" } },
+        required: ["parent_id", "title"],
+      },
+      outputSchema: null,
+      annotations: { readOnly: false },
+      schemaHash: "h_notion_create_page",
+      syncedAt,
+      enabled: true,
+      readOnly: false,
+    },
+    {
+      id: "tool-notion-04",
+      workspaceId: "default",
+      provider: "notion",
+      name: "query_database",
+      description: "Filter and query rows from a Notion database table.",
+      inputSchema: {
+        type: "object",
+        properties: { database_id: { type: "string" }, filter: { type: "object" } },
+        required: ["database_id"],
+      },
+      outputSchema: null,
+      annotations: { readOnly: true },
+      schemaHash: "h_notion_query_db",
+      syncedAt,
+      enabled: true,
+      readOnly: true,
+    },
+    // GitHub tools
+    {
+      id: "tool-github-01",
+      workspaceId: "default",
+      provider: "github",
+      name: "get_file_contents",
+      description: "Read file contents from a repository branch or commit.",
+      inputSchema: {
+        type: "object",
+        properties: { owner: { type: "string" }, repo: { type: "string" }, path: { type: "string" } },
+        required: ["owner", "repo", "path"],
+      },
+      outputSchema: null,
+      annotations: { readOnly: true },
+      schemaHash: "h_github_get_file",
+      syncedAt,
+      enabled: true,
+      readOnly: true,
+    },
+    {
+      id: "tool-github-02",
+      workspaceId: "default",
+      provider: "github",
+      name: "create_pull_request",
+      description: "Open a pull request from a head branch to a base branch.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          title: { type: "string" },
+          head: { type: "string" },
+          base: { type: "string" },
+        },
+        required: ["owner", "repo", "title", "head", "base"],
+      },
+      outputSchema: null,
+      annotations: { readOnly: false },
+      schemaHash: "h_github_create_pr",
+      syncedAt,
+      enabled: true,
+      readOnly: false,
+    },
+    {
+      id: "tool-github-03",
+      workspaceId: "default",
+      provider: "github",
+      name: "search_code",
+      description: "Search code across repositories with query terms.",
+      inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+      outputSchema: null,
+      annotations: { readOnly: true },
+      schemaHash: "h_github_search_code",
+      syncedAt,
+      enabled: true,
+      readOnly: true,
+    },
+    {
+      id: "tool-github-04",
+      workspaceId: "default",
+      provider: "github",
+      name: "delete_branch",
+      description: "Delete a remote branch in the repository.",
+      inputSchema: {
+        type: "object",
+        properties: { owner: { type: "string" }, repo: { type: "string" }, branch: { type: "string" } },
+        required: ["owner", "repo", "branch"],
+      },
+      outputSchema: null,
+      annotations: { readOnly: false },
+      schemaHash: "h_github_delete_branch",
+      syncedAt,
+      enabled: false,
+      readOnly: false,
+    },
+    // Linear tools
+    {
+      id: "tool-linear-01",
+      workspaceId: "default",
+      provider: "linear",
+      name: "list_issues",
+      description: "Search and list issues matching team, state, or assignee.",
+      inputSchema: { type: "object", properties: { team_id: { type: "string" }, query: { type: "string" } } },
+      outputSchema: null,
+      annotations: { readOnly: true },
+      schemaHash: "h_linear_list",
+      syncedAt,
+      enabled: true,
+      readOnly: true,
+    },
+    {
+      id: "tool-linear-02",
+      workspaceId: "default",
+      provider: "linear",
+      name: "create_issue",
+      description: "Create a new issue in Linear under a designated team.",
+      inputSchema: {
+        type: "object",
+        properties: { title: { type: "string" }, description: { type: "string" }, team_id: { type: "string" } },
+        required: ["title", "team_id"],
+      },
+      outputSchema: null,
+      annotations: { readOnly: false },
+      schemaHash: "h_linear_create",
+      syncedAt,
+      enabled: true,
+      readOnly: false,
+    },
+    // Local tools
+    {
+      id: "tool-local-01",
+      workspaceId: "default",
+      provider: "local-tools",
+      name: "inspect_file",
+      description: "Inspect local workspace file metadata, encoding, and syntax.",
+      inputSchema: { type: "object", properties: { file_path: { type: "string" } }, required: ["file_path"] },
+      outputSchema: null,
+      annotations: { readOnly: true },
+      schemaHash: "h_local_inspect",
+      syncedAt,
+      enabled: true,
+      readOnly: true,
+    },
+    {
+      id: "tool-local-02",
+      workspaceId: "default",
+      provider: "local-tools",
+      name: "run_linter",
+      description: "Run project linter and report diagnostic code issues.",
+      inputSchema: { type: "object", properties: { target: { type: "string" } } },
+      outputSchema: null,
+      annotations: { readOnly: true },
+      schemaHash: "h_local_lint",
+      syncedAt,
+      enabled: true,
+      readOnly: true,
+    },
+  ];
+}
+
+function buildAiJobs(now: number): WorldAiJob[] {
+  return [
+    {
+      id: "job-ai-001",
+      task: "Analyze competitive pricing across 10 B2B SaaS platforms",
+      ai: "claude",
+      account: "claude-01",
+      model: "sonnet",
+      mode: "answer",
+      cwd: null,
+      conversationId: "conv-001",
+      jsonSchema: null,
+      timeoutS: 1800,
+      state: "running",
+      elapsedS: 42,
+      tokens: 3410,
+      costUsd: 0.045,
+      nativeSessionId: "sess_claude_01_a83",
+      error: null,
+      createdAt: iso(now - 45 * 1000),
+      updatedAt: iso(now - 3 * 1000),
+    },
+    {
+      id: "job-ai-002",
+      task: "Refactor database query performance for v_routes view",
+      ai: "codex",
+      account: "codex-01",
+      model: "gpt-5-codex",
+      mode: "edit",
+      cwd: "D:/Harness Farm/wt-c3",
+      conversationId: "conv-002",
+      jsonSchema: null,
+      timeoutS: 3600,
+      state: "running",
+      elapsedS: 118,
+      tokens: 7850,
+      costUsd: 0.12,
+      nativeSessionId: "thread_codex_98f",
+      error: null,
+      createdAt: iso(now - 120 * 1000),
+      updatedAt: iso(now - 2 * 1000),
+    },
+    {
+      id: "job-ai-003",
+      task: "Verify TypeScript schema sync contract across all endpoints",
+      ai: "claude",
+      account: "claude-01",
+      model: "haiku",
+      mode: "answer",
+      cwd: null,
+      conversationId: null,
+      jsonSchema: null,
+      timeoutS: 600,
+      state: "succeeded",
+      elapsedS: 18,
+      tokens: 1940,
+      costUsd: 0.008,
+      nativeSessionId: "sess_claude_01_b11",
+      error: null,
+      createdAt: iso(now - 14 * MINUTE),
+      updatedAt: iso(now - 13 * MINUTE),
+    },
+    {
+      id: "job-ai-004",
+      task: "Generate OpenAPI client adapter for Resend marketing API",
+      ai: "gemini",
+      account: "gemini-01",
+      model: "gemini-3-pro",
+      mode: "edit",
+      cwd: "D:/Harness Farm/wt-c3",
+      conversationId: "conv-003",
+      jsonSchema: null,
+      timeoutS: 1200,
+      state: "succeeded",
+      elapsedS: 34,
+      tokens: 4200,
+      costUsd: 0.021,
+      nativeSessionId: "conv_agy_77x",
+      error: null,
+      createdAt: iso(now - 32 * MINUTE),
+      updatedAt: iso(now - 31 * MINUTE),
+    },
+    {
+      id: "job-ai-005",
+      task: "Hermes autonomous market intelligence sweep for AI agents",
+      ai: "hermes",
+      account: "hermes-01",
+      model: "farm-agent",
+      mode: "answer",
+      cwd: null,
+      conversationId: "conv-004",
+      jsonSchema: null,
+      timeoutS: 3600,
+      state: "cancelled",
+      elapsedS: 90,
+      tokens: 5100,
+      costUsd: 0.05,
+      nativeSessionId: "hermes_run_54",
+      error: { kind: "cancelled", message: "User cancelled job via Console" },
+      createdAt: iso(now - 2 * HOUR),
+      updatedAt: iso(now - 2 * HOUR),
+    },
+  ];
+}
+
+function buildAiConversations(now: number): WorldAiConversation[] {
+  return [
+    {
+      id: "conv-001",
+      ai: "claude",
+      account: "claude-01",
+      nativeSessionId: "sess_claude_01_a83",
+      turns: 5,
+      tokens: 18450,
+      costUsd: 0.28,
+      lastJobId: "job-ai-001",
+      createdAt: iso(now - 3 * HOUR),
+      updatedAt: iso(now - 45 * 1000),
+    },
+    {
+      id: "conv-002",
+      ai: "codex",
+      account: "codex-01",
+      nativeSessionId: "thread_codex_98f",
+      turns: 3,
+      tokens: 12100,
+      costUsd: 0.19,
+      lastJobId: "job-ai-002",
+      createdAt: iso(now - 1 * HOUR),
+      updatedAt: iso(now - 120 * 1000),
+    },
+    {
+      id: "conv-003",
+      ai: "gemini",
+      account: "gemini-01",
+      nativeSessionId: "conv_agy_77x",
+      turns: 2,
+      tokens: 7300,
+      costUsd: 0.035,
+      lastJobId: "job-ai-004",
+      createdAt: iso(now - 40 * MINUTE),
+      updatedAt: iso(now - 31 * MINUTE),
+    },
+    {
+      id: "conv-004",
+      ai: "hermes",
+      account: "hermes-01",
+      nativeSessionId: "hermes_run_54",
+      turns: 6,
+      tokens: 24600,
+      costUsd: 0.24,
+      lastJobId: "job-ai-005",
+      createdAt: iso(now - 5 * HOUR),
+      updatedAt: iso(now - 2 * HOUR),
+    },
+  ];
 }
 
 function buildAlerts(world: World, now: number): AlertRow[] {

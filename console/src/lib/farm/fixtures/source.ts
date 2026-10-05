@@ -6,6 +6,8 @@ import { type ConnectionSpecPayload, commandPayloadSchemas, isSupportedCommand }
 import { groupConnectionRows } from "../group";
 import type {
   AlertRow,
+  AuditEventRow,
+  AuditQuery,
   BillingOverview,
   BudgetRow,
   CommandKind,
@@ -13,6 +15,10 @@ import type {
   ConnectionQuery,
   ConnectionSortKey,
   CostPerResultRow,
+  EvidenceQuery,
+  EvidenceRow,
+  FactQuery,
+  FactRow,
   FarmCommand,
   FarmData,
   FarmOverview,
@@ -23,20 +29,25 @@ import type {
   PoolOverviewRow,
   ProviderKind,
   RenewalRow,
+  RouteRow,
   RunDetailRow,
   RunQuery,
   RunRow,
   SpendDailyRow,
 } from "../types";
 import {
+  auditEventRows,
   budgetRows,
   capabilityCapacityRows,
   connectionStatusRows,
   costPerResultRows,
+  evidenceRows,
+  factsRows,
   idlePaidRows,
   poolOverviewRows,
   recentRunRows,
   renewalRows,
+  routesRows,
   runDetail,
   spendDailyRows,
   spendMonthRows,
@@ -196,6 +207,67 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
         return { ok: true, scope, ref, monthly_usd, hard_stop: w.providerBudgetHardStops[ref] };
       }
       return { ok: true, scope, ref, monthly_usd, hard_stop: hard_stop ?? true };
+    }
+    case "set_route": {
+      const { capability, provider_id, position, enabled } = commandPayloadSchemas.set_route.parse(rawPayload);
+      const route = w.routes.find((r) => r.capability === capability && r.providerId === provider_id);
+      if (route) {
+        route.position = position;
+        route.enabled = enabled;
+      } else {
+        w.routes.push({
+          capability,
+          providerId: provider_id,
+          position,
+          enabled,
+        });
+      }
+      return { ok: true, capability, provider_id, position, enabled };
+    }
+    case "update_connection": {
+      const parsed = commandPayloadSchemas.update_connection.parse(rawPayload);
+      const conn = findConnection(w, parsed.connection_id);
+      if (parsed.label !== undefined && parsed.label !== null) conn.label = parsed.label;
+      if (parsed.priority !== undefined && parsed.priority !== null) conn.priority = parsed.priority;
+      if (parsed.concurrency !== undefined && parsed.concurrency !== null) conn.concurrency = parsed.concurrency;
+      if (parsed.status !== undefined && parsed.status !== null) conn.status = parsed.status;
+      if (parsed.strategy !== undefined) conn.strategy = parsed.strategy;
+      if (parsed.auth_ref !== undefined && parsed.auth_ref !== null) conn.authRef = parsed.auth_ref;
+      if (parsed.scope !== undefined && parsed.scope !== null) conn.scope = parsed.scope;
+      if (parsed.meta !== undefined && parsed.meta !== null) conn.meta = { ...conn.meta, ...parsed.meta };
+      return { ok: true, connection_id: parsed.connection_id };
+    }
+    case "cancel_ai_job": {
+      const { job_id } = commandPayloadSchemas.cancel_ai_job.parse(rawPayload);
+      const job = w.aiJobs.find((j) => j.id === job_id);
+      if (job) {
+        job.state = "cancelled";
+        job.error = { kind: "cancelled", message: "Cancelled by owner via Console" };
+        job.updatedAt = new Date(now).toISOString();
+      }
+      return { ok: true, job_id };
+    }
+    case "set_max_parallel": {
+      const { connection_id, provider_id, max_parallel } = commandPayloadSchemas.set_max_parallel.parse(rawPayload);
+      if (connection_id) {
+        const conn = findConnection(w, connection_id);
+        conn.concurrency = max_parallel;
+        conn.meta = { ...conn.meta, max_parallel };
+      }
+      return { ok: true, connection_id: connection_id ?? null, provider_id: provider_id ?? null, max_parallel };
+    }
+    case "set_mcp_tool_access": {
+      const { provider_id, tool, enabled, access } = commandPayloadSchemas.set_mcp_tool_access.parse(rawPayload);
+      const isAllowed = access === "allow" || (access === undefined && enabled);
+      const mcpTool = w.mcpTools.find((t) => t.provider === provider_id && t.name === tool);
+      if (mcpTool) {
+        mcpTool.enabled = isAllowed;
+      }
+      return { ok: true, provider_id, tool, enabled: isAllowed };
+    }
+    case "sync_mcp_tools": {
+      const parsed = commandPayloadSchemas.sync_mcp_tools.parse(rawPayload);
+      return { ok: true, provider_id: parsed.provider_id ?? null, synced_count: w.mcpTools.length };
     }
     default:
       throw new Rejection(`Command "${kind}" is not handled by this Console version.`);
@@ -394,5 +466,93 @@ export class FixturesFarmData implements FarmData {
 
   async getRunDetail(id: string): Promise<RunDetailRow | null> {
     return runDetail(world(), id);
+  }
+
+  // C3: Routing, Memory & Evidence, Policies & Audits
+  async listRoutes(capability?: string): Promise<RouteRow[]> {
+    const w = world();
+    const rows = routesRows(w, Date.now());
+    return capability ? rows.filter((r) => r.capability === capability) : rows;
+  }
+
+  async listFacts(query?: FactQuery): Promise<Page<FactRow>> {
+    const w = world();
+    let rows = factsRows(w, Date.now());
+    if (query?.freshness && query.freshness !== "all") {
+      rows = rows.filter((r) => r.freshness_state === query.freshness);
+    }
+    if (query?.entityKind) {
+      rows = rows.filter((r) => r.entity_kind === query.entityKind);
+    }
+    if (query?.search) {
+      const q = query.search.toLowerCase();
+      rows = rows.filter(
+        (r) =>
+          r.entity_name.toLowerCase().includes(q) ||
+          r.entity_canonical_key.toLowerCase().includes(q) ||
+          r.attribute.toLowerCase().includes(q),
+      );
+    }
+    const page = query?.page ?? 1;
+    const pageSize = query?.pageSize ?? 20;
+    const start = (page - 1) * pageSize;
+    return {
+      items: rows.slice(start, start + pageSize),
+      total: rows.length,
+      page,
+      pageSize,
+    };
+  }
+
+  async getFact(id: string): Promise<FactRow | null> {
+    const w = world();
+    return factsRows(w, Date.now()).find((f) => f.id === id) ?? null;
+  }
+
+  async listEvidence(query?: EvidenceQuery): Promise<Page<EvidenceRow>> {
+    const w = world();
+    let rows = evidenceRows(w);
+    if (query?.search) {
+      const q = query.search.toLowerCase();
+      rows = rows.filter(
+        (r) =>
+          r.sha256.toLowerCase().includes(q) || r.url?.toLowerCase().includes(q) || r.path.toLowerCase().includes(q),
+      );
+    }
+    const page = query?.page ?? 1;
+    const pageSize = query?.pageSize ?? 20;
+    const start = (page - 1) * pageSize;
+    return {
+      items: rows.slice(start, start + pageSize),
+      total: rows.length,
+      page,
+      pageSize,
+    };
+  }
+
+  async getEvidence(id: string): Promise<EvidenceRow | null> {
+    const w = world();
+    return evidenceRows(w).find((e) => e.id === id) ?? null;
+  }
+
+  async listAuditEvents(query?: AuditQuery): Promise<Page<AuditEventRow>> {
+    const w = world();
+    let rows = auditEventRows(w);
+    if (query?.actor) {
+      const actor = query.actor;
+      rows = rows.filter((r) => r.actor.includes(actor));
+    }
+    if (query?.action) {
+      rows = rows.filter((r) => r.action === query.action);
+    }
+    const page = query?.page ?? 1;
+    const pageSize = query?.pageSize ?? 20;
+    const start = (page - 1) * pageSize;
+    return {
+      items: rows.slice(start, start + pageSize),
+      total: rows.length,
+      page,
+      pageSize,
+    };
   }
 }

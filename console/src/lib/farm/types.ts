@@ -48,7 +48,11 @@ export type CommandKind =
   | "remove_connection"
   | "set_route"
   | "test_connection"
-  | "ack_alert";
+  | "ack_alert"
+  | "cancel_ai_job"
+  | "set_max_parallel"
+  | "set_mcp_tool_access"
+  | "sync_mcp_tools";
 
 export type CommandStatus = "queued" | "running" | "done" | "rejected" | "failed";
 
@@ -465,4 +469,97 @@ export interface FarmData {
   listIdlePaid(): Promise<IdlePaidRow[]>;
   listRuns(query?: RunQuery): Promise<Page<RunRow>>;
   getRunDetail(id: string): Promise<RunDetailRow | null>;
+
+  // C3: Routing, Memory & Evidence, Policies & Audits
+  listRoutes(capability?: string): Promise<RouteRow[]>;
+  listFacts(query?: FactQuery): Promise<Page<FactRow>>;
+  getFact(id: string): Promise<FactRow | null>;
+  listEvidence(query?: EvidenceQuery): Promise<Page<EvidenceRow>>;
+  getEvidence(id: string): Promise<EvidenceRow | null>;
+  listAuditEvents(query?: AuditQuery): Promise<Page<AuditEventRow>>;
+}
+
+// ---------------------------------------------------------------------------
+// C3: Routing, Memory & Evidence, Policies, Audits types
+// ---------------------------------------------------------------------------
+
+export interface RouteRow {
+  capability: string;
+  capability_kind: ProviderKind;
+  capability_description: string;
+  default_strategy: string | null;
+  cache_ttl_seconds: number;
+  position: number;
+  enabled: boolean;
+  provider_id: string;
+  provider_name: string;
+  provider_kind: ProviderKind;
+  provider_executor: ProviderExecutor;
+  is_active: boolean;
+  health: PoolHealth;
+  accounts_usable: number;
+  accounts_total: number;
+  remaining_calls: number;
+  unlimited: boolean;
+}
+
+export interface FactRow {
+  id: string;
+  entity_id: string;
+  entity_kind: string;
+  entity_canonical_key: string;
+  entity_name: string;
+  attribute: string;
+  value: unknown;
+  source_connection_id: string | null;
+  source_label: string | null;
+  source_provider_id: string | null;
+  observed_at: string;
+  expires_at: string | null;
+  confidence: number;
+  evidence_ids: string[];
+  freshness_state: "fresh" | "stale" | "expired";
+}
+
+export interface EvidenceRow {
+  id: string;
+  sha256: string;
+  path: string;
+  url: string | null;
+  thumb_path: string | null;
+  captured_at: string;
+  tool_version: string | null;
+  robots_decision: string;
+  facts_count: number;
+}
+
+export interface AuditEventRow {
+  id: number | string;
+  actor: string;
+  action: string;
+  target: string;
+  before: JsonObject | null;
+  after: JsonObject | null;
+  at: string;
+}
+
+export interface FactQuery {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  freshness?: "all" | "fresh" | "stale" | "expired";
+  entityKind?: string;
+}
+
+export interface EvidenceQuery {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+}
+
+export interface AuditQuery {
+  page?: number;
+  pageSize?: number;
+  actor?: string;
+  action?: string;
 }

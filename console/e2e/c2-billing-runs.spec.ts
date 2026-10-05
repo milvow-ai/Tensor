@@ -1,8 +1,8 @@
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 
 import { scrollsHorizontally, settle, watchProblems } from "./support";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 
 const C2_SHOTS_DIR = "D:/dev-cache/shots/C2";
 

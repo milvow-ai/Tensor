@@ -40,7 +40,7 @@ export function PreferencesStoreProvider({
   children,
   initialValues,
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   initialValues: PreferenceValueMap;
 }) {
   const [store] = useState<StoreApi<PreferencesState>>(() => createPreferencesStore(initialValues));

@@ -17,6 +17,9 @@ export function looksLikeSecret(value: string): boolean {
   return text.length >= 20 && /[a-z]/.test(text) && /[A-Z]/.test(text) && /\d/.test(text);
 }
 
+export const SECRET_REFUSAL =
+  "This looks like a secret, not a name. Enter only the environment-variable NAME. Keys never go through the Console.";
+
 const SUSPICIOUS_KEYS = /^(api_?key|secret|password|token|auth|bearer|credential|private_?key)$/i;
 
 /**

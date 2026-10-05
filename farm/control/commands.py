@@ -206,6 +206,43 @@ class AckAlertPayload(BaseModel):
     alert_id: UUID | str
 
 
+class CancelAiJobPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: UUID | str
+
+
+class SetMaxParallelPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    connection_id: Slug | None = None
+    provider_id: Slug | None = None
+    max_parallel: int = Field(ge=1, le=100)
+
+    @model_validator(mode="after")
+    def check_target(self) -> SetMaxParallelPayload:
+        if not self.connection_id and not self.provider_id:
+            raise ValueError("At least one of connection_id or provider_id must be specified")
+        return self
+
+
+class SetMcpToolAccessPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: Slug
+    tool: str = Field(min_length=1, max_length=200)
+    enabled: bool = True
+    access: Literal["allow", "deny"] | None = None
+
+    @model_validator(mode="after")
+    def resolve_access(self) -> SetMcpToolAccessPayload:
+        if self.access is not None:
+            self.enabled = self.access == "allow"
+        return self
+
+
+class SyncMcpToolsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: Slug | None = None
+
+
 PAYLOAD_VALIDATORS: dict[str, type[BaseModel]] = {
     "pause": PausePayload,
     "resume": ResumePayload,
@@ -218,6 +255,10 @@ PAYLOAD_VALIDATORS: dict[str, type[BaseModel]] = {
     "set_route": SetRoutePayload,
     "test_connection": TestConnectionPayload,
     "ack_alert": AckAlertPayload,
+    "cancel_ai_job": CancelAiJobPayload,
+    "set_max_parallel": SetMaxParallelPayload,
+    "set_mcp_tool_access": SetMcpToolAccessPayload,
+    "sync_mcp_tools": SyncMcpToolsPayload,
 }
 
 
@@ -647,6 +688,179 @@ async def execute_command(
 
                 await _emit_audit(conn, actor, "ack_alert", str(aid), None, {"acked_at": "now()"})
                 return "done", {"alert_id": str(aid), "status": "acknowledged"}
+
+            elif kind == "cancel_ai_job":
+                assert isinstance(payload, CancelAiJobPayload)
+                jid = payload.job_id if isinstance(payload.job_id, UUID) else UUID(str(payload.job_id))
+                cur = await conn.execute(
+                    "select id, state, owner_id from public.ai_jobs where id = %s",
+                    (jid,),
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    return "rejected", {"error": f"AI job '{jid}' not found"}
+
+                curr_state, owner_id = row[1], row[2]
+                if curr_state in ("succeeded", "failed", "cancelled"):
+                    return "done", {
+                        "job_id": str(jid),
+                        "state": curr_state,
+                        "cancelled": curr_state == "cancelled",
+                    }
+
+                await conn.execute(
+                    "update public.ai_jobs set cancel_requested_at = coalesce(cancel_requested_at, now()) "
+                    "where id = %s and state in ('queued', 'running')",
+                    (jid,),
+                )
+                if curr_state == "queued" and owner_id is None:
+                    await conn.execute(
+                        "update public.ai_jobs set state = 'cancelled', error_kind = 'cancelled', "
+                        "error_message = 'cancelled by caller', finished_at = now() "
+                        "where id = %s and state = 'queued'",
+                        (jid,),
+                    )
+                    curr_state = "cancelled"
+
+                await _emit_audit(
+                    conn,
+                    actor,
+                    "cancel_ai_job",
+                    str(jid),
+                    {"state": row[1]},
+                    {"state": curr_state, "cancel_requested": True},
+                )
+                return "done", {
+                    "job_id": str(jid),
+                    "state": curr_state,
+                    "cancelled": curr_state == "cancelled",
+                }
+
+            elif kind == "set_max_parallel":
+                assert isinstance(payload, SetMaxParallelPayload)
+                target = payload.connection_id or payload.provider_id or ""
+                before = {}
+                after = {"max_parallel": payload.max_parallel}
+
+                if payload.connection_id:
+                    cur = await conn.execute(
+                        "select concurrency, meta from public.connections where id = %s",
+                        (payload.connection_id,),
+                    )
+                    row = await cur.fetchone()
+                    if row is None:
+                        return "rejected", {"error": f"Connection '{payload.connection_id}' not found"}
+                    curr_concurrency = row[0]
+                    curr_meta = row[1] or {}
+                    before["concurrency"] = curr_concurrency
+                    before["max_parallel"] = curr_meta.get("max_parallel")
+
+                    new_concurrency = max(curr_concurrency, payload.max_parallel)
+                    new_meta = {**curr_meta, "max_parallel": payload.max_parallel}
+                    await conn.execute(
+                        "update public.connections set concurrency = %s, meta = %s where id = %s",
+                        (new_concurrency, Jsonb(new_meta), payload.connection_id),
+                    )
+                    after["concurrency"] = new_concurrency
+
+                if payload.provider_id:
+                    cur = await conn.execute(
+                        "select config from public.providers where id = %s",
+                        (payload.provider_id,),
+                    )
+                    row = await cur.fetchone()
+                    if row is None:
+                        return "rejected", {"error": f"Provider '{payload.provider_id}' not found"}
+                    curr_config = row[0] or {}
+                    before["provider_max_parallel"] = curr_config.get("max_parallel")
+                    new_config = {**curr_config, "max_parallel": payload.max_parallel}
+                    await conn.execute(
+                        "update public.providers set config = %s where id = %s",
+                        (Jsonb(new_config), payload.provider_id),
+                    )
+
+                await _emit_audit(conn, actor, "set_max_parallel", target, before, after)
+                return "done", {"target": target, "max_parallel": payload.max_parallel}
+
+            elif kind == "set_mcp_tool_access":
+                assert isinstance(payload, SetMcpToolAccessPayload)
+                cur = await conn.execute(
+                    "select config from public.providers where id = %s",
+                    (payload.provider_id,),
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    return "rejected", {"error": f"Provider '{payload.provider_id}' not found"}
+
+                config = row[0] or {}
+                mcp_block = config.get("mcp") or {}
+                tools_spec = mcp_block.get("tools") or {}
+                allow_list = list(tools_spec.get("allow") or ["*"])
+                deny_list = list(tools_spec.get("deny") or [])
+
+                before = {
+                    "allow": list(allow_list),
+                    "deny": list(deny_list),
+                }
+
+                if payload.enabled:
+                    deny_list = [d for d in deny_list if d != payload.tool]
+                    if "*" not in allow_list and payload.tool not in allow_list:
+                        allow_list.append(payload.tool)
+                else:
+                    if payload.tool not in deny_list:
+                        deny_list.append(payload.tool)
+                    if "*" not in allow_list:
+                        allow_list = [a for a in allow_list if a != payload.tool]
+
+                tools_spec["allow"] = allow_list
+                tools_spec["deny"] = deny_list
+                mcp_block["tools"] = tools_spec
+                config["mcp"] = mcp_block
+
+                await conn.execute(
+                    "update public.providers set config = %s where id = %s",
+                    (Jsonb(config), payload.provider_id),
+                )
+
+                target = f"{payload.provider_id}:{payload.tool}"
+                after = {
+                    "tool": payload.tool,
+                    "enabled": payload.enabled,
+                    "allow": allow_list,
+                    "deny": deny_list,
+                }
+                await _emit_audit(conn, actor, "set_mcp_tool_access", target, before, after)
+                return "done", {"target": target, "tool": payload.tool, "enabled": payload.enabled}
+
+            elif kind == "sync_mcp_tools":
+                assert isinstance(payload, SyncMcpToolsPayload)
+                from farm.executors.mcp.client import McpExecutor
+                from farm.mcp.store import DbDirectory
+                from farm.mcp.sync import sync_all
+
+                target = payload.provider_id or "all"
+                executor = McpExecutor(directory=DbDirectory(pool))
+                try:
+                    results = await sync_all(pool, executor, only=payload.provider_id)
+                finally:
+                    await executor.aclose()
+
+                res_list = [
+                    {
+                        "provider": r.provider,
+                        "ok": r.ok,
+                        "connection": r.connection,
+                        "tools_count": len(r.tools),
+                        "denied_count": len(r.denied),
+                        "error": r.error,
+                    }
+                    for r in results
+                ]
+                after = {"results": res_list}
+                await _emit_audit(conn, actor, "sync_mcp_tools", target, None, after)
+                all_ok = all(r.ok for r in results) if results else True
+                return ("done" if all_ok else "failed"), {"target": target, "results": res_list}
 
             return "rejected", {"error": f"Unhandled kind '{kind}'"}
 

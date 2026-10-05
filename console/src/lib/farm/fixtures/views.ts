@@ -3,15 +3,19 @@
 
 import type {
   AccountDot,
+  AuditEventRow,
   BudgetRow,
   CapabilityCapacityRow,
   ConnectionStatusRow,
   CostPerResultRow,
   EffectiveState,
+  EvidenceRow,
+  FactRow,
   IdlePaidRow,
   PoolHealth,
   PoolOverviewRow,
   RenewalRow,
+  RouteRow,
   RunDetailRow,
   RunEventRow,
   RunRow,
@@ -298,7 +302,7 @@ export function budgetRows(world: World, now: number = Date.now()): BudgetRow[] 
       scope: "global",
       ref: null,
       monthly_usd: world.globalBudgetUsd,
-      hard_stop: world.globalBudgetHardStop ?? true,
+      hard_stop: world.globalBudgetHardStop,
       spent_usd: total?.spend_usd ?? 0,
       forecast_usd: total?.forecast_usd ?? 0,
     },
@@ -313,7 +317,7 @@ export function budgetRows(world: World, now: number = Date.now()): BudgetRow[] 
         scope: "provider",
         ref: provider.id,
         monthly_usd: cap,
-        hard_stop: world.providerBudgetHardStops?.[provider.id] ?? true,
+        hard_stop: world.providerBudgetHardStops[provider.id] ?? true,
         spent_usd: pSpend?.spend_usd ?? 0,
         forecast_usd: pSpend?.forecast_usd ?? 0,
       });
@@ -418,7 +422,7 @@ export function costPerResultRows(world: World, now: number = Date.now()): CostP
   return list.sort((a, b) => (b.cost_per_result ?? 0) - (a.cost_per_result ?? 0));
 }
 
-export function runDetail(world: World, id: string, now: number = Date.now()): RunDetailRow | null {
+export function runDetail(world: World, id: string, _now: number = Date.now()): RunDetailRow | null {
   const run = world.runs.find((r) => r.id === id);
   if (!run) return null;
 
@@ -701,4 +705,108 @@ export function runDetail(world: World, id: string, now: number = Date.now()): R
     events,
     evidence_ids: hasEvidence ? ["e1a00000-0000-4000-8000-000000000001"] : [],
   };
+}
+
+// ---------------------------------------------------------------------------
+// C3 views: v_routes, v_facts, v_evidence, and audit_events
+// ---------------------------------------------------------------------------
+
+export function routesRows(world: World, now: number = Date.now()): RouteRow[] {
+  const pools = poolOverviewRows(world, now);
+  const rows: RouteRow[] = [];
+
+  for (const cap of world.capabilities) {
+    const capRoutes = world.routes.filter((r) => r.capability === cap.name).sort((a, b) => a.position - b.position);
+
+    for (const r of capRoutes) {
+      const provider = world.providers.find((p) => p.id === r.providerId);
+      if (!provider) continue;
+      const pool = pools.find((p) => p.provider_id === r.providerId);
+
+      rows.push({
+        capability: cap.name,
+        capability_kind: cap.kind,
+        capability_description: cap.description,
+        default_strategy: cap.defaultStrategy,
+        cache_ttl_seconds: 3600,
+        position: r.position,
+        enabled: r.enabled,
+        provider_id: provider.id,
+        provider_name: provider.name,
+        provider_kind: provider.kind,
+        provider_executor: provider.executor,
+        is_active: r.enabled && provider.enabled,
+        health: pool?.health ?? "healthy",
+        accounts_usable: pool?.accounts_usable ?? 0,
+        accounts_total: pool?.accounts_total ?? 0,
+        remaining_calls: pool?.remaining_calls ?? 0,
+        unlimited: pool?.unlimited ?? false,
+      });
+    }
+  }
+
+  return rows;
+}
+
+export function factsRows(world: World, now: number = Date.now()): FactRow[] {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  return world.facts.map((f) => {
+    const entity = world.entities.find((e) => e.id === f.entityId);
+    const conn = f.sourceConnectionId ? world.connections.find((c) => c.id === f.sourceConnectionId) : null;
+    const isExpired = f.expiresAt !== null && new Date(f.expiresAt).getTime() < now;
+    const isStale = !isExpired && now - new Date(f.observedAt).getTime() > 30 * DAY_MS;
+    let freshness_state: "fresh" | "stale" | "expired" = "fresh";
+    if (isExpired) {
+      freshness_state = "expired";
+    } else if (isStale) {
+      freshness_state = "stale";
+    }
+
+    return {
+      id: f.id,
+      entity_id: f.entityId,
+      entity_kind: entity?.kind ?? "entity",
+      entity_canonical_key: entity?.canonicalKey ?? f.entityId,
+      entity_name: entity?.name ?? "Unknown",
+      attribute: f.attribute,
+      value: f.value,
+      source_connection_id: f.sourceConnectionId,
+      source_label: conn?.label ?? f.sourceConnectionId,
+      source_provider_id: conn?.providerId ?? null,
+      observed_at: f.observedAt,
+      expires_at: f.expiresAt,
+      confidence: f.confidence,
+      evidence_ids: f.evidenceIds,
+      freshness_state,
+    };
+  });
+}
+
+export function evidenceRows(world: World): EvidenceRow[] {
+  return world.evidence.map((ev) => {
+    const factsCount = world.facts.filter((f) => f.evidenceIds.includes(ev.id)).length;
+    return {
+      id: ev.id,
+      sha256: ev.sha256,
+      path: ev.path,
+      url: ev.url,
+      thumb_path: ev.thumbPath,
+      captured_at: ev.capturedAt,
+      tool_version: ev.toolVersion,
+      robots_decision: ev.robotsDecision,
+      facts_count: factsCount,
+    };
+  });
+}
+
+export function auditEventRows(world: World): AuditEventRow[] {
+  return world.auditEvents.map((ae) => ({
+    id: ae.id,
+    actor: ae.actor,
+    action: ae.action,
+    target: ae.target,
+    before: ae.before,
+    after: ae.after,
+    at: ae.at,
+  }));
 }

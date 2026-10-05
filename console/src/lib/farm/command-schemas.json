@@ -3,6 +3,8 @@
     "additionalProperties": false,
     "properties": {
       "connection_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
         "title": "Connection Id",
         "type": "string"
       },
@@ -27,6 +29,8 @@
     "additionalProperties": false,
     "properties": {
       "connection_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
         "title": "Connection Id",
         "type": "string"
       }
@@ -39,6 +43,8 @@
     "additionalProperties": false,
     "properties": {
       "connection_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
         "title": "Connection Id",
         "type": "string"
       },
@@ -63,6 +69,8 @@
       "provider_id": {
         "anyOf": [
           {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
             "type": "string"
           },
           {
@@ -75,6 +83,8 @@
       "connection_id": {
         "anyOf": [
           {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
             "type": "string"
           },
           {
@@ -87,6 +97,8 @@
       "capability": {
         "anyOf": [
           {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
             "type": "string"
           },
           {
@@ -125,6 +137,8 @@
       "ref": {
         "anyOf": [
           {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
             "type": "string"
           },
           {
@@ -209,10 +223,14 @@
     "additionalProperties": false,
     "properties": {
       "provider_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
         "title": "Provider Id",
         "type": "string"
       },
       "id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
         "title": "Id",
         "type": "string"
       },
@@ -294,8 +312,13 @@
         "type": "object"
       },
       "units": {
-        "additionalProperties": {
-          "$ref": "#/$defs/CommandUnitSpec"
+        "patternProperties": {
+          "^[a-z0-9][a-z0-9_-]{0,62}$": {
+            "$ref": "#/$defs/CommandUnitSpec"
+          }
+        },
+        "propertyNames": {
+          "maxLength": 63
         },
         "title": "Units",
         "type": "object"
@@ -309,6 +332,8 @@
     "additionalProperties": false,
     "properties": {
       "connection_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
         "title": "Connection Id",
         "type": "string"
       },
@@ -451,6 +476,8 @@
     "additionalProperties": false,
     "properties": {
       "connection_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
         "title": "Connection Id",
         "type": "string"
       }
@@ -463,10 +490,14 @@
     "additionalProperties": false,
     "properties": {
       "capability": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
         "title": "Capability",
         "type": "string"
       },
       "provider_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
         "title": "Provider Id",
         "type": "string"
       },
@@ -489,12 +520,16 @@
     "additionalProperties": false,
     "properties": {
       "connection_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
         "title": "Connection Id",
         "type": "string"
       },
       "capability": {
         "anyOf": [
           {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
             "type": "string"
           },
           {
@@ -527,6 +562,127 @@
     },
     "required": ["alert_id"],
     "title": "AckAlertPayload",
+    "type": "object"
+  },
+  "cancel_ai_job": {
+    "additionalProperties": false,
+    "properties": {
+      "job_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ],
+        "title": "Job Id"
+      }
+    },
+    "required": ["job_id"],
+    "title": "CancelAiJobPayload",
+    "type": "object"
+  },
+  "set_max_parallel": {
+    "additionalProperties": false,
+    "properties": {
+      "connection_id": {
+        "anyOf": [
+          {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Connection Id"
+      },
+      "provider_id": {
+        "anyOf": [
+          {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Id"
+      },
+      "max_parallel": {
+        "maximum": 100,
+        "minimum": 1,
+        "title": "Max Parallel",
+        "type": "integer"
+      }
+    },
+    "required": ["max_parallel"],
+    "title": "SetMaxParallelPayload",
+    "type": "object"
+  },
+  "set_mcp_tool_access": {
+    "additionalProperties": false,
+    "properties": {
+      "provider_id": {
+        "maxLength": 63,
+        "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+        "title": "Provider Id",
+        "type": "string"
+      },
+      "tool": {
+        "maxLength": 200,
+        "minLength": 1,
+        "title": "Tool",
+        "type": "string"
+      },
+      "enabled": {
+        "default": true,
+        "title": "Enabled",
+        "type": "boolean"
+      },
+      "access": {
+        "anyOf": [
+          {
+            "enum": ["allow", "deny"],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Access"
+      }
+    },
+    "required": ["provider_id", "tool"],
+    "title": "SetMcpToolAccessPayload",
+    "type": "object"
+  },
+  "sync_mcp_tools": {
+    "additionalProperties": false,
+    "properties": {
+      "provider_id": {
+        "anyOf": [
+          {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Provider Id"
+      }
+    },
+    "title": "SyncMcpToolsPayload",
     "type": "object"
   }
 }

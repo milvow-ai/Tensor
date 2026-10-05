@@ -40,7 +40,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
         description={
           <>
             Started <RelativeTime iso={run.started_at} /> via{" "}
-            <span className="font-mono font-medium">{run.caller}</span>
+            <span className="font-medium font-mono">{run.caller}</span>
           </>
         }
         badge={<ToneBadge tone={meta.tone}>{meta.label}</ToneBadge>}

@@ -5,13 +5,17 @@ import commandSchemas from "../command-schemas.json";
 import {
   buildAckAlertPayload,
   buildAddConnectionPayload,
+  buildCancelAiJobPayload,
   buildPausePayload,
   buildRemoveConnectionPayload,
   buildResumePayload,
   buildSetBudgetPayload,
+  buildSetMaxParallelPayload,
+  buildSetMcpToolAccessPayload,
   buildSetPriorityPayload,
   buildSetRoutePayload,
   buildSetStrategyPayload,
+  buildSyncMcpToolsPayload,
   buildTestConnectionPayload,
   buildUpdateConnectionPayload,
   createContractExamplePayloads,
@@ -37,9 +41,13 @@ describe("Farm command contract validation", () => {
     "set_route",
     "test_connection",
     "ack_alert",
+    "cancel_ai_job",
+    "set_max_parallel",
+    "set_mcp_tool_access",
+    "sync_mcp_tools",
   ];
 
-  it("exports schemas for all 11 command kinds", () => {
+  it("exports schemas for all 15 command kinds", () => {
     for (const kind of allKinds) {
       expect(schemas[kind], `Missing exported schema for kind: ${kind}`).toBeDefined();
     }
@@ -187,6 +195,31 @@ describe("Farm command contract validation", () => {
       builder: () => buildAckAlertPayload({ alert_id: "a0000000-0000-0000-0000-000000000001" }),
       invalidPayloads: [
         {}, // missing alert_id
+      ],
+    },
+    cancel_ai_job: {
+      builder: () => buildCancelAiJobPayload({ job_id: "00000000-0000-0000-0000-000000000001" }),
+      invalidPayloads: [
+        {}, // missing job_id
+      ],
+    },
+    set_max_parallel: {
+      builder: () => buildSetMaxParallelPayload({ connection_id: "c_contract", max_parallel: 2 }),
+      invalidPayloads: [
+        { max_parallel: 0 }, // max_parallel < 1
+      ],
+    },
+    set_mcp_tool_access: {
+      builder: () => buildSetMcpToolAccessPayload({ provider_id: "p_contract", tool: "query_records", enabled: true }),
+      invalidPayloads: [
+        { tool: "t1" }, // missing provider_id
+        { provider_id: "p1" }, // missing tool
+      ],
+    },
+    sync_mcp_tools: {
+      builder: () => buildSyncMcpToolsPayload({ provider_id: "p_contract" }),
+      invalidPayloads: [
+        { provider_id: 123 }, // wrong type
       ],
     },
   };

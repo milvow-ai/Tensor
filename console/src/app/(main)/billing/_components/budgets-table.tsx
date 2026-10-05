@@ -198,7 +198,7 @@ export function BudgetsTable({ budgets, pools }: { budgets: BudgetRow[]; pools: 
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center justify-between text-xs">
                         <span className="font-mono tabular-nums">{fmtUsd(spent)}</span>
-                        <span className="text-muted-foreground text-[11px]">{fmtPct(ratio)}</span>
+                        <span className="text-[11px] text-muted-foreground">{fmtPct(ratio)}</span>
                       </div>
                       <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
                         <div

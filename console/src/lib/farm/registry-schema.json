@@ -1,0 +1,614 @@
+{
+  "$defs": {
+    "BudgetSpec": {
+      "additionalProperties": false,
+      "description": "Monthly USD caps. 0 means \"no paid spend allowed\"; free calls (cost 0) are unaffected.",
+      "properties": {
+        "global_monthly_usd": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Global Monthly Usd",
+          "type": "number"
+        },
+        "per_provider": {
+          "patternProperties": {
+            "^[a-z0-9][a-z0-9_-]{0,62}$": {
+              "minimum": 0,
+              "type": "number"
+            }
+          },
+          "propertyNames": {
+            "maxLength": 63
+          },
+          "title": "Per Provider",
+          "type": "object"
+        },
+        "per_connection": {
+          "patternProperties": {
+            "^[a-z0-9][a-z0-9_-]{0,62}$": {
+              "minimum": 0,
+              "type": "number"
+            }
+          },
+          "propertyNames": {
+            "maxLength": 63
+          },
+          "title": "Per Connection",
+          "type": "object"
+        },
+        "hard_stop": {
+          "default": true,
+          "title": "Hard Stop",
+          "type": "boolean"
+        }
+      },
+      "title": "BudgetSpec",
+      "type": "object"
+    },
+    "CapabilitySpec": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": ["tool", "ai"],
+          "title": "Kind",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "routes": {
+          "description": "Provider ids, in router order",
+          "items": {
+            "maxLength": 63,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Routes",
+          "type": "array"
+        },
+        "strategy": {
+          "default": "failover",
+          "enum": ["failover", "most_remaining", "round_robin", "parallel_split", "sticky", "fit_check", "pin"],
+          "title": "Strategy",
+          "type": "string"
+        },
+        "cache_ttl_seconds": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Cache Ttl Seconds",
+          "type": "integer"
+        }
+      },
+      "required": ["kind", "routes"],
+      "title": "CapabilitySpec",
+      "type": "object"
+    },
+    "ConnectionSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 63,
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "auth_ref": {
+          "title": "Auth Ref",
+          "type": "string"
+        },
+        "scope": {
+          "items": {
+            "pattern": "^(internal|client:[A-Za-z0-9][A-Za-z0-9_.-]*)$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Scope",
+          "type": "array"
+        },
+        "priority": {
+          "default": 100,
+          "description": "Lower is tried first",
+          "minimum": 0,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "strategy": {
+          "anyOf": [
+            {
+              "enum": ["failover", "most_remaining", "round_robin", "parallel_split", "sticky", "fit_check", "pin"],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Overrides the provider's strategy",
+          "title": "Strategy"
+        },
+        "concurrency": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Concurrency",
+          "type": "integer"
+        },
+        "rate_per_min": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Rate Per Min"
+        },
+        "status": {
+          "default": "active",
+          "enum": ["active", "paused", "needs_login", "exhausted", "disabled"],
+          "title": "Status",
+          "type": "string"
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PlanSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "meta": {
+          "additionalProperties": true,
+          "title": "Meta",
+          "type": "object"
+        },
+        "units": {
+          "patternProperties": {
+            "^[a-z0-9][a-z0-9_-]{0,62}$": {
+              "$ref": "#/$defs/UnitSpec"
+            }
+          },
+          "propertyNames": {
+            "maxLength": 63
+          },
+          "title": "Units",
+          "type": "object"
+        }
+      },
+      "required": ["id", "auth_ref"],
+      "title": "ConnectionSpec",
+      "type": "object"
+    },
+    "McpProviderSpec": {
+      "additionalProperties": false,
+      "description": "The ``mcp:`` block of a provider: how to reach one MCP server and how the Farm presents its tools.\n\nCredentials are never written here. ``env`` and ``headers`` values are ``env:NAME`` references to\nvariables of the local ``.env`` (``farm set-secret NAME``); ``url`` may be one when the URL itself is the\nsecret. ``auth`` says where the account's own credential comes from: ``none``; ``env`` (the connection's\n``auth_ref`` ``env:NAME`` is sent as a bearer token); ``oauth`` (the connection's ``auth_ref``\n``token-store:ID`` holds the tokens of one login). Each connection may add or replace ``env`` /\n``headers`` entries in ``meta.mcp`` (see :class:`McpConnectionOverride`).",
+      "properties": {
+        "transport": {
+          "default": "stdio",
+          "enum": ["stdio", "http", "sse"],
+          "title": "Transport",
+          "type": "string"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "stdio: the program to start",
+          "title": "Command"
+        },
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Args",
+          "type": "array"
+        },
+        "cwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cwd"
+        },
+        "env": {
+          "description": "stdio: variable -> env:NAME",
+          "patternProperties": {
+            "^[A-Za-z_][A-Za-z0-9_]*$": {
+              "type": "string"
+            }
+          },
+          "propertyNames": {
+            "maxLength": 128
+          },
+          "title": "Env",
+          "type": "object"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "http / sse: the server's endpoint",
+          "title": "Url"
+        },
+        "headers": {
+          "description": "http / sse: header -> env:NAME",
+          "patternProperties": {
+            "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$": {
+              "type": "string"
+            }
+          },
+          "propertyNames": {
+            "maxLength": 128
+          },
+          "title": "Headers",
+          "type": "object"
+        },
+        "auth": {
+          "default": "none",
+          "enum": ["none", "env", "oauth"],
+          "title": "Auth",
+          "type": "string"
+        },
+        "namespace": {
+          "anyOf": [
+            {
+              "maxLength": 63,
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Prefix of the exposed tool names (<namespace>__<tool>); default: the provider id",
+          "title": "Namespace"
+        },
+        "tools": {
+          "$ref": "#/$defs/McpToolsSpec"
+        },
+        "expose": {
+          "default": "auto",
+          "description": "direct: every tool is its own tool; discovery: search_tools + call_tool only; auto: direct while the whole Farm exposes at most settings.mcp_direct_limit tools",
+          "enum": ["direct", "discovery", "auto"],
+          "title": "Expose",
+          "type": "string"
+        },
+        "timeout_s": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 3600,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-attempt timeout of a call (default: the Farm's, 30 s)",
+          "title": "Timeout S"
+        }
+      },
+      "title": "McpProviderSpec",
+      "type": "object"
+    },
+    "McpToolsSpec": {
+      "additionalProperties": false,
+      "description": "Which of the server's tools the Farm exposes: the ``allow`` globs minus the ``deny`` globs.",
+      "properties": {
+        "allow": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Allow",
+          "type": "array"
+        },
+        "deny": {
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Deny",
+          "type": "array"
+        }
+      },
+      "title": "McpToolsSpec",
+      "type": "object"
+    },
+    "PlanSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "price_usd": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Price Usd",
+          "type": "number"
+        },
+        "billing_day": {
+          "anyOf": [
+            {
+              "maximum": 31,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Billing Day"
+        },
+        "renews_on": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Renews On"
+        }
+      },
+      "required": ["name"],
+      "title": "PlanSpec",
+      "type": "object"
+    },
+    "ProviderSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "enum": ["tool", "ai"],
+          "title": "Kind",
+          "type": "string"
+        },
+        "executor": {
+          "enum": ["api", "mcp", "llm", "cli_agent", "agent", "browser", "local", "human"],
+          "title": "Executor",
+          "type": "string"
+        },
+        "default_strategy": {
+          "default": "failover",
+          "enum": ["failover", "most_remaining", "round_robin", "parallel_split", "sticky", "fit_check", "pin"],
+          "title": "Default Strategy",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "config": {
+          "additionalProperties": true,
+          "title": "Config",
+          "type": "object"
+        },
+        "mcp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpProviderSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "MCP pass-through server (executor: mcp). Stored in config.mcp, which is what the database and the gateway read; this field is the typed view of it."
+        },
+        "connections": {
+          "items": {
+            "$ref": "#/$defs/ConnectionSpec"
+          },
+          "title": "Connections",
+          "type": "array"
+        }
+      },
+      "required": ["kind", "executor"],
+      "title": "ProviderSpec",
+      "type": "object"
+    },
+    "SettingsSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "owner_email": {
+          "maxLength": 320,
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+          "title": "Owner Email",
+          "type": "string"
+        },
+        "alert_thresholds": {
+          "items": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": "Alert Thresholds",
+          "type": "array"
+        },
+        "timezone": {
+          "default": "UTC",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "global_monthly_budget_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Mirror of budgets.global_monthly_usd (filled in if omitted)",
+          "title": "Global Monthly Budget Usd"
+        },
+        "mcp_direct_limit": {
+          "default": 40,
+          "description": "expose: auto shows every MCP tool as its own tool while there are at most this many",
+          "maximum": 1000,
+          "minimum": 1,
+          "title": "Mcp Direct Limit",
+          "type": "integer"
+        },
+        "mcp_pinned": {
+          "description": "Exposed MCP tool names (globs allowed) that stay their own tool under discovery",
+          "items": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "title": "Mcp Pinned",
+          "type": "array"
+        }
+      },
+      "required": ["owner_email"],
+      "title": "SettingsSpec",
+      "type": "object"
+    },
+    "UnitSpec": {
+      "additionalProperties": false,
+      "description": "One consumption unit of a connection (credits, requests, ...). ``limit`` null = unlimited.",
+      "properties": {
+        "limit": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Limit"
+        },
+        "period": {
+          "default": "none",
+          "enum": ["minute", "hour", "day", "week", "month", "rolling_5h", "total", "none"],
+          "title": "Period",
+          "type": "string"
+        },
+        "anchor": {
+          "anyOf": [
+            {
+              "maximum": 31,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Day of month the period resets (month only)",
+          "title": "Anchor"
+        },
+        "charged_on": {
+          "default": "attempt",
+          "enum": ["attempt", "success", "found"],
+          "title": "Charged On",
+          "type": "string"
+        },
+        "unit_cost_usd": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Unit Cost Usd",
+          "type": "number"
+        },
+        "estimate_per_call": {
+          "default": 1,
+          "minimum": 0,
+          "title": "Estimate Per Call",
+          "type": "number"
+        }
+      },
+      "title": "UnitSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "providers": {
+      "patternProperties": {
+        "^[a-z0-9][a-z0-9_-]{0,62}$": {
+          "$ref": "#/$defs/ProviderSpec"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 63
+      },
+      "title": "Providers",
+      "type": "object"
+    },
+    "capabilities": {
+      "patternProperties": {
+        "^[a-z0-9][a-z0-9_-]{0,62}$": {
+          "$ref": "#/$defs/CapabilitySpec"
+        }
+      },
+      "propertyNames": {
+        "maxLength": 63
+      },
+      "title": "Capabilities",
+      "type": "object"
+    },
+    "budgets": {
+      "$ref": "#/$defs/BudgetSpec"
+    },
+    "settings": {
+      "$ref": "#/$defs/SettingsSpec"
+    }
+  },
+  "required": ["providers", "capabilities", "settings"],
+  "title": "Harness Farm registry",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

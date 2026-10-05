@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 
 import { SectionTitle } from "@/components/farm/section-title";
@@ -38,7 +39,7 @@ function SortHeader({
       <Button
         variant="ghost"
         size="sm"
-        className="-ml-3 h-8 text-xs font-medium hover:bg-transparent"
+        className="-ml-3 h-8 font-medium text-xs hover:bg-transparent"
         onClick={() => onToggle(field)}
       >
         <span>{label}</span>
@@ -146,7 +147,7 @@ export function CostPerResultTable({ rows }: { rows: CostPerResultRow[] }) {
                   </TableCell>
                   <TableCell className="text-right">
                     {r.cost_per_result !== null ? (
-                      <span className="font-mono font-semibold text-sm tabular-nums text-foreground">
+                      <span className="font-mono font-semibold text-foreground text-sm tabular-nums">
                         ${r.cost_per_result.toFixed(4)}
                         <span className="font-normal text-muted-foreground text-xs">/res</span>
                       </span>

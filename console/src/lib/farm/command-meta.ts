@@ -48,6 +48,10 @@ export const COMMAND_LABELS: Record<CommandKind, string> = {
   set_route: "Set route",
   test_connection: "Test connection",
   ack_alert: "Acknowledge alert",
+  cancel_ai_job: "Cancel AI job",
+  set_max_parallel: "Set concurrency",
+  set_mcp_tool_access: "Set MCP tool access",
+  sync_mcp_tools: "Sync MCP tools",
 };
 
 /** True when a command concerns this pool: its provider, one of its accounts, or an account being added to it. */

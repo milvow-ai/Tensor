@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
-import { Activity, ChevronLeft, ChevronRight, Filter, Radio, RefreshCw, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Radio, X } from "lucide-react";
 
 import { ToneBadge } from "@/components/farm/status";
 import { RelativeTime } from "@/components/farm/time";
@@ -86,7 +86,7 @@ export function RunsTable({ runsPage, capabilities }: { runsPage: Page<RunRow>; 
                   <NativeSelect
                     value={currentCapability}
                     onChange={(e) => updateQuery({ capability: e.target.value })}
-                    className="h-8 text-xs font-mono"
+                    className="h-8 font-mono text-xs"
                     aria-label="Filter by capability"
                   >
                     <option value="">All capabilities</option>
@@ -122,7 +122,7 @@ export function RunsTable({ runsPage, capabilities }: { runsPage: Page<RunRow>; 
                   <NativeSelect
                     value={currentCaller}
                     onChange={(e) => updateQuery({ caller: e.target.value })}
-                    className="h-8 text-xs font-mono"
+                    className="h-8 font-mono text-xs"
                     aria-label="Filter by caller"
                   >
                     <option value="">All callers</option>
@@ -152,7 +152,7 @@ export function RunsTable({ runsPage, capabilities }: { runsPage: Page<RunRow>; 
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-8 text-xs gap-1 text-muted-foreground"
+                    className="h-8 gap-1 text-muted-foreground text-xs"
                     onClick={() =>
                       updateQuery({
                         capability: null,
@@ -177,7 +177,7 @@ export function RunsTable({ runsPage, capabilities }: { runsPage: Page<RunRow>; 
                   onClick={() => setIsLive(!isLive)}
                   title={isLive ? "Pause 5-second polling" : "Resume 5-second live polling"}
                 >
-                  <Radio className={`size-3 ${isLive ? "text-emerald-500 animate-pulse" : "text-muted-foreground"}`} />
+                  <Radio className={`size-3 ${isLive ? "animate-pulse text-emerald-500" : "text-muted-foreground"}`} />
                   <span>{isLive ? "Live (5s poll)" : "Paused"}</span>
                 </Button>
               </div>
@@ -215,16 +215,16 @@ export function RunsTable({ runsPage, capabilities }: { runsPage: Page<RunRow>; 
                       onClick={() => handleRowClick(r.id)}
                       data-testid={`run-row-${r.id}`}
                     >
-                      <TableCell className="font-mono font-medium text-xs">{r.capability}</TableCell>
+                      <TableCell className="font-medium font-mono text-xs">{r.capability}</TableCell>
                       <TableCell>
                         <ToneBadge tone={meta.tone}>{meta.label}</ToneBadge>
                       </TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{r.caller}</TableCell>
+                      <TableCell className="font-mono text-muted-foreground text-xs">{r.caller}</TableCell>
                       <TableCell className="text-xs">
                         <div className="flex flex-col">
                           <span>{r.provider_name ?? (r.cached ? "Cache" : DASH)}</span>
                           {r.connection_label ? (
-                            <span className="font-mono text-muted-foreground text-[11px]">{r.connection_label}</span>
+                            <span className="font-mono text-[11px] text-muted-foreground">{r.connection_label}</span>
                           ) : null}
                         </div>
                       </TableCell>
@@ -236,11 +236,11 @@ export function RunsTable({ runsPage, capabilities }: { runsPage: Page<RunRow>; 
                         )}
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs tabular-nums">{fmtUsd(r.cost_usd)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs tabular-nums text-muted-foreground">
+                      <TableCell className="text-right font-mono text-muted-foreground text-xs tabular-nums">
                         {fmtDuration(r.duration_ms)}
                       </TableCell>
                       <TableCell
-                        className="text-right text-xs text-muted-foreground"
+                        className="text-right text-muted-foreground text-xs"
                         title={fmtAbsolute(r.started_at, true)}
                       >
                         <RelativeTime iso={r.started_at} />
@@ -253,7 +253,7 @@ export function RunsTable({ runsPage, capabilities }: { runsPage: Page<RunRow>; 
           </Table>
 
           {/* Pagination Controls */}
-          <div className="flex items-center justify-between border-t px-4 py-3 text-xs text-muted-foreground">
+          <div className="flex items-center justify-between border-t px-4 py-3 text-muted-foreground text-xs">
             <div>
               Showing <span className="font-medium text-foreground">{runsPage.items.length}</span> of{" "}
               <span className="font-medium text-foreground">{runsPage.total}</span> runs

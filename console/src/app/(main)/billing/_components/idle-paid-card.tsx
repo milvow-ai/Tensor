@@ -34,7 +34,7 @@ export function IdlePaidCard({ rows }: { rows: IdlePaidRow[] }) {
             </CardDescription>
           </div>
           {rows.length > 0 ? (
-            <div className="flex items-center gap-1.5 text-amber-800 text-xs dark:text-amber-400 font-medium">
+            <div className="flex items-center gap-1.5 font-medium text-amber-800 text-xs dark:text-amber-400">
               <AlertTriangle className="size-4" />
               <span>{rows.length} idle account(s)</span>
             </div>
@@ -90,7 +90,7 @@ export function IdlePaidCard({ rows }: { rows: IdlePaidRow[] }) {
                         return <ToneBadge tone="warn">Active (Idle)</ToneBadge>;
                       })()}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="text-muted-foreground text-xs">
                       {r.last_success_at ? (
                         <div className="flex flex-col">
                           <span>{fmtAbsolute(r.last_success_at, true)}</span>
@@ -99,12 +99,12 @@ export function IdlePaidCard({ rows }: { rows: IdlePaidRow[] }) {
                           </span>
                         </div>
                       ) : (
-                        <span className="text-amber-800 dark:text-amber-400 font-medium">Never recorded</span>
+                        <span className="font-medium text-amber-800 dark:text-amber-400">Never recorded</span>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
                       {isPaused ? (
-                        <span className="text-muted-foreground text-xs font-mono">Paused</span>
+                        <span className="font-mono text-muted-foreground text-xs">Paused</span>
                       ) : (
                         <Button
                           variant="outline"
@@ -112,7 +112,7 @@ export function IdlePaidCard({ rows }: { rows: IdlePaidRow[] }) {
                           disabled={isPending}
                           aria-label="Pause account"
                           onClick={() => pauseAccount(r.connection_id, r.connection_id)}
-                          className="h-8 gap-1.5 text-xs text-amber-700 hover:text-amber-800 dark:text-amber-300 border-amber-600/30 hover:bg-amber-500/10"
+                          className="h-8 gap-1.5 border-amber-600/30 text-amber-700 text-xs hover:bg-amber-500/10 hover:text-amber-800 dark:text-amber-300"
                         >
                           <Pause className="size-3" />
                           <span>{isPending ? "Pausing..." : "Pause"}</span>

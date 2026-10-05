@@ -1,27 +1,29 @@
 import { Settings } from "lucide-react";
 import type { Metadata } from "next";
 
-import { ComingSoon } from "@/components/farm/coming-soon";
+import { PageHeader } from "@/components/farm/page-header";
+import { resolveDataSource } from "@/lib/farm/mode";
 
-export const metadata: Metadata = { title: "Settings" };
+import { SettingsView } from "./_components/settings-view";
+
+export const metadata: Metadata = {
+  title: "Settings",
+  description: "Owner, time zone, notifications, and Farm engine runtime settings.",
+};
 
 export default function SettingsPage() {
+  const dataSource = resolveDataSource();
+  const ownerEmail = process.env.OWNER_EMAIL || "owner@example.com";
+  const timezone = process.env.FARM_TIMEZONE || "UTC";
+
   return (
-    <ComingSoon
-      title="Settings"
-      description="Owner, time zone and notifications."
-      milestone="C3"
-      icon={Settings}
-      will={[
-        "Change the owner email that may sign in.",
-        "Set the time zone used for resets and reports.",
-        "Configure where alerts are delivered, such as Telegram.",
-      ]}
-      today={{
-        text: "Theme, layout and font preferences are in the controls at the top right of every page.",
-        href: "/overview",
-        label: "Open Overview",
-      }}
-    />
+    <div className="space-y-6">
+      <PageHeader
+        title="Settings"
+        description="Owner identity, timezone for resets, alert endpoints, and runtime status."
+        icon={Settings}
+      />
+      <SettingsView dataSource={dataSource} initialOwnerEmail={ownerEmail} initialTimezone={timezone} />
+    </div>
   );
 }

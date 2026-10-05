@@ -8,6 +8,8 @@ import { createClient } from "@/lib/supabase/server";
 import { groupConnectionRows, toNullableNumber, toNumber } from "./group";
 import type {
   AlertRow,
+  AuditEventRow,
+  AuditQuery,
   BillingOverview,
   BudgetRow,
   CapabilityCapacityRow,
@@ -16,6 +18,10 @@ import type {
   ConnectionQuery,
   ConnectionStatusRow,
   CostPerResultRow,
+  EvidenceQuery,
+  EvidenceRow,
+  FactQuery,
+  FactRow,
   FarmCommand,
   FarmData,
   FarmOverview,
@@ -26,6 +32,7 @@ import type {
   PoolOverviewRow,
   ProviderKind,
   RenewalRow,
+  RouteRow,
   RunDetailRow,
   RunQuery,
   RunRow,
@@ -156,8 +163,8 @@ function normalizeRunDetail(row: RunDetailRow): RunDetailRow {
     ...normalizeRun(row),
     params: row.params ?? null,
     result: row.result ?? null,
-    events: row.events ?? [],
-    evidence_ids: row.evidence_ids ?? [],
+    events: row.events,
+    evidence_ids: row.evidence_ids,
   };
 }
 
@@ -310,7 +317,12 @@ export class SupabaseFarmData implements FarmData {
 
     const rawBudgets = rows<BudgetRow>(budgets, "budgets").map(normalizeBudget);
     const enrichedBudgets: BudgetRow[] = rawBudgets.map((b) => {
-      const match = b.scope === "global" ? totalSpend : b.ref ? spendMonthMap.get(b.ref) : null;
+      let match = null;
+      if (b.scope === "global") {
+        match = totalSpend;
+      } else if (b.ref) {
+        match = spendMonthMap.get(b.ref);
+      }
       return {
         ...b,
         spent_usd: match?.spend_usd ?? 0,
@@ -354,8 +366,12 @@ export class SupabaseFarmData implements FarmData {
     const totalSpend = spendMonthMap.get("total");
     return rows<BudgetRow>(budgets, "budgets").map((b) => {
       const normalized = normalizeBudget(b);
-      const match =
-        normalized.scope === "global" ? totalSpend : normalized.ref ? spendMonthMap.get(normalized.ref) : null;
+      let match = null;
+      if (normalized.scope === "global") {
+        match = totalSpend;
+      } else if (normalized.ref) {
+        match = spendMonthMap.get(normalized.ref);
+      }
       return {
         ...normalized,
         spent_usd: match?.spend_usd ?? 0,
@@ -364,7 +380,7 @@ export class SupabaseFarmData implements FarmData {
     });
   }
 
-  async listRenewals(days = 45): Promise<RenewalRow[]> {
+  async listRenewals(_days = 45): Promise<RenewalRow[]> {
     const supabase = await createClient();
     const result = await supabase.from("v_renewals").select("*").order("renews_on", { ascending: true });
     return rows<RenewalRow>(result, "v_renewals").map(normalizeRenewal);
@@ -410,5 +426,83 @@ export class SupabaseFarmData implements FarmData {
     const result = await supabase.from("v_run_detail").select("*").eq("id", id).maybeSingle();
     if (result.error) throw new FarmDataError("v_run_detail", result.error);
     return result.data ? normalizeRunDetail(result.data as unknown as RunDetailRow) : null;
+  }
+
+  // C3: Routing, Memory & Evidence, Policies & Audits
+  async listRoutes(capability?: string): Promise<RouteRow[]> {
+    const supabase = await createClient();
+    let q = supabase.from("v_routes").select("*").order("position", { ascending: true });
+    if (capability) q = q.eq("capability", capability);
+    const result = await q;
+    return rows<RouteRow>(result, "v_routes");
+  }
+
+  async listFacts(query: FactQuery = {}): Promise<Page<FactRow>> {
+    const { page = 1, pageSize = 20, search, freshness, entityKind } = query;
+    const supabase = await createClient();
+    let q = supabase.from("v_facts").select("*", { count: "exact" });
+    if (freshness && freshness !== "all") q = q.eq("freshness_state", freshness);
+    if (entityKind) q = q.eq("entity_kind", entityKind);
+    if (search) {
+      q = q.or(`entity_name.ilike.%${search}%,entity_canonical_key.ilike.%${search}%,attribute.ilike.%${search}%`);
+    }
+    const fromIdx = (page - 1) * pageSize;
+    q = q.order("observed_at", { ascending: false }).range(fromIdx, fromIdx + pageSize - 1);
+    const result = await q;
+    return {
+      items: rows<FactRow>(result, "v_facts"),
+      total: result.count ?? 0,
+      page,
+      pageSize,
+    };
+  }
+
+  async getFact(id: string): Promise<FactRow | null> {
+    const supabase = await createClient();
+    const result = await supabase.from("v_facts").select("*").eq("id", id).maybeSingle();
+    if (result.error) throw new FarmDataError("v_facts", result.error);
+    return (result.data as FactRow | null) ?? null;
+  }
+
+  async listEvidence(query: EvidenceQuery = {}): Promise<Page<EvidenceRow>> {
+    const { page = 1, pageSize = 20, search } = query;
+    const supabase = await createClient();
+    let q = supabase.from("v_evidence").select("*", { count: "exact" });
+    if (search) {
+      q = q.or(`sha256.ilike.%${search}%,url.ilike.%${search}%,path.ilike.%${search}%`);
+    }
+    const fromIdx = (page - 1) * pageSize;
+    q = q.order("captured_at", { ascending: false }).range(fromIdx, fromIdx + pageSize - 1);
+    const result = await q;
+    return {
+      items: rows<EvidenceRow>(result, "v_evidence"),
+      total: result.count ?? 0,
+      page,
+      pageSize,
+    };
+  }
+
+  async getEvidence(id: string): Promise<EvidenceRow | null> {
+    const supabase = await createClient();
+    const result = await supabase.from("v_evidence").select("*").eq("id", id).maybeSingle();
+    if (result.error) throw new FarmDataError("v_evidence", result.error);
+    return (result.data as EvidenceRow | null) ?? null;
+  }
+
+  async listAuditEvents(query: AuditQuery = {}): Promise<Page<AuditEventRow>> {
+    const { page = 1, pageSize = 20, actor, action } = query;
+    const supabase = await createClient();
+    let q = supabase.from("audit_events").select("*", { count: "exact" });
+    if (actor) q = q.ilike("actor", `%${actor}%`);
+    if (action) q = q.eq("action", action);
+    const fromIdx = (page - 1) * pageSize;
+    q = q.order("at", { ascending: false }).range(fromIdx, fromIdx + pageSize - 1);
+    const result = await q;
+    return {
+      items: rows<AuditEventRow>(result, "audit_events"),
+      total: result.count ?? 0,
+      page,
+      pageSize,
+    };
   }
 }

@@ -83,7 +83,7 @@ export function RenewalCalendar({ renewals }: { renewals: RenewalRow[] }) {
                           <span className="text-muted-foreground text-xs">·</span>
                           <span className="font-mono text-xs">{r.connection_label}</span>
                           {r.plan_name ? (
-                            <span className="rounded border border-border px-1.5 py-0.5 text-[11px] font-medium text-foreground">
+                            <span className="rounded border border-border px-1.5 py-0.5 font-medium text-[11px] text-foreground">
                               {r.plan_name}
                             </span>
                           ) : null}
@@ -102,12 +102,12 @@ export function RenewalCalendar({ renewals }: { renewals: RenewalRow[] }) {
                         <div className="flex flex-col items-start sm:items-end">
                           <div className="flex items-center gap-1.5">
                             <span className="text-muted-foreground text-xs">Usage:</span>
-                            <span className="font-mono font-medium text-xs tabular-nums">
+                            <span className="font-medium font-mono text-xs tabular-nums">
                               {r.usage_pct !== null ? `${r.usage_pct}%` : "Unlimited"}
                             </span>
                           </div>
                           {isUnderUtilized ? (
-                            <div className="mt-0.5 flex items-center gap-1 text-[11px] font-medium text-amber-800 dark:text-amber-400">
+                            <div className="mt-0.5 flex items-center gap-1 font-medium text-[11px] text-amber-800 dark:text-amber-400">
                               <AlertCircle className="size-3" />
                               <span>Usage: {r.usage_pct}% · Consider cancelling</span>
                             </div>
@@ -121,12 +121,7 @@ export function RenewalCalendar({ renewals }: { renewals: RenewalRow[] }) {
                         </div>
 
                         {/* Human Task Cancellation Link */}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          asChild
-                          className="h-8 gap-1.5 text-xs"
-                        >
+                        <Button variant="outline" size="sm" asChild className="h-8 gap-1.5 text-xs">
                           <a
                             href={`https://${r.provider_id}.com/account/billing`}
                             target="_blank"
