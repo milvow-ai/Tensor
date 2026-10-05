@@ -2,10 +2,16 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "console-live",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": ["-NoProfile", "-Command", "Remove-Item Env:FARM_DATA_SOURCE -ErrorAction SilentlyContinue; Set-Location console; pnpm dev --port 3100"],
+      "port": 3100
+    },
+    {
       "name": "console-fixtures",
       "runtimeExecutable": "powershell",
-      "runtimeArgs": ["-NoProfile", "-Command", "$env:FARM_DATA_SOURCE='fixtures'; Set-Location console; pnpm dev --port 3100"],
-      "port": 3100
+      "runtimeArgs": ["-NoProfile", "-Command", "$env:FARM_DATA_SOURCE='fixtures'; Set-Location console; pnpm dev --port 3101"],
+      "port": 3101
     }
   ]
 }
