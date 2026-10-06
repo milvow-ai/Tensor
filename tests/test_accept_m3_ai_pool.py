@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -247,10 +248,7 @@ async def test_case_2_batch_spreads_across_accounts(
 
     server = await build_server(ai_ctx)
     async with Client(server) as client:
-        tasks = [
-            {"ai": "claude", "model": "sonnet", "task": f"Task {i}"}
-            for i in range(3)
-        ]
+        tasks = [{"ai": "claude", "model": "sonnet", "task": f"Task {i}"} for i in range(3)]
         reply = await client.call_tool("ask_ai_batch", {"tasks": tasks})
         res = reply.structured_content
         assert res is not None
@@ -311,7 +309,9 @@ async def test_case_3_usage_limit_retries_and_sets_reset_at(
         c2 = next(a for a in accounts if a["id"] == "claude-02")
         assert c2["status"] == "exhausted"
         assert c2["next_reset_at"] is not None
-        assert "2026-10-05" in str(c2["next_reset_at"])
+        # the fake CLI says "resets at <time>": the Farm picks its next occurrence (within a day, in the future)
+        reset_at = datetime.fromisoformat(str(c2["next_reset_at"]))
+        assert timedelta(0) < reset_at - datetime.now(UTC) <= timedelta(hours=24)
 
     # Verify in DB: connection status is exhausted
     async with pool.connection() as conn:
@@ -430,9 +430,7 @@ async def test_case_5_auth_failure_triggers_alert(
         assert status == "needs_login"
 
         # Verify alert exists with exact command
-        cur = await conn.execute(
-            "select message from public.alerts where ref = 'login:claude-02'"
-        )
+        cur = await conn.execute("select message from public.alerts where ref = 'login:claude-02'")
         row = await cur.fetchone()
         assert row is not None, "Expected alert row with ref login:claude-02"
         alert_msg = row[0]
@@ -462,7 +460,15 @@ def test_case_6_live_smoke() -> None:
     print(f"\n[LIVE agy-01 Output]: {res_agy.stdout.strip()}")
 
     res_hermes = subprocess.run(
-        [sys.executable, "-c", "from farm.control.cli import app; app()", "ai", "test", "hermes-01", "--local"],
+        [
+            sys.executable,
+            "-c",
+            "from farm.control.cli import app; app()",
+            "ai",
+            "test",
+            "hermes-01",
+            "--local",
+        ],
         capture_output=True,
         text=True,
     )

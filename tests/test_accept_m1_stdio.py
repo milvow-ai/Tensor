@@ -98,6 +98,7 @@ def test_farm_serve_over_stdio_lists_the_tools_and_answers_verify_email(
         "ai_wait",
         "ask_ai",
         "ask_ai_batch",
+        "farm_guide",
         "get_capacity",
         "get_run",
         "get_usage",
