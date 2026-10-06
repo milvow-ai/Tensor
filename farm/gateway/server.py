@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field, PrivateAttr, create_model
 from farm.capabilities.schemas import CAPABILITY_MODELS
 from farm.context import FarmContext
 from farm.gateway.ai_tools import register_ai_tools
+from farm.gateway.guide import Section, generate_guide
 from farm.gateway.mcp_tools import register_mcp_tools
 from farm.gateway.middleware import (
     AuthMiddleware,
@@ -46,7 +47,7 @@ from farm.resources.trajectory import fetch_run
 log = structlog.get_logger(__name__)
 
 SERVER_NAME = "harness-farm"
-INFRA_TOOLS = ("get_capacity", "list_resources", "get_run", "get_usage")
+INFRA_TOOLS = ("farm_guide", "get_capacity", "list_resources", "get_run", "get_usage")
 ROUTING_ARGUMENT = "routing_strategy"
 
 """Optional tool argument: the strategy for this call. Own name, because capability inputs may have a
@@ -58,14 +59,10 @@ ROUTING_PROPERTY: dict[str, Any] = {
 }
 
 INSTRUCTIONS = (
-    "Harness Farm routes capability calls (verify an email, ...) to the best provider account, tracks quota "
-    "and cost, falls back when a provider fails, and caches answers. Every capability tool returns the same "
-    "envelope: ok, result, error (kind, message, hint, attempts), run_id, source (provider, connection_id, "
-    "cached) and cost. Identical requests are answered from cache at no cost. Use get_run(run_id) to see why "
-    "the Farm chose what it chose, get_capacity to see what is left, get_usage for spend. To give work to "
-    "other AIs (Claude accounts, Codex, Gemini, Hermes) use ai_start or ai_start_many, check them with "
-    "ai_status / ai_wait, read each exact answer with ai_result and send follow-ups to the same worker with "
-    "ai_reply; list_ais shows the accounts."
+    "Harness Farm gives you extra tools and AI workers; call farm_guide() first to see what is available "
+    "right now. Use get_capacity to see remaining limits, get_run(run_id) to inspect routing decisions, "
+    "and get_usage for spend. To delegate to other AIs (Claude, Codex, Gemini, Hermes), use ai_start / "
+    "ai_start_many, track with ai_wait, and retrieve answers with ai_result."
 )
 
 
@@ -111,6 +108,21 @@ class CapabilityTool(Tool):
 
 
 def _register_infra_tools(server: FastMCP, ctx: FarmContext) -> None:
+    @server.tool(annotations={"readOnlyHint": True})
+    async def farm_guide(section: Section = "all") -> str:
+        """Harness Farm capability and worker guide: MCP servers, AI workers, rules, and recipes."""
+        return await generate_guide(ctx.pool, ctx.clock(), section=section)
+
+    @server.resource("farm://guide")
+    async def farm_guide_resource() -> str:
+        """Harness Farm capability and worker guide."""
+        return await generate_guide(ctx.pool, ctx.clock(), section="all")
+
+    @server.prompt("use-harness-farm")
+    async def use_harness_farm_prompt() -> str:
+        """How to use Harness Farm AI workers and tools."""
+        return await generate_guide(ctx.pool, ctx.clock(), section="all")
+
     @server.tool(annotations={"readOnlyHint": True})
     async def get_capacity(capability: str | None = None) -> dict[str, Any]:
         """What is left per provider pool and account: state, circuit, cooldown, remaining and next reset.

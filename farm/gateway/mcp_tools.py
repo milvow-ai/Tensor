@@ -26,15 +26,17 @@ neither cache nor collapse two identical calls (a tool may have side effects).
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 from uuid import uuid4
 
 import mcp_types
 import structlog
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import NotFoundError, ToolError
+from fastmcp.server.context import Context
 from fastmcp.server.transforms.search import BM25SearchTransform
 from fastmcp.tools import Tool, ToolResult
 from fastmcp.utilities.tasks import TaskConfig
@@ -42,6 +44,7 @@ from mcp_types import TextContent
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, ValidationError
 
 from farm.context import FarmContext
+from farm.db.pool import DbPool
 from farm.executors.mcp.client import REJECTION_KEY, RESULT_KEY
 from farm.gateway.middleware import current_caller
 from farm.mcp import store
@@ -52,7 +55,7 @@ from farm.resources.router import RouteOutcome, UnknownCapability, route
 log = structlog.get_logger(__name__)
 
 FARM_ARGUMENT = "_farm"
-SEARCH_MAX_RESULTS = 10
+SEARCH_MAX_RESULTS = int(os.environ.get("FARM_MCP_SEARCH_MAX_RESULTS", "25"))
 
 INSTRUCTIONS = (
     " The Farm also fronts MCP servers ({namespaces}): their tools are named <server>__<tool> and keep the "
@@ -194,6 +197,140 @@ class McpSurface:
         return tuple(item for item in self.tools if item.direct)
 
 
+_LAST_SURFACE: McpSurface | None = None
+_LAST_POOL: DbPool | None = None
+
+
+def _normalize_name(name: str) -> str:
+    return name.lower().replace("-", "_").replace(":", "__").replace("/", "__")
+
+
+def resolve_tool_in_catalog(name: str, catalog: Sequence[Tool]) -> Tool | None:
+    """Resolve a tool name against catalog tools allowing prefix omission, aliases, and hyphen/underscore."""
+    for tool in catalog:
+        if tool.name == name:
+            return tool
+
+    norm = _normalize_name(name)
+    for tool in catalog:
+        if _normalize_name(tool.name) == norm:
+            return tool
+
+    suffix_matches = [t for t in catalog if t.name.split("__", 1)[-1] == name]
+    if suffix_matches:
+        return suffix_matches[0]
+
+    norm_tail = norm.split("__")[-1]
+    norm_matches = [t for t in catalog if _normalize_name(t.name).split("__")[-1] == norm_tail]
+    if norm_matches:
+        return norm_matches[0]
+
+    return None
+
+
+async def list_server_tools(server: str, pool: DbPool | None = None) -> list[dict[str, str]]:
+    """Return every tool name and one-line description for one MCP server."""
+    global _LAST_SURFACE, _LAST_POOL
+    p_pool = pool or _LAST_POOL
+
+    if _LAST_SURFACE is not None:
+        matches = [
+            t for t in _LAST_SURFACE.tools
+            if t.provider.namespace == server or t.provider.id == server
+        ]
+        if matches:
+            return [
+                {
+                    "name": t.name,
+                    "description": (
+                        (t.stored.definition.description or "").splitlines()[0]
+                        if t.stored.definition.description
+                        else ""
+                    ),
+                }
+                for t in matches
+            ]
+
+    if p_pool is not None:
+        providers = await store.list_providers(p_pool, enabled_only=False)
+        target_providers = [p for p in providers if p.namespace == server or p.id == server]
+        if target_providers:
+            p = target_providers[0]
+            stored = await store.load_tools(p_pool, [p.id])
+            plan = plan_exposure([p], stored, direct_limit=len(stored) + 1)
+            name_map = {item.stored.name: item.name for item in plan}
+            return [
+                {
+                    "name": name_map.get(t.name, f"{p.namespace}__{t.name}"),
+                    "description": (
+                        (t.definition.description or "").splitlines()[0]
+                        if t.definition.description
+                        else ""
+                    ),
+                }
+                for t in stored
+            ]
+
+    return []
+
+
+class FarmBM25SearchTransform(BM25SearchTransform):
+    """BM25 search transform with capability discovery fixes:
+    1. Returns up to max_results (25).
+    2. Indexes all tools (including directly listed tools) so no tool is missing from search.
+    3. Resolves unprefixed, colon/slash namespaced, and hyphen/underscore variants in call_tool and get_tool.
+    """
+
+    async def _get_visible_tools(self, ctx: Context) -> Sequence[Tool]:
+        """Include all tools from catalog so directly listed tools are also searchable."""
+        return await self.get_tool_catalog(ctx)
+
+    def _make_call_tool(self) -> Tool:
+        transform = self
+
+        async def call_tool(
+            name: Annotated[str, "The name of the tool to call"],
+            arguments: Annotated[
+                dict[str, Any] | None, "Arguments to pass to the tool"
+            ] = None,
+            ctx: Context = None,  # type: ignore[assignment]
+        ) -> ToolResult:
+            """Call a tool by name with the given arguments.
+
+            Use this to execute tools discovered via search_tools.
+            """
+            if name in {transform._call_tool_name, transform._search_tool_name}:
+                raise ValueError(
+                    f"'{name}' is a synthetic search tool and cannot be called via the call_tool proxy"
+                )
+            catalog = await transform.get_tool_catalog(ctx)
+            target = resolve_tool_in_catalog(name, catalog)
+            if target is None:
+                raise NotFoundError(f"Unknown tool: {name!r}")
+            return await ctx.fastmcp.call_tool(target.name, arguments)
+
+        return Tool.from_function(fn=call_tool, name=self._call_tool_name)
+
+    async def get_tool(
+        self, name: str, call_next: Any, *, version: Any = None
+    ) -> Tool | None:
+        """Intercept synthetic tool names; resolve names downstream."""
+        if name == self._search_tool_name:
+            return self._make_search_tool()
+        if name == self._call_tool_name:
+            return self._make_call_tool()
+        res = await call_next(name, version=version)
+        if isinstance(res, Tool):
+            return res
+        if self._indexed_tools:
+            target = resolve_tool_in_catalog(name, self._indexed_tools)
+            if target is not None and target.name != name:
+                target_tool = await call_next(target.name, version=version)
+                if isinstance(target_tool, Tool):
+                    return target_tool
+        return None
+
+
 async def register_mcp_tools(
     server: FastMCP,
     ctx: FarmContext,
@@ -226,8 +363,15 @@ async def register_mcp_tools(
         server.add_tool(PassthroughTool.create(ctx, item))
         surface.append(item)
 
+    @server.tool(name="list_server_tools", annotations={"readOnlyHint": True})
+    async def list_server_tools_tool(server: str) -> list[dict[str, str]]:
+        """List all tools and one-line descriptions for one MCP server."""
+        return await list_server_tools(server, pool=ctx.pool)
+
     listed = native | {item.name for item in surface if item.direct}
-    server.add_transform(BM25SearchTransform(max_results=SEARCH_MAX_RESULTS, always_visible=sorted(listed)))
+    server.add_transform(
+        FarmBM25SearchTransform(max_results=SEARCH_MAX_RESULTS, always_visible=sorted(listed))
+    )
     namespaces = ", ".join(sorted(provider.namespace for provider in providers))
     server.instructions = (server.instructions or "") + INSTRUCTIONS.format(namespaces=namespaces)
     log.info(
@@ -236,16 +380,23 @@ async def register_mcp_tools(
         tools=len(surface),
         listed=sum(1 for item in surface if item.direct),
     )
-    return McpSurface(tuple(surface))
+    result_surface = McpSurface(tuple(surface))
+    global _LAST_SURFACE, _LAST_POOL
+    _LAST_SURFACE = result_surface
+    _LAST_POOL = ctx.pool
+    return result_surface
 
 
 __all__ = [
     "FARM_ARGUMENT",
+    "FarmBM25SearchTransform",
     "FarmControl",
     "McpSurface",
     "PassthroughTool",
     "failure_text",
+    "list_server_tools",
     "parse_control",
     "register_mcp_tools",
     "relay",
+    "resolve_tool_in_catalog",
 ]
