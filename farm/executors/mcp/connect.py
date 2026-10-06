@@ -17,18 +17,21 @@ child process or the request headers and are registered for redaction by ``resol
 from __future__ import annotations
 
 import contextlib
+import json
 import os
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Protocol, Unpack
+from urllib.parse import urlparse
 
 import httpx2
 import mcp_types
+import structlog
 from fastmcp import Client, FastMCP
-from fastmcp.client.auth.oauth import OAuth
+from fastmcp.client.auth.oauth import OAuth, TokenStorageAdapter
 from fastmcp.client.transports import (
     ClientTransport,
     SSETransport,
@@ -39,19 +42,37 @@ from fastmcp.client.transports import (
 from fastmcp.client.transports.base import SessionKwargs, TransportOptions
 from fastmcp.mcp_config import RemoteMCPServer
 from fastmcp.server.providers.proxy import PROXY_TRANSPORT_OPTIONS
+from key_value.aio.adapters.pydantic import PydanticAdapter
 from key_value.aio.protocols import AsyncKeyValue
+from key_value.aio.stores.memory import MemoryStore
 from mcp import ClientSession
+from mcp.client.auth.utils import (
+    build_oauth_authorization_server_metadata_discovery_urls,
+    build_protected_resource_metadata_discovery_urls,
+    create_oauth_metadata_request,
+    extract_field_from_www_auth,
+    extract_resource_metadata_from_www_auth,
+    handle_auth_metadata_response,
+    handle_protected_resource_response,
+    issuers_match,
+    validate_metadata_issuer,
+)
+from mcp.shared.auth import OAuthMetadata, ProtectedResourceMetadata
+from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
 
 from farm import __version__
 from farm.executors.base import ConnectionView, ErrorKind
 from farm.registry.models import McpConnectionOverride, McpProviderSpec
-from farm.secrets import AuthRefError, resolve_auth
+from farm.secrets import AuthRefError, redact, resolve_auth
+
+logger = structlog.get_logger(__name__)
 
 RELAY_OPTIONS = replace(PROXY_TRANSPORT_OPTIONS, forward_incoming_headers=False)
 """FastMCP's proxy session (no re-validation of results against the server's own output schema), minus the
 forwarding of the caller's headers."""
 
 CLIENT_NAME = "harness-farm"
+
 
 type TransportFactory = Callable[[ConnectionView, McpProviderSpec], ClientTransport | FastMCP[Any]]
 """Builds the transport (or an in-process FastMCP server, for tests) of one connection."""
@@ -77,11 +98,355 @@ class LoginRequired(RuntimeError):
     """OAuth needs a person: the account has no usable token (``farm mcp login <connection>``)."""
 
 
-class HeadlessOAuth(OAuth):
+class FarmTokenStorageAdapter(TokenStorageAdapter):
+    """Token storage adapter that also persists and loads OAuth server metadata."""
+
+    def __init__(
+        self,
+        async_key_value: AsyncKeyValue,
+        server_url: str,
+        cache_namespace: str | None = None,
+    ) -> None:
+        super().__init__(async_key_value, server_url, cache_namespace=cache_namespace)
+        self._storage_oauth_metadata = PydanticAdapter[OAuthMetadata](
+            default_collection="mcp-oauth-metadata",
+            key_value=async_key_value,
+            pydantic_model=OAuthMetadata,
+            raise_on_validation_error=True,
+        )
+        self._storage_prm = PydanticAdapter[ProtectedResourceMetadata](
+            default_collection="mcp-oauth-prm",
+            key_value=async_key_value,
+            pydantic_model=ProtectedResourceMetadata,
+            raise_on_validation_error=True,
+        )
+
+    def _get_metadata_cache_key(self) -> str:
+        return f"{self._cache_key_prefix()}/metadata"
+
+    def _get_prm_cache_key(self) -> str:
+        return f"{self._cache_key_prefix()}/prm"
+
+    async def get_metadata(self) -> OAuthMetadata | None:
+        res = await self._storage_oauth_metadata.get(key=self._get_metadata_cache_key())
+        return res if isinstance(res, OAuthMetadata) else None
+
+    async def set_metadata(self, metadata: OAuthMetadata) -> None:
+        await self._storage_oauth_metadata.put(
+            key=self._get_metadata_cache_key(),
+            value=metadata,
+            ttl=60 * 60 * 24 * 365,
+        )
+
+    async def get_prm(self) -> ProtectedResourceMetadata | None:
+        res = await self._storage_prm.get(key=self._get_prm_cache_key())
+        return res if isinstance(res, ProtectedResourceMetadata) else None
+
+    async def set_prm(self, prm: ProtectedResourceMetadata) -> None:
+        await self._storage_prm.put(
+            key=self._get_prm_cache_key(),
+            value=prm,
+            ttl=60 * 60 * 24 * 365,
+        )
+
+
+def _origin_issuer(server_url: str) -> str:
+    # RFC 8414 §3.3: origin issuer normalization; isolates SDK private helper _origin_issuer
+    parsed = urlparse(server_url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+async def discover_metadata_from_server(
+    server_url: str,
+    httpx_client: httpx2.AsyncClient,
+) -> tuple[ProtectedResourceMetadata | None, OAuthMetadata | None]:
+    """Discover protected resource metadata and authorization server metadata using SDK helpers."""
+    www_auth_resource_metadata_url: str | None = None
+    try:
+        probe = await httpx_client.get(server_url, timeout=5.0)
+        if probe.status_code in (401, 403):
+            www_auth_resource_metadata_url = extract_resource_metadata_from_www_auth(probe)
+    except Exception:
+        pass
+
+    prm_urls = build_protected_resource_metadata_discovery_urls(
+        www_auth_resource_metadata_url, server_url
+    )
+    prm: ProtectedResourceMetadata | None = None
+    auth_server_url: str | None = None
+    for url in prm_urls:
+        req = create_oauth_metadata_request(url)
+        try:
+            resp = await httpx_client.send(req)
+        except Exception:
+            continue
+        prm = await handle_protected_resource_response(resp)
+        if prm is not None:
+            if prm.authorization_servers:
+                auth_server_url = str(prm.authorization_servers[0])
+            break
+
+    expected_issuer = auth_server_url or _origin_issuer(server_url)
+    asm_urls = build_oauth_authorization_server_metadata_discovery_urls(
+        auth_server_url, server_url
+    )
+    asm: OAuthMetadata | None = None
+    for url in asm_urls:
+        req = create_oauth_metadata_request(url)
+        try:
+            resp = await httpx_client.send(req)
+        except Exception:
+            continue
+        ok, metadata = await handle_auth_metadata_response(resp)
+        if not ok:
+            break
+        if ok and metadata is not None:
+            if auth_server_url is None and issuers_match(str(metadata.issuer), expected_issuer):
+                expected_issuer = str(metadata.issuer)
+            try:
+                validate_metadata_issuer(metadata, expected_issuer)
+            except Exception:
+                continue
+            asm = metadata
+            break
+
+    return prm, asm
+
+
+class FarmOAuth(OAuth):
+    """OAuth provider that persists metadata, refreshes via the server's real token endpoint,
+    and classifies refresh failures into transient vs needs_login."""
+
+    def __init__(
+        self,
+        mcp_url: str | None = None,
+        *args: Any,
+        connection_id: str | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self._connection_id = connection_id or ""
+        super().__init__(mcp_url, *args, **kwargs)
+        if (
+            not self._connection_id
+            and self._client_name.startswith("Harness Farm (")
+            and self._client_name.endswith(")")
+        ):
+            self._connection_id = self._client_name[14:-1]
+
+    def _bind(self, mcp_url: str) -> None:
+        super()._bind(mcp_url)
+        token_storage = self._token_storage or MemoryStore()
+        adapter = FarmTokenStorageAdapter(
+            async_key_value=token_storage,
+            server_url=mcp_url,
+        )
+        self.token_storage_adapter = adapter
+        self.context.storage = adapter
+        self.storage = adapter
+
+    async def _initialize(self) -> None:
+        await super()._initialize()
+        if self.context.oauth_metadata is None and isinstance(
+            self.token_storage_adapter, FarmTokenStorageAdapter
+        ):
+            stored = await self.token_storage_adapter.get_metadata()
+            if stored is not None:
+                self.context.oauth_metadata = stored
+        if self.context.protected_resource_metadata is None and isinstance(
+            self.token_storage_adapter, FarmTokenStorageAdapter
+        ):
+            stored_prm = await self.token_storage_adapter.get_prm()
+            if stored_prm is not None:
+                self.context.protected_resource_metadata = stored_prm
+                if stored_prm.authorization_servers:
+                    self.context.auth_server_url = str(stored_prm.authorization_servers[0])
+
+    async def discover_metadata(self) -> OAuthMetadata | None:
+        """Discover authorization server metadata out-of-band via httpx_client_factory."""
+        server_url = self.context.server_url or self.mcp_url
+        async with self.httpx_client_factory() as client:
+            prm, asm = await discover_metadata_from_server(server_url, client)
+            if prm is not None:
+                self.context.protected_resource_metadata = prm
+                if prm.authorization_servers:
+                    self.context.auth_server_url = str(prm.authorization_servers[0])
+                if isinstance(self.token_storage_adapter, FarmTokenStorageAdapter):
+                    await self.token_storage_adapter.set_prm(prm)
+            if asm is not None:
+                self.context.oauth_metadata = asm
+                if isinstance(self.token_storage_adapter, FarmTokenStorageAdapter):
+                    await self.token_storage_adapter.set_metadata(asm)
+            return asm
+
+    async def _handle_token_response(self, response: httpx2.Response) -> None:
+        await super()._handle_token_response(response)
+        if isinstance(self.token_storage_adapter, FarmTokenStorageAdapter):
+            if self.context.oauth_metadata is not None:
+                await self.token_storage_adapter.set_metadata(self.context.oauth_metadata)
+            if self.context.protected_resource_metadata is not None:
+                await self.token_storage_adapter.set_prm(self.context.protected_resource_metadata)
+
+    async def _handle_refresh_response(self, response: httpx2.Response) -> bool:
+        token_url = self._get_token_endpoint()
+        token_host = urlparse(token_url).netloc
+
+        if response.status_code == 200:
+            ok = await super()._handle_refresh_response(response)
+            if ok:
+                logger.info(
+                    "mcp.oauth_refreshed",
+                    connection=self._connection_id,
+                    status=200,
+                    token_host=token_host,
+                )
+            return ok
+
+        content = await response.aread()
+        body_text = content.decode("utf-8", errors="replace")
+
+        is_invalid_grant = False
+        if response.status_code in (400, 401):
+            try:
+                data = json.loads(body_text)
+                if isinstance(data, dict) and data.get("error") == "invalid_grant":
+                    is_invalid_grant = True
+            except Exception:
+                pass
+            if not is_invalid_grant and "invalid_grant" in body_text:
+                is_invalid_grant = True
+
+        if is_invalid_grant:
+            logger.warning(
+                "mcp.oauth_refresh_failed",
+                connection=self._connection_id,
+                status=response.status_code,
+                token_host=token_host,
+                token_url=redact(token_url),
+            )
+            self.context.clear_tokens()
+            await self.token_storage_adapter.clear()
+            raise LoginRequired(
+                f"OAuth refresh failed ({response.status_code}): invalid_grant; "
+                "log in again with `farm mcp login`"
+            )
+
+        logger.warning(
+            "mcp.oauth_refresh_failed",
+            connection=self._connection_id,
+            status=response.status_code,
+            token_host=token_host,
+            token_url=redact(token_url),
+        )
+        raise McpFailure(
+            ErrorKind.SERVER,
+            f"token refresh failed (HTTP {response.status_code}) at {redact(token_url)}",
+        )
+
+    async def _auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
+        async with self.context.lock:
+            if not self._initialized:
+                await self._initialize()
+
+            self.context.protocol_version = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
+
+            if not self.context.can_refresh_token():
+                super_gen = super()._auth_flow(request)
+                try:
+                    outgoing = await super_gen.__anext__()
+                    while True:
+                        resp = yield outgoing
+                        outgoing = await super_gen.asend(resp)
+                except StopAsyncIteration:
+                    return
+                return
+
+            if not self.context.is_token_valid():
+                if self.context.oauth_metadata is None:
+                    try:
+                        asm = await self.discover_metadata()
+                    except (httpx2.TransportError, httpx2.TimeoutException, OSError) as exc:
+                        server_url = self.context.server_url or self.mcp_url
+                        token_host = urlparse(server_url).netloc
+                        logger.warning(
+                            "mcp.oauth_refresh_failed",
+                            connection=self._connection_id,
+                            status=None,
+                            token_host=token_host,
+                            token_url=redact(server_url),
+                        )
+                        raise McpFailure(
+                            ErrorKind.SERVER,
+                            f"OAuth metadata discovery failed (network error: {exc}) at {redact(server_url)}",
+                        ) from exc
+
+                    if asm is None:
+                        server_url = self.context.server_url or self.mcp_url
+                        token_host = urlparse(server_url).netloc
+                        logger.warning(
+                            "mcp.oauth_refresh_failed",
+                            connection=self._connection_id,
+                            status=404,
+                            token_host=token_host,
+                            token_url=redact(server_url),
+                        )
+                        raise McpFailure(
+                            ErrorKind.SERVER,
+                            f"OAuth metadata discovery failed at {redact(server_url)}",
+                        )
+
+                refresh_request = await self._refresh_token()
+                token_url = str(refresh_request.url)
+                token_host = urlparse(token_url).netloc
+                try:
+                    async with self.httpx_client_factory() as refresh_client:
+                        refresh_response = await refresh_client.send(refresh_request)
+                except (httpx2.TransportError, httpx2.TimeoutException, OSError) as exc:
+                    logger.warning(
+                        "mcp.oauth_refresh_failed",
+                        connection=self._connection_id,
+                        status=None,
+                        token_host=token_host,
+                        token_url=redact(token_url),
+                    )
+                    raise McpFailure(
+                        ErrorKind.SERVER,
+                        f"token refresh failed (network error: {exc}) at {redact(token_url)}",
+                    ) from exc
+
+                if not await self._handle_refresh_response(refresh_response):
+                    self._initialized = False
+
+            if self.context.is_token_valid():
+                self._add_auth_header(request)
+
+            response = yield request
+
+            step_up = (
+                response.status_code == 403
+                and extract_field_from_www_auth(response, "error") == "insufficient_scope"
+            )
+
+            if response.status_code == 401 or step_up:
+                if isinstance(self, HeadlessOAuth):
+                    raise LoginRequired(
+                        "this account has no usable OAuth token; log it in with `farm mcp login`"
+                    )
+                super_gen = super()._auth_flow(request)
+                try:
+                    outgoing = await super_gen.__anext__()
+                    while True:
+                        resp = yield outgoing
+                        outgoing = await super_gen.asend(resp)
+                except StopAsyncIteration:
+                    return
+
+
+class HeadlessOAuth(FarmOAuth):
     """OAuth that never opens a browser: serving a call must not hang on an interactive login."""
 
     async def redirect_handler(self, authorization_url: str) -> None:
         raise LoginRequired("this account has no usable OAuth token; log it in with `farm mcp login`")
+
 
 
 @dataclass(frozen=True)
@@ -235,9 +600,12 @@ def build_transport(
     if spec.auth == "env":
         auth = resolve_auth(connection.auth_ref)
     elif spec.auth == "oauth":
-        oauth_class = OAuth if interactive else HeadlessOAuth
+        oauth_class = FarmOAuth if interactive else HeadlessOAuth
         auth = oauth_class(
-            mcp_url=url, token_storage=token_storage(), client_name=f"Harness Farm ({connection.id})"
+            mcp_url=url,
+            token_storage=token_storage(),
+            client_name=f"Harness Farm ({connection.id})",
+            connection_id=connection.id,
         )
     return RemoteMCPServer(url=url, transport=spec.transport, headers=headers, auth=auth).to_transport()
 
