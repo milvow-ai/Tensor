@@ -1,23 +1,34 @@
-"""Live capability and worker guide for Harness Farm (GUIDE1).
+"""Live capability and worker guide for Harness Farm (GUIDE1 / GUIDE1b).
 
 Generates a compact Markdown guide (<= ~1,500 tokens) live from the database:
-- MCP servers: names, usable/total accounts, tool counts, key tools with read-only hints, pinning
+- What Harness Farm is: one MCP server connector, pass-through MCP, AI CLI workers, built-in tools
+- MCP servers: names, usable/total accounts, tool counts, key tools ordered read-only first with hints
 - AI workers: pools, usable accounts, models, effort support, limits/reset, max_parallel, defaults
 - Rules: budgets, hard stop, free-first, run tracking (run_id, get_run), cost per call
 - Recipes: parallel research, second opinion, multi-turn follow-up, credit-safe calls, capacity check
+- Need something else: filing integration requests for missing MCPs, CLIs, APIs, or accounts
 """
 
 from __future__ import annotations
 
+import fnmatch
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from farm.ai.accounts import AccountInfo, load_accounts
 from farm.db.pool import DbPool
 from farm.mcp import store
 from farm.resources import health
 
-Section = Literal["all", "mcp", "ai", "rules", "recipes"]
+Section = Literal["all", "mcp", "ai", "rules", "recipes", "need"]
+
+HEADER_TEXT = """# What Harness Farm is
+One MCP server (connector) your IDE attaches to. Behind it:
+- Pass-through MCP servers (remote HTTP and local stdio)
+- AI CLI workers (Claude Code, Codex, Gemini/Antigravity, Hermes)
+- Built-in Farm tools
+Plus the dashboard (web app) and the `farm` CLI (owner admin).
+Not a plugin; the skill file teaches sessions to use it."""
 
 DEFAULT_RECOMMENDATIONS = """- Defaults:
   - Coding: Claude, Codex
@@ -75,6 +86,14 @@ res = await call_tool("clay__get-credits-available", arguments={})
 capacity = await get_capacity()
 ```"""
 
+NEED_SOMETHING_ELSE_TEXT = """## Need something else?
+Call `request_integration(name, kind, purpose, task_context?, urgency?, links?)` with what you need and why.
+Examples:
+- An MCP server by name (e.g. GitHub, Slack, Notion)
+- A CLI tool or agent
+- An API for data, enrichment, or verification
+- Another account for an existing provider pool"""
+
 
 def _effort_support_text(ai: str, meta: dict[str, object] | None) -> str:
     meta_dict = meta or {}
@@ -88,6 +107,79 @@ def _effort_support_text(ai: str, meta: dict[str, object] | None) -> str:
     if ai == "codex":
         return "Yes (low, medium, high)"
     return "No"
+
+
+def _is_tool_read_only(tool: store.StoredTool) -> bool:
+    annotations = tool.definition.annotations
+    if not annotations:
+        return False
+    if isinstance(annotations, dict):
+        return bool(annotations.get("readOnlyHint") or annotations.get("read_only_hint"))
+    return bool(getattr(annotations, "read_only_hint", False))
+
+
+def _is_tool_credit_spending(provider_id: str, tool_name: str, annotations: Any) -> bool:
+    if annotations:
+        if isinstance(annotations, dict):
+            if (
+                annotations.get("may_spend_credits")
+                or annotations.get("spendsCredits")
+                or annotations.get("maySpendCredits")
+            ):
+                return True
+        elif getattr(annotations, "may_spend_credits", False):
+            return True
+
+    t_lower = tool_name.lower()
+    p_lower = provider_id.lower()
+    # Clay enrichment tools: add-*-data-points, run_subroutine*
+    if "clay" in p_lower or p_lower == "clay":
+        if (
+            fnmatch.fnmatch(t_lower, "add-*-data-points")
+            or fnmatch.fnmatch(t_lower, "add_*_data_points")
+            or t_lower.startswith("run_subroutine")
+            or t_lower.startswith("run-subroutine")
+        ):
+            return True
+
+    if (
+        fnmatch.fnmatch(t_lower, "add-*-data-points")
+        or fnmatch.fnmatch(t_lower, "add_*_data_points")
+        or t_lower.startswith("run_subroutine")
+        or t_lower.startswith("run-subroutine")
+    ):
+        return True
+
+    return False
+
+
+def _tool_hint(provider_id: str, tool: store.StoredTool) -> str:
+    if _is_tool_read_only(tool):
+        return "read-only"
+    if _is_tool_credit_spending(provider_id, tool.name, tool.definition.annotations):
+        return "may spend credits"
+    return "changes data"
+
+
+def _tool_sort_key(tool: store.StoredTool) -> tuple[int, int, str]:
+    # 0 = read-only, 1 = changes data
+    is_ro = _is_tool_read_only(tool)
+    ro_rank = 0 if is_ro else 1
+
+    name = tool.name.lower()
+    # Useful inspection verbs first (get/list/search/query)
+    verb_rank = 1
+    for prefix in ("get", "list", "search", "query", "find", "read", "fetch", "check", "inspect"):
+        if name.startswith(prefix) or f"_{prefix}" in name or f"-{prefix}" in name:
+            verb_rank = 0
+            break
+    else:
+        for prefix in ("create", "update", "delete", "remove", "destroy", "drop"):
+            if name.startswith(prefix) or f"_{prefix}" in name or f"-{prefix}" in name:
+                verb_rank = 2
+                break
+
+    return (ro_rank, verb_rank, tool.name)
 
 
 async def format_mcp_section(pool: DbPool, now: datetime) -> str:
@@ -119,19 +211,13 @@ async def format_mcp_section(pool: DbPool, now: datetime) -> str:
 
         if stored_tools:
             lines.append("- Key tools:")
+            # Sort read-only/most useful first (get/list/search/query before create/update/delete)
+            sorted_tools = sorted(stored_tools, key=_tool_sort_key)
             # Show up to 8 tools
-            for t in stored_tools[:8]:
+            for t in sorted_tools[:8]:
                 raw_desc = t.definition.description or "No description"
                 one_line = raw_desc.splitlines()[0][:90]
-                annotations = t.definition.annotations
-                is_ro = bool(
-                    annotations
-                    and (
-                        getattr(annotations, "read_only_hint", False)
-                        or (isinstance(annotations, dict) and annotations.get("readOnlyHint"))
-                    )
-                )
-                hint = "read-only" if is_ro else "may spend credits"
+                hint = _tool_hint(p.id, t)
                 exposed_name = f"{p.namespace}__{t.name}"
                 lines.append(f"  - `{exposed_name}`: {one_line} ({hint})")
         lines.append("")
@@ -196,6 +282,9 @@ async def generate_guide(pool: DbPool, now: datetime, section: Section = "all") 
     """Generate the Harness Farm live capability guide formatted in Markdown."""
     parts: list[str] = []
 
+    if section == "all":
+        parts.append(HEADER_TEXT)
+
     if section in ("all", "mcp"):
         parts.append(await format_mcp_section(pool, now))
 
@@ -208,10 +297,15 @@ async def generate_guide(pool: DbPool, now: datetime, section: Section = "all") 
     if section in ("all", "recipes"):
         parts.append(RECIPES_TEXT)
 
+    if section in ("all", "need"):
+        parts.append(NEED_SOMETHING_ELSE_TEXT)
+
     return "\n\n".join(parts)
 
 
 __all__ = [
+    "HEADER_TEXT",
+    "NEED_SOMETHING_ELSE_TEXT",
     "RECIPES_TEXT",
     "RULES_TEXT",
     "Section",

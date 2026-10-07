@@ -52,6 +52,9 @@ app.add_typer(alert_app, name="alert")
 provider_app = typer.Typer(help="Manage providers: remove integrations.")
 app.add_typer(provider_app, name="provider")
 
+requests_app = typer.Typer(help="Integration requests: list, show, and resolve.")
+app.add_typer(requests_app, name="requests")
+
 
 ALEMBIC_INI = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
 DEFAULT_REGISTRY = Path(__file__).resolve().parent.parent.parent / "config" / "registry.yaml"
@@ -1218,6 +1221,10 @@ def connect_command(
         bool,
         typer.Option("--write", help="Write configuration to the target IDE config file."),
     ] = False,
+    skill: Annotated[
+        bool,
+        typer.Option("--skill", help="Print or write the skill file / snippet for the target IDE."),
+    ] = False,
     host: Annotated[str | None, typer.Option(help="Farm HTTP host.")] = None,
     port: Annotated[int | None, typer.Option(help="Farm HTTP port.")] = None,
     env_var: Annotated[str, typer.Option(help="Environment variable holding the token.")] = "FARM_TOKEN",
@@ -1235,6 +1242,74 @@ def connect_command(
 
     home = Path.home()
     env = os.environ
+
+    if skill:
+        root = Path(__file__).resolve().parent.parent.parent
+        skill_file = root / "docs" / "skills" / "harness-farm" / "SKILL.md"
+        skill_text = (
+            skill_file.read_text(encoding="utf-8")
+            if skill_file.is_file()
+            else "# Harness Farm Skill\n"
+        )
+
+        if target_clean in ("claude-code", "claude"):
+            skill_dest = home / ".claude" / "skills" / "harness-farm" / "SKILL.md"
+            typer.echo("=== Claude Code Skill ===")
+            typer.echo("Skill path: ~/.claude/skills/harness-farm/SKILL.md")
+            typer.echo(f"Target:     {skill_dest}")
+            typer.echo()
+            typer.echo("To install manually, copy docs/skills/harness-farm/SKILL.md to the path above.")
+            if not write:
+                return
+
+            confirmed = typer.confirm(f"\nWrite skill to {skill_dest}?", default=False)
+            if not confirmed:
+                typer.echo("Cancelled.")
+                return
+
+            skill_dest.parent.mkdir(parents=True, exist_ok=True)
+            skill_dest.write_text(skill_text, encoding="utf-8")
+            typer.echo(f"Wrote skill to {skill_dest}")
+            return
+
+        elif target_clean == "codex":
+            codex_dir = Path(env.get("CODEX_HOME") or home / ".codex")
+            agents_dest = codex_dir / "AGENTS.md"
+            codex_snippet = (
+                "<!-- Harness Farm Skill -->\n"
+                "## Harness Farm Capabilities\n"
+                "- Before starting tasks, call `farm_guide()` to inspect available tools and quotas.\n"
+                "- Credit etiquette: use read-only inspection tools first; ask before spending.\n"
+                "- Missing integration: call `request_integration(name, kind, purpose)` to file request.\n"
+            )
+            typer.echo("=== Codex Agents Skill Snippet ===")
+            typer.echo(f"Target: {agents_dest}")
+            typer.echo()
+            typer.echo("Snippet for AGENTS.md:")
+            typer.echo(codex_snippet)
+            if not write:
+                return
+
+            confirmed = typer.confirm(f"\nAppend snippet to {agents_dest}?", default=False)
+            if not confirmed:
+                typer.echo("Cancelled.")
+                return
+
+            agents_dest.parent.mkdir(parents=True, exist_ok=True)
+            existing_agents_text = (
+                agents_dest.read_text(encoding="utf-8") if agents_dest.is_file() else ""
+            )
+            sep = "\n\n" if existing_agents_text.strip() else ""
+            new_text = existing_agents_text.rstrip() + sep + codex_snippet
+            agents_dest.write_text(new_text, encoding="utf-8")
+            typer.echo(f"Wrote snippet to {agents_dest}")
+            return
+
+        else:
+            typer.echo(f"=== {target} Skill ===")
+            typer.echo("Generic skill file located at: docs/skills/harness-farm/SKILL.md")
+            typer.echo("Copy its contents into your agent instructions or custom skill directory.")
+            return
 
     if target_clean in ("claude-code", "claude"):
         config_path = home / ".claude.json"
@@ -1383,5 +1458,164 @@ def connect_command(
                 new_text = existing_text.rstrip() + ("\n\n" if existing_text.strip() else "") + toml_snippet
                 config_path.write_text(new_text, encoding="utf-8")
                 typer.echo(f"Wrote configuration to {config_path}")
+
+
+@app.command(name="guide")
+def guide_command(
+    section: Annotated[
+        str,
+        typer.Option("--section", "-s", help="Section: all, mcp, ai, rules, recipes, need."),
+    ] = "all",
+    local: LocalOption = False,
+) -> None:
+    """Print the live capability guide for humans."""
+    from farm.gateway.guide import generate_guide
+
+    async def main() -> str:
+        ctx = await _context(local)
+        try:
+            return await generate_guide(ctx.pool, ctx.clock(), section=section)  # type: ignore[arg-type]
+        finally:
+            await ctx.aclose()
+
+    text = _run_farm(main())
+    typer.echo(text)
+
+
+def _format_requests_table(reqs: list[Any]) -> str:
+    rows = [["ID", "NAME", "KIND", "STATUS", "URGENCY", "REQUESTED_BY", "PURPOSE"]]
+    for r in reqs:
+        rows.append([
+            str(r.id)[:8],
+            r.name,
+            r.kind,
+            r.status,
+            r.urgency,
+            r.requested_by,
+            (r.purpose[:40] + "...") if len(r.purpose) > 40 else r.purpose,
+        ])
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    return "\n".join("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip() for row in rows)
+
+
+@requests_app.command(name="list")
+def requests_list(
+    status: Annotated[
+        str | None,
+        typer.Option("--status", "-s", help="Filter by status: open, in_progress, done, declined."),
+    ] = None,
+    limit: Annotated[int, typer.Option(min=1, max=500, help="Max requests to list.")] = 50,
+    local: LocalOption = False,
+) -> None:
+    """List integration requests."""
+    from farm.control.integration_requests import list_integration_requests
+
+    async def main() -> list[Any]:
+        ctx = await _context(local)
+        try:
+            return await list_integration_requests(ctx.pool, status=status, limit=limit)
+        finally:
+            await ctx.aclose()
+
+    reqs = _run_farm(main())
+    if not reqs:
+        typer.echo("No integration requests found.")
+        return
+    typer.echo(_format_requests_table(reqs))
+
+
+@requests_app.command(name="show")
+def requests_show(
+    request_id: Annotated[str, typer.Argument(help="Integration request ID (UUID or prefix).")],
+    local: LocalOption = False,
+) -> None:
+    """Show details of an integration request."""
+    from uuid import UUID
+
+    from farm.control.integration_requests import get_integration_request, list_integration_requests
+
+    async def main() -> Any:
+        ctx = await _context(local)
+        try:
+            try:
+                uid = UUID(request_id)
+                return await get_integration_request(ctx.pool, uid)
+            except ValueError:
+                all_reqs = await list_integration_requests(ctx.pool, limit=500)
+                matches = [r for r in all_reqs if str(r.id).startswith(request_id)]
+                if len(matches) == 1:
+                    return matches[0]
+                if len(matches) > 1:
+                    raise _fail(
+                        f"Ambiguous request ID '{request_id}' matches {len(matches)} requests",
+                        code=2,
+                    ) from None
+                return None
+        finally:
+            await ctx.aclose()
+
+    req = _run_farm(main())
+    if req is None:
+        raise _fail(f"Integration request '{request_id}' not found", code=1)
+
+    typer.echo(f"ID:           {req.id}")
+    typer.echo(f"Name:         {req.name}")
+    typer.echo(f"Kind:         {req.kind}")
+    typer.echo(f"Status:       {req.status}")
+    typer.echo(f"Urgency:      {req.urgency}")
+    typer.echo(f"Requested By: {req.requested_by}")
+    typer.echo(f"Created At:   {_stamp(req.created_at)}")
+    typer.echo(f"Purpose:      {req.purpose}")
+    if req.context:
+        typer.echo(f"Context:      {req.context}")
+    if req.links:
+        typer.echo(f"Links:        {', '.join(req.links)}")
+    if req.owner_note:
+        typer.echo(f"Owner Note:   {req.owner_note}")
+    if req.resolved_at:
+        typer.echo(f"Resolved At:  {_stamp(req.resolved_at)}")
+
+
+@requests_app.command(name="resolve")
+def requests_resolve(
+    request_id: Annotated[str, typer.Argument(help="Integration request ID (UUID or prefix).")],
+    status: Annotated[
+        str,
+        typer.Option("--status", "-s", help="Resolution status: in_progress, done, declined."),
+    ] = "done",
+    note: Annotated[str | None, typer.Option("--note", "-n", help="Owner note.")] = None,
+    local: LocalOption = False,
+) -> None:
+    """Resolve an integration request with a status and note."""
+    from uuid import UUID
+
+    from farm.control.integration_requests import list_integration_requests, resolve_integration_request
+
+    async def main() -> Any:
+        ctx = await _context(local)
+        try:
+            target_id = request_id
+            try:
+                UUID(request_id)
+            except ValueError:
+                all_reqs = await list_integration_requests(ctx.pool, limit=500)
+                matches = [r for r in all_reqs if str(r.id).startswith(request_id)]
+                if len(matches) == 1:
+                    target_id = str(matches[0].id)
+                elif len(matches) > 1:
+                    raise _fail(
+                        f"Ambiguous request ID '{request_id}' matches {len(matches)} requests",
+                        code=2,
+                    ) from None
+                else:
+                    raise _fail(f"Integration request '{request_id}' not found", code=1) from None
+
+            return await resolve_integration_request(ctx.pool, target_id, status=status, owner_note=note)
+        finally:
+            await ctx.aclose()
+
+    req = _run_farm(main())
+    typer.echo(f"Integration request {req.id} resolved: {req.status}")
+
 
 

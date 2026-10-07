@@ -103,7 +103,9 @@ def test_farm_serve_over_stdio_lists_the_tools_and_answers_verify_email(
         "get_run",
         "get_usage",
         "list_ais",
+        "list_integration_requests",
         "list_resources",
+        "request_integration",
         "verify_email",
     ]  # the AI tools included: the server no longer hides them from tests by test name
     envelope = seen["envelope"]
