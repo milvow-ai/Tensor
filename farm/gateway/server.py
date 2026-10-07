@@ -18,7 +18,7 @@ shows up after a restart (``farm serve`` is cheap to restart; the tool list is n
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import structlog
@@ -29,6 +29,12 @@ from pydantic import BaseModel, Field, PrivateAttr, create_model
 
 from farm.capabilities.schemas import CAPABILITY_MODELS
 from farm.context import FarmContext
+from farm.control.integration_requests import (
+    list_integration_requests as ir_list,
+)
+from farm.control.integration_requests import (
+    request_integration as ir_request,
+)
 from farm.gateway.ai_tools import register_ai_tools
 from farm.gateway.guide import Section, generate_guide
 from farm.gateway.mcp_tools import register_mcp_tools
@@ -47,7 +53,15 @@ from farm.resources.trajectory import fetch_run
 log = structlog.get_logger(__name__)
 
 SERVER_NAME = "harness-farm"
-INFRA_TOOLS = ("farm_guide", "get_capacity", "list_resources", "get_run", "get_usage")
+INFRA_TOOLS = (
+    "farm_guide",
+    "get_capacity",
+    "list_resources",
+    "get_run",
+    "get_usage",
+    "request_integration",
+    "list_integration_requests",
+)
 ROUTING_ARGUMENT = "routing_strategy"
 
 """Optional tool argument: the strategy for this call. Own name, because capability inputs may have a
@@ -153,6 +167,70 @@ def _register_infra_tools(server: FastMCP, ctx: FarmContext) -> None:
     async def get_usage(days: Annotated[int, Field(ge=1, le=366)] = 30) -> dict[str, Any]:
         """What the last N days consumed and cost, per account and unit, and how many runs ended how."""
         return await reports.usage_report(ctx.pool, ctx.clock(), days)
+
+    @server.tool(annotations={"readOnlyHint": False})
+    async def request_integration(
+        name: Annotated[
+            str,
+            Field(description="Name of the requested integration (e.g. 'github', 'hubspot')."),
+        ],
+        kind: Annotated[
+            Literal["mcp", "cli", "api", "account", "other"],
+            Field(description="Kind of integration: mcp, cli, api, account, or other."),
+        ],
+        purpose: Annotated[
+            str,
+            Field(description="Why you need this integration and what task it unlocks."),
+        ],
+        task_context: Annotated[
+            str | None,
+            Field(default=None, description="Optional context about the current task or workflow."),
+        ] = None,
+        urgency: Annotated[
+            Literal["now", "soon", "later"],
+            Field(default="soon", description="Urgency: 'now' (blocks task), 'soon', or 'later'."),
+        ] = "soon",
+        links: Annotated[
+            list[str] | None,
+            Field(default=None, description="Optional links to documentation, APIs, or repositories."),
+        ] = None,
+    ) -> dict[str, Any]:
+        """Request a missing MCP server, CLI, API, or account for Harness Farm."""
+        caller = current_caller.get()
+        try:
+            req, dedup = await ir_request(
+                ctx.pool,
+                name=name,
+                kind=kind,
+                purpose=purpose,
+                task_context=task_context,
+                urgency=urgency,
+                links=links,
+                requested_by=caller,
+                now=ctx.clock(),
+            )
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        return {
+            "request_id": str(req.id),
+            "status": req.status,
+            "deduplicated": dedup,
+            "message": "the owner will be notified; continue with what is available",
+        }
+
+    @server.tool(annotations={"readOnlyHint": True})
+    async def list_integration_requests(
+        status: Annotated[
+            Literal["open", "in_progress", "done", "declined"] | None,
+            Field(default=None, description="Filter by status (open, in_progress, done, declined)."),
+        ] = None,
+    ) -> dict[str, Any]:
+        """List integration requests and their current resolution status."""
+        try:
+            items = await ir_list(ctx.pool, status=status)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        return {"requests": [item.model_dump(mode="json") for item in items]}
 
 
 async def build_server(
