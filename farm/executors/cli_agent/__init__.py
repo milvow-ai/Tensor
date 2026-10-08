@@ -15,6 +15,7 @@ from farm.executors.cli_agent.base import (
 )
 from farm.executors.cli_agent.claude import ClaudeCliExecutor
 from farm.executors.cli_agent.codex import CodexCliExecutor
+from farm.executors.cli_agent.gemini_cli import GeminiCliExecutor
 from farm.executors.cli_agent.hermes import HermesCliExecutor
 
 
@@ -30,6 +31,7 @@ class CliAgentExecutor:
                 "codex": CodexCliExecutor(),
                 "agy": AgyCliExecutor(),
                 "gemini": AgyCliExecutor(),
+                "gemini-cli": GeminiCliExecutor(),
                 "hermes": HermesCliExecutor(),
             }
 
@@ -55,6 +57,7 @@ __all__ = [
     "ClaudeCliExecutor",
     "CliAgentExecutor",
     "CodexCliExecutor",
+    "GeminiCliExecutor",
     "HermesCliExecutor",
     "SubprocessOutput",
     "clean_cli_text",

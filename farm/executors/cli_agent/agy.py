@@ -28,9 +28,34 @@ from farm.executors.cli_agent.base import (
 class AgyCliExecutor(BaseCliAgentExecutor):
     """Executes tasks via the Google Antigravity CLI (`agy`)."""
 
+    default_bin = "agy"
+
+    def build_argv(
+        self,
+        cli_bin: str,
+        task: str,
+        model: Any,
+        session_id: Any,
+        mode: str,
+        json_schema: Any,
+    ) -> list[str]:
+        argv: list[str] = [cli_bin, "-p", task, "--output-format", "json"]
+        if model:
+            argv.extend(["--model", str(model)])
+        if session_id:
+            argv.extend(["--conversation", str(session_id)])
+        if mode == "edit":
+            argv.extend(["--mode", "accept-edits", "--dangerously-skip-permissions"])
+        else:
+            argv.extend(["--mode", "plan"])
+        if json_schema:
+            schema_str = json.dumps(json_schema) if isinstance(json_schema, dict) else str(json_schema)
+            argv.extend(["--json-schema", schema_str])
+        return argv
+
     async def execute(self, req: ExecRequest) -> ExecResult:
         meta = req.connection.meta or {}
-        cli_bin = meta.get("cli_path", "agy")
+        cli_bin = meta.get("cli_path", self.default_bin)
 
         task = req.params.get("task") or req.params.get("prompt", "")
         model = req.params.get("model") or meta.get("model") or meta.get("default_model")
@@ -62,20 +87,12 @@ class AgyCliExecutor(BaseCliAgentExecutor):
                 error=err_msg or "Confinement violation",
             )
 
-        task_str = str(task)
-        argv: list[str] = [cli_bin, "-p", task_str, "--output-format", "json"]
-
-        if model:
-            argv.extend(["--model", str(model)])
-        if session_id:
-            argv.extend(["--conversation", str(session_id)])
-        if mode == "edit":
-            argv.extend(["--mode", "accept-edits", "--dangerously-skip-permissions"])
-        else:
-            argv.extend(["--mode", "plan"])
-        if json_schema:
-            schema_str = json.dumps(json_schema) if isinstance(json_schema, dict) else str(json_schema)
-            argv.extend(["--json-schema", schema_str])
+        argv = self.build_argv(str(cli_bin), str(task), model, session_id, mode, json_schema)
+        # meta.cli_prefix runs the CLI through a launcher, e.g. WSL as a separate Linux user so each account
+        # has its own file-based login: [wsl.exe, -d, Ubuntu-24.04, -u, agy2, -e, env, -u, DBUS_SESSION_BUS_ADDRESS]
+        prefix = meta.get("cli_prefix")
+        if isinstance(prefix, list) and prefix:
+            argv = [str(p) for p in prefix] + argv
 
         cmdline_len = len(subprocess.list2cmdline(argv))
         if cmdline_len > 32000:
