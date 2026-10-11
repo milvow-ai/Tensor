@@ -17,6 +17,14 @@ from farm.executors.cli_agent.base import (
 )
 
 
+def _wsl_path(path: str) -> str:
+    """D:\\a\\b -> /mnt/d/a/b; anything else is returned unchanged."""
+    m = re.match(r"^([A-Za-z]):[\\/](.*)$", path)
+    if not m:
+        return path
+    return f"/mnt/{m.group(1).lower()}/" + m.group(2).replace("\\", "/")
+
+
 class CodexCliExecutor(BaseCliAgentExecutor):
     """Executes tasks via the OpenAI Codex CLI (`codex exec`)."""
 
@@ -90,15 +98,23 @@ class CodexCliExecutor(BaseCliAgentExecutor):
         else:
             argv.extend(["--sandbox", "read-only"])
 
+        # meta.cli_prefix runs Codex through a launcher, e.g. WSL as its own Linux user (its login lives in
+        # that user's ~/.codex); Windows paths are then passed in their /mnt/<drive>/ form.
+        prefix = meta.get("cli_prefix")
+        use_prefix = isinstance(prefix, list) and bool(prefix)
+        path_arg = _wsl_path if use_prefix else str
+
         effective_cwd = resolved_cwd or cwd
         if effective_cwd:
-            argv.extend(["-C", str(effective_cwd)])
+            argv.extend(["-C", path_arg(str(effective_cwd))])
 
         if schema_path_str:
-            argv.extend(["--output-schema", schema_path_str])
+            argv.extend(["--output-schema", path_arg(schema_path_str)])
 
         # Codex reads prompt from stdin when '-' is specified
         argv.append("-")
+        if isinstance(prefix, list) and prefix:
+            argv = [str(p) for p in prefix] + argv
 
         env: dict[str, str] = {}
         if config_dir:
