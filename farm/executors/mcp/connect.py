@@ -169,9 +169,7 @@ async def discover_metadata_from_server(
     except Exception:
         pass
 
-    prm_urls = build_protected_resource_metadata_discovery_urls(
-        www_auth_resource_metadata_url, server_url
-    )
+    prm_urls = build_protected_resource_metadata_discovery_urls(www_auth_resource_metadata_url, server_url)
     prm: ProtectedResourceMetadata | None = None
     auth_server_url: str | None = None
     for url in prm_urls:
@@ -187,9 +185,7 @@ async def discover_metadata_from_server(
             break
 
     expected_issuer = auth_server_url or _origin_issuer(server_url)
-    asm_urls = build_oauth_authorization_server_metadata_discovery_urls(
-        auth_server_url, server_url
-    )
+    asm_urls = build_oauth_authorization_server_metadata_discovery_urls(auth_server_url, server_url)
     asm: OAuthMetadata | None = None
     for url in asm_urls:
         req = create_oauth_metadata_request(url)
@@ -211,6 +207,28 @@ async def discover_metadata_from_server(
             break
 
     return prm, asm
+
+
+PrepareTokenAuth = Callable[[dict[str, str], dict[str, str] | None], tuple[dict[str, str], dict[str, str]]]
+
+
+def single_client_auth(prepare: PrepareTokenAuth) -> PrepareTokenAuth:
+    """Wrap OAuthContext.prepare_token_auth so a token request authenticates the client one way only.
+
+    With HTTP Basic client auth the SDK still puts client_id in the form body. RFC 6749 (4.1.3, 6) needs it
+    there only when the client does not authenticate, and strict servers (Sentry's) reject the request with
+    "Client must not use multiple authentication methods". So with a Basic header, client_id leaves the body.
+    """
+
+    def prepare_token_auth(
+        data: dict[str, str], headers: dict[str, str] | None = None
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        data, headers = prepare(data, headers)
+        if headers.get("Authorization", "").startswith("Basic "):
+            data = {k: v for k, v in data.items() if k != "client_id"}
+        return data, headers
+
+    return prepare_token_auth
 
 
 class FarmOAuth(OAuth):
@@ -243,6 +261,7 @@ class FarmOAuth(OAuth):
         self.token_storage_adapter = adapter
         self.context.storage = adapter
         self.storage = adapter
+        self.context.prepare_token_auth = single_client_auth(self.context.prepare_token_auth)  # type: ignore[method-assign, assignment]
 
     async def _initialize(self) -> None:
         await super()._initialize()
@@ -450,7 +469,6 @@ class HeadlessOAuth(FarmOAuth):
 
     async def redirect_handler(self, authorization_url: str) -> None:
         raise LoginRequired("this account has no usable OAuth token; log it in with `farm mcp login`")
-
 
 
 @dataclass(frozen=True)
