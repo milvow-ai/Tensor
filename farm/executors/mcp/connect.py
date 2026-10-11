@@ -346,19 +346,23 @@ class FarmOAuth(OAuth):
         async with self.context.lock:
             if not self._initialized:
                 await self._initialize()
+            delegate = not self.context.can_refresh_token()
 
-            self.context.protocol_version = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
-
-            if not self.context.can_refresh_token():
-                super_gen = super()._auth_flow(request)
-                try:
-                    outgoing = await super_gen.__anext__()
-                    while True:
-                        resp = yield outgoing
-                        outgoing = await super_gen.asend(resp)
-                except StopAsyncIteration:
-                    return
+        if delegate:
+            # No refresh token yet (first login): the SDK flow takes self.context.lock itself and anyio locks
+            # are not re-entrant, so it runs outside our hold of the lock.
+            super_gen = super()._auth_flow(request)
+            try:
+                outgoing = await super_gen.__anext__()
+                while True:
+                    resp = yield outgoing
+                    outgoing = await super_gen.asend(resp)
+            except StopAsyncIteration:
                 return
+            return
+
+        async with self.context.lock:
+            self.context.protocol_version = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
 
             if not self.context.is_token_valid():
                 if self.context.oauth_metadata is None:
