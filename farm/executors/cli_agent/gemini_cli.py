@@ -8,12 +8,14 @@ Output parsing and error mapping are shared with the agy driver; only the comman
 from typing import Any
 
 from farm.executors.cli_agent.agy import AgyCliExecutor
+from farm.executors.cli_agent.classify import classify_gemini
 
 
 class GeminiCliExecutor(AgyCliExecutor):
     """Executes tasks via the official Gemini CLI in headless mode."""
 
     default_bin = "gemini"
+    classify = staticmethod(classify_gemini)
 
     def build_argv(
         self,

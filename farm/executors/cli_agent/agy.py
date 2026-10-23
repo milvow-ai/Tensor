@@ -10,8 +10,8 @@ as before. Not verified live: whether a login made under a redirected home stays
 """
 
 import json
-import re
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,15 +20,16 @@ from farm.executors.cli_agent.base import (
     BaseCliAgentExecutor,
     clean_cli_text,
     parse_json_or_none,
-    parse_reset_at,
     run_cli_process,
 )
+from farm.executors.cli_agent.classify import Classification, classify_agy
 
 
 class AgyCliExecutor(BaseCliAgentExecutor):
     """Executes tasks via the Google Antigravity CLI (`agy`)."""
 
     default_bin = "agy"
+    classify: Callable[[str, str, int], Classification] = staticmethod(classify_agy)
 
     def build_argv(
         self,
@@ -89,7 +90,8 @@ class AgyCliExecutor(BaseCliAgentExecutor):
 
         argv = self.build_argv(str(cli_bin), str(task), model, session_id, mode, json_schema)
         # meta.cli_prefix runs the CLI through a launcher, e.g. WSL as a separate Linux user so each account
-        # has its own file-based login: [wsl.exe, -d, Ubuntu-24.04, -u, agy2, -e, env, -u, DBUS_SESSION_BUS_ADDRESS]
+        # has its own file-based login:
+        # [wsl.exe, -d, Ubuntu-24.04, -u, agy2, -e, env, -u, DBUS_SESSION_BUS_ADDRESS]
         prefix = meta.get("cli_prefix")
         if isinstance(prefix, list) and prefix:
             argv = [str(p) for p in prefix] + argv
@@ -145,82 +147,12 @@ class AgyCliExecutor(BaseCliAgentExecutor):
             )
 
         data = parse_json_or_none(out.stdout)
-        combined_text = f"{out.stdout} {out.stderr}".strip()
-
-        # Check for auth errors
-        auth_patterns = [
-            r"not logged in",
-            r"please log in",
-            r"authentication required",
-            r"unauthorized",
-            r"invalid api key",
-            r"token expired",
-            r"\b401\b",
-            r"\b403\b",
-        ]
-        if any(re.search(pat, combined_text, re.IGNORECASE) for pat in auth_patterns):
-            return self.build_exec_result(
-                ok=False,
-                ai="gemini",
-                model=str(model) if model else None,
-                connection=req.connection,
-                raw_data=data if isinstance(data, dict) else None,
-                duration_s=out.duration_s,
-                error_kind=ErrorKind.NEEDS_LOGIN,
-                error=clean_cli_text(
-                    out.stderr or out.stdout or "Antigravity authentication required; please log in"
-                ),
-            )
-
-        # Check for usage limits / quota exhaustion
-        limit_patterns = [
-            r"usage limit",
-            r"rate limit",
-            r"quota exceeded",
-            r"resource_exhausted",
-            r"exceeded your current quota",
-            r"overloaded",
-            r"resets?\s+at",
-            r"resets?\s+in",
-            r"\b429\b",
-        ]
-        if any(re.search(pat, combined_text, re.IGNORECASE) for pat in limit_patterns):
-            reset_at = parse_reset_at(combined_text, data if isinstance(data, dict) else None)
-            return self.build_exec_result(
-                ok=False,
-                ai="gemini",
-                model=str(model) if model else None,
-                connection=req.connection,
-                raw_data=data if isinstance(data, dict) else None,
-                duration_s=out.duration_s,
-                error_kind=ErrorKind.LIMIT_REACHED,
-                error=clean_cli_text(out.stderr or out.stdout or "Antigravity quota / rate limit reached"),
-                reset_at=reset_at,
-            )
-
-        status = ""
-        response_text = ""
+        verdict = self.classify(out.stdout, out.stderr, out.exit_code)
         conv_id = session_id
-        is_error = False
-        error_msg: str | None = None
-
         if isinstance(data, dict):
-            status = str(data.get("status", ""))
-            response_text = str(data.get("response", data.get("result", "")))
             conv_id = data.get("conversation_id") or data.get("session_id") or conv_id
-            if status and status != "SUCCESS":
-                is_error = True
-                error_msg = str(data.get("error") or data.get("message") or f"agy status: {status}")
-        else:
-            if out.exit_code != 0:
-                is_error = True
-                error_msg = clean_cli_text(
-                    out.stderr or out.stdout or f"agy exited with code {out.exit_code}"
-                )
-            else:
-                response_text = clean_cli_text(out.stdout)
 
-        if is_error or (out.exit_code != 0 and not response_text):
+        if not verdict.ok:
             return self.build_exec_result(
                 ok=False,
                 ai="gemini",
@@ -228,10 +160,16 @@ class AgyCliExecutor(BaseCliAgentExecutor):
                 connection=req.connection,
                 raw_data=data if isinstance(data, dict) else None,
                 duration_s=out.duration_s,
-                error_kind=ErrorKind.SERVER if out.exit_code != 0 else ErrorKind.BAD_REQUEST,
-                error=error_msg or "Unknown agy CLI error",
+                error_kind=verdict.kind,
+                error=verdict.message or "Unknown agy CLI error",
+                reset_at=verdict.reset_at,
                 session_id=str(conv_id) if conv_id else None,
             )
+
+        if isinstance(data, dict):
+            response_text = str(data.get("response", data.get("result", "")))
+        else:
+            response_text = clean_cli_text(out.stdout)
 
         parsed_json: Any = None
         if json_schema or (response_text.startswith("{") or response_text.startswith("[")):

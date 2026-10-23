@@ -1,7 +1,6 @@
 """Claude CLI agent executor."""
 
 import json
-import re
 from typing import Any
 
 from farm.executors.base import ErrorKind, ExecRequest, ExecResult
@@ -9,9 +8,9 @@ from farm.executors.cli_agent.base import (
     BaseCliAgentExecutor,
     clean_cli_text,
     parse_json_or_none,
-    parse_reset_at,
     run_cli_process,
 )
+from farm.executors.cli_agent.classify import classify_claude
 
 
 class ClaudeCliExecutor(BaseCliAgentExecutor):
@@ -99,24 +98,11 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
             )
 
         data = parse_json_or_none(out.stdout)
-        combined_text = f"{out.stdout} {out.stderr}".strip()
+        verdict = classify_claude(out.stdout, out.stderr, out.exit_code)
+        sess_id = data.get("session_id") if isinstance(data, dict) else None
+        sess_id = sess_id or session_id
 
-        # Check for auth errors first
-        auth_patterns = [
-            r"not logged in",
-            r"please log in",
-            r"claude login",
-            r"/login",
-            r"authentication required",
-            r"unauthorized",
-            r"invalid api key",
-            r"token expired",
-            r"setup-token",
-            r"\b401\b",
-            r"\b403\b",
-        ]
-        is_auth = any(re.search(pat, combined_text, re.IGNORECASE) for pat in auth_patterns)
-        if is_auth:
+        if not verdict.ok:
             return self.build_exec_result(
                 ok=False,
                 ai="claude",
@@ -124,71 +110,16 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
                 connection=req.connection,
                 raw_data=data if isinstance(data, dict) else None,
                 duration_s=out.duration_s,
-                error_kind=ErrorKind.NEEDS_LOGIN,
-                error=clean_cli_text(out.stderr or out.stdout or "Authentication required; please log in"),
-            )
-
-        # Check for usage limits
-        limit_patterns = [
-            r"usage limit",
-            r"rate limit",
-            r"exceeded your current quota",
-            r"quota exceeded",
-            r"overloaded",
-            r"resets?\s+at",
-            r"resets?\s+in",
-            r"capacity",
-            r"\b429\b",
-        ]
-        is_limit = any(re.search(pat, combined_text, re.IGNORECASE) for pat in limit_patterns)
-        if is_limit:
-            reset_at = parse_reset_at(combined_text, data if isinstance(data, dict) else None)
-            return self.build_exec_result(
-                ok=False,
-                ai="claude",
-                model=str(model) if model else None,
-                connection=req.connection,
-                raw_data=data if isinstance(data, dict) else None,
-                duration_s=out.duration_s,
-                error_kind=ErrorKind.LIMIT_REACHED,
-                error=clean_cli_text(out.stderr or out.stdout or "Claude usage limit reached"),
-                reset_at=reset_at,
-            )
-
-        # If process exited with non-zero or JSON says is_error
-        is_error = False
-        error_msg: str | None = None
-        result_text = ""
-        sess_id = session_id
-
-        if isinstance(data, dict):
-            is_error = bool(data.get("is_error", False))
-            if is_error:
-                error_msg = str(data.get("result") or data.get("error") or "Claude execution error")
-            else:
-                result_text = str(data.get("result", ""))
-            sess_id = data.get("session_id") or sess_id
-        else:
-            if out.exit_code != 0:
-                is_error = True
-                error_msg = clean_cli_text(
-                    out.stderr or out.stdout or f"Process exited with code {out.exit_code}"
-                )
-            else:
-                result_text = clean_cli_text(out.stdout)
-
-        if is_error or out.exit_code != 0:
-            return self.build_exec_result(
-                ok=False,
-                ai="claude",
-                model=str(model) if model else None,
-                connection=req.connection,
-                raw_data=data if isinstance(data, dict) else None,
-                duration_s=out.duration_s,
-                error_kind=ErrorKind.SERVER if out.exit_code != 0 else ErrorKind.BAD_REQUEST,
-                error=error_msg or "Unknown Claude CLI error",
+                error_kind=verdict.kind,
+                error=verdict.message or "Unknown Claude CLI error",
+                reset_at=verdict.reset_at,
                 session_id=str(sess_id) if sess_id else None,
             )
+
+        if isinstance(data, dict):
+            result_text = str(data.get("result", ""))
+        else:
+            result_text = clean_cli_text(out.stdout)
 
         # Parse JSON if response is JSON or schema requested
         parsed_json: Any = None
