@@ -89,7 +89,8 @@ class AgyCliExecutor(BaseCliAgentExecutor):
 
         argv = self.build_argv(str(cli_bin), str(task), model, session_id, mode, json_schema)
         # meta.cli_prefix runs the CLI through a launcher, e.g. WSL as a separate Linux user so each account
-        # has its own file-based login: [wsl.exe, -d, Ubuntu-24.04, -u, agy2, -e, env, -u, DBUS_SESSION_BUS_ADDRESS]
+        # has its own file-based login:
+        # [wsl.exe, -d, Ubuntu-24.04, -u, agy2, -e, env, -u, DBUS_SESSION_BUS_ADDRESS]
         prefix = meta.get("cli_prefix")
         if isinstance(prefix, list) and prefix:
             argv = [str(p) for p in prefix] + argv
