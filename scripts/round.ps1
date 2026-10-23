@@ -5,20 +5,25 @@
 #   merge  : commit the worktree, merge main into it, gate (Python + Console when console/ changed), merge --no-ff into
 #            main, push
 # Usage:
-#   powershell -File scripts/round.ps1 -Action start  -Brief briefs/M2a-resilience-ranking.md [-Name m2a] [-Builder agy|hermes] [-Model m]
+#   powershell -File scripts/round.ps1 -Action start  -Brief briefs/M2a-resilience-ranking.md [-Name m2a] [-Builder agy|hermes|claude] [-Model m] [-Foreground]
+#   (-Main defaults to the branch checked out in the main tree; -ClaudeConfigDir picks the Claude pool account, default claude-02)
 #   powershell -File scripts/round.ps1 -Action status [-Name m2a]
 #   powershell -File scripts/round.ps1 -Action merge  -Name m2a -Message "M2a: resilience and ranking"
 param(
   [Parameter(Mandatory = $true)][ValidateSet('start', 'status', 'merge', 'work')][string]$Action,
   [string]$Brief,
   [string]$Name,
-  [ValidateSet('agy', 'hermes')][string]$Builder = 'agy',
+  [ValidateSet('agy', 'hermes', 'claude')][string]$Builder = 'agy',
   [string]$Model = '',
-  [string]$Message = ''
+  [string]$Message = '',
+  [string]$Main = '',
+  [string]$ClaudeConfigDir = 'D:\farm-data\ai\claude-02',
+  [switch]$Foreground
 )
 $ErrorActionPreference = 'Continue'
-$Main = 'claude/awesome-archimedes-vb1t7y'
 $Repo = 'D:\Harness Farm\Tensor'
+# Integration branch = whatever the main tree has checked out, unless given explicitly.
+if (-not $Main) { $Main = (git -C $Repo rev-parse --abbrev-ref HEAD).Trim() }
 $Runs = 'D:\dev-cache\runs'
 $Trailer = "`n`nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 if (-not $Name -and $Brief) { $Name = ([IO.Path]::GetFileNameWithoutExtension($Brief)).ToLower() }
@@ -62,7 +67,13 @@ if ($Action -eq 'start') {
     }
   }
   Write-Json "$RunDir\status.json" @{ name = $Name; brief = $Brief; builder = $Builder; state = 'running'; started = (Get-Date -Format s) }
-  $argList = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Repo\scripts\round.ps1`" -Action work -Name $Name -Brief `"$Brief`" -Builder $Builder"
+  if ($Foreground) {
+    # Same process, so whoever started the round is notified when it ends.
+    & $PSCommandPath -Action work -Name $Name -Brief $Brief -Builder $Builder -Model $Model -Main $Main -ClaudeConfigDir $ClaudeConfigDir
+    & $PSCommandPath -Action status -Name $Name
+    exit 0
+  }
+  $argList = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Repo\scripts\round.ps1`" -Action work -Name $Name -Brief `"$Brief`" -Builder $Builder -Main `"$Main`" -ClaudeConfigDir `"$ClaudeConfigDir`""
   if ($Model) { $argList += " -Model $Model" }
   Start-Process powershell -ArgumentList $argList -WindowStyle Hidden | Out-Null
   "started $Name ($Builder) in $Wt  ->  check: scripts/round.ps1 -Action status -Name $Name"
@@ -75,9 +86,29 @@ if ($Action -eq 'work') {
     $m = $(if ($Model) { $Model } else { 'gemini-3.8-flash-high' })
     $b = powershell -NoProfile -ExecutionPolicy Bypass -File "$Wt\scripts\run-agy.ps1" -Brief $Brief -Model $m 2>&1 | Out-String
   }
+  elseif ($Builder -eq 'claude') {
+    # Claude Code on a pool account (default claude-02), headless, in the round's own worktree.
+    $m = $(if ($Model) { $Model } else { 'sonnet' })
+    $env:CLAUDE_CONFIG_DIR = $ClaudeConfigDir
+    $prompt = "You are a builder working in the git worktree $Wt. Execute the brief in $Brief exactly, following its rules. Touch only the files it lets you own. Never read any .env file. Never run git add, commit, push, reset, checkout or stash. Run every command in the foreground and wait for it. Finish with the reply format the brief asks for."
+    Push-Location $Wt
+    $raw = $prompt | claude -p --model $m --permission-mode bypassPermissions --output-format json 2>&1 | Out-String
+    Pop-Location
+    [IO.File]::WriteAllText("$RunDir\claude.json", $raw)
+    $b = $raw
+    $i = $raw.IndexOf('{"type"')
+    if ($i -ge 0) {
+      try {
+        $j = $raw.Substring($i) | ConvertFrom-Json
+        $b = "is_error=$($j.is_error) cost_usd=$($j.total_cost_usd) turns=$($j.num_turns)`n$($j.result)"
+        Add-Content "$Runs\ledger.tsv" "$(Get-Date -Format s)`tclaude`t$Name`t$m`t$($j.total_cost_usd)`t$($j.usage.output_tokens)"
+      }
+      catch { $b = $raw }
+    }
+  }
   else {
     $m = $(if ($Model) { $Model } else { 'qwen.qwen3-coder-next' })
-    $prof = $(if ($m -like 'qwen.*') { 'farm-builder-bedrock' } else { 'farm-builder' })
+    $prof = $(if ($m -like 'qwen.*' -or $m -like 'zai.*') { 'farm-builder-bedrock' } else { 'farm-builder' })
     $b = powershell -NoProfile -ExecutionPolicy Bypass -File "$Repo\scripts\run-hermes.ps1" -Brief $Brief -Cwd $Wt -Model $m -Profile $prof 2>&1 | Out-String
   }
   $g = Invoke-Gate $Wt

@@ -3,7 +3,7 @@
 Owner: lead. Builders read it, never edit it. If something here is wrong or missing, say so in your reply instead of guessing.
 
 ## 0. Quality bar (the owner's words: "real engineering, a real builder/developer product — not average, not vibe-coded")
-Single owner, single workspace — no multi-tenant or scale-for-others work. But every line is production engineering:
+**Multi-tenant SaaS platform (owner decision 2026-10-24).** Build to `docs/ARCHITECTURE.md`: a typed tenant context and RLS on every data path, ports for queue / storage / sandbox / vault, designed for 100k tenants and deployed for one. Every line is production engineering:
 - **Correct under failure first.** Concurrency, crashes, timeouts, partial failures, retries and restarts are designed and tested, not hoped for. Every money/quota path is atomic and idempotent.
 - **Tests prove behaviour, not lines.** Each acceptance test reproduces the real failure it guards (kill the process, exhaust the account, race 200 tasks). No test that cannot fail. No mocking the thing under test.
 - **Typed, explicit, small.** mypy strict, Pydantic at every boundary, no `Any` leaking out of adapters, no dead code, no TODOs left behind, no copy-paste between adapters (shared code lives in the template/base).
@@ -30,6 +30,7 @@ The Farm makes no AI decisions itself: routing is deterministic code. Design sou
 - Windows paths: use `pathlib`; data lives under `FARM_DATA_DIR` (default `D:/farm-data`), never on C:.
 
 ## 3. Database (Postgres 16-compatible SQL; runtime target Supabase PG 17)
+> **Changing in F1** (`docs/ARCHITECTURE.md` §4): `workspace_id` becomes `tenant_id NOT NULL` with no default; the Farm's runtime role stops bypassing RLS. Until F1 merges, the rules below describe the current schema.
 - Connection string: env `FARM_DB_URL`, else `SUPABASE_DB_URL`; if neither is set, **local mode** starts an embedded Postgres with `pgserver` at `FARM_DATA_DIR/pg` (`farm.db.pool.get_db_url()` handles all three).
 - Migrations: Alembic in `farm/db/migrations`, revisions written as **raw SQL** via `op.execute(...)`. `uv run farm db migrate` = upgrade head.
 - All tables live in schema **`public`** (dedicated Supabase project). Every table has `workspace_id uuid not null default '00000000-0000-0000-0000-000000000001'`. Every table gets RLS enabled; policies that reference `auth.*` are created only `if exists (select 1 from pg_namespace where nspname='auth')` (so local Postgres works). Policy: authenticated user whose `auth.jwt()->>'email'` equals `farm_settings.owner_email` may select all tables and insert into `farm_commands` only. The Farm process connects as the DB owner (bypasses RLS).

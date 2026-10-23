@@ -1,0 +1,51 @@
+# Harness Farm — quality baseline (Q0) and how defects are kept out
+
+Owner rule (2026-10-24): **no new building on top of a known defect.** Constant bug fixing burns tokens and trust; the cure is
+fixing **classes** of defects at their root, proving each fix with a test built from real outputs, and keeping them out with
+gates — not patching symptoms one at a time.
+
+## 1. Defect register (open)
+
+| # | Defect | Evidence | Class | Root cause / hypothesis |
+|---|---|---|---|---|
+| D1 | **AI accounts falsely flagged** "needs login" or "limit reached" after successful runs | Code: `farm/executors/cli_agent/agy.py` 147–199 and `claude.py` 101–156 run auth/limit regexes over **stdout + stderr — including the AI's own answer — before checking the structured success status**. Patterns are broad (`capacity`, `/login`, `rate limit`, `\b403\b`, `resets in`). Live 2026-10-23: agy-01 `needs_login` with a `"status":"SUCCESS"` last error; claude-02 / -04 last errors are success JSON | **State classification** | Verified for agy and claude; codex and hermes drivers to check (same structure suspected) |
+| D2 | `call_tool("clay__get-credits-available")` → "Unknown tool" although the tool is registered | Live 2026-10-24 | Tool naming / discovery | Hypothesis: hyphen / underscore name-variant resolution |
+| D3 | `search_tools` returns full schemas: 161,435 characters for 25 tools | Live 2026-10-24 | Context economy | Search returns `list_tools`-format definitions |
+| D4 | codex-01 marked `needs_login` with the error "failed to record rollout items: thread … not found" | Live `list_ais` 2026-10-23 | State classification | Probably a Codex session error misread as an auth failure (same class as D1) — verify |
+| D5 | `farm run` does not start again after a reboot; one MCP connect timed out (30 s) while the process was alive | 2026-10-07 state notes; 2026-10-23 session | Availability | No service install; hang cause not yet diagnosed |
+| D6 | 8 unpushed commits; uncommitted `config/registry.yaml` (+910 lines) and `farm/control/commands.py`; ~25 stale worktrees (~20 GB) | git, disk scan 2026-10-23 | Repository hygiene | — |
+
+## 2. The fix for the state-classification class (D1, D4)
+
+1. **Structured result first.** Success or failure comes from each CLI's structured output (Claude `is_error` / `subtype`;
+   Codex event stream; agy `status`; Hermes usage file `failed`) and the exit code — never from words in the answer.
+2. **Error channels only.** When the run failed, the error kind is read from stderr and the structured error field only. The
+   model's answer text is never scanned for error words.
+3. **Precise signatures from real outputs.** Each CLI gets a table of exact error signatures taken from recorded real outputs
+   (login expired, limit reached with reset time, rate limited, overloaded), not broad words.
+4. **Unknown is unknown.** An unrecognised failure is `unknown`: it counts against health but never flips an account to
+   "needs login" or "exhausted".
+5. **Confirm before flipping state.** "Needs login" and "exhausted" are set only on a strong signature **and** a cheap
+   confirmation probe; each state change stores its evidence (excerpt, source run, time), shown in the dashboard with
+   **Re-check now** (`docs/PRODUCT.md` §2.2).
+6. **Proof:** golden fixtures of real success and failure outputs per CLI; a property test that a success output containing
+   every trigger word still classifies as success; one classifier module shared by all drivers.
+
+## 3. How Q0 runs
+
+1. **Register** every known defect here with evidence.
+2. **Audit by area**, read-only, with a fixed checklist and a reproduction for each finding: state classification (all CLI and
+   MCP drivers), router and ledger invariants, MCP relay and OAuth refresh, AI jobs and leases, Console numbers vs SQL.
+3. **Fix by class**, each with a regression test that fails on the old code and passes on the new.
+4. **Soak:** the team uses the Farm for 48 hours. Exit needs zero false account flags, zero crashes, zero unexplained
+   restarts, and every account state on the dashboard matching a manual check.
+
+## 4. Keeping defects out (from Q0 on)
+
+- **Recorded real outputs** for every external interface (CLIs, MCP servers, APIs) as test fixtures; refreshed when a provider
+  changes format.
+- **Property-based tests** (Hypothesis) for every parser and classifier.
+- **Invariant tests** for money and quota: used + reserved never exceeds a limit; no reservation outlives its TTL; no job runs
+  twice.
+- **Gates:** nothing merges without the full suite, the isolation suite (from F1) and a fresh check worker's pass.
+- **Every production defect** gets a register entry, a root-cause line and a test before it is closed.

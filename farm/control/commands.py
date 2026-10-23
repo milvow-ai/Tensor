@@ -1359,7 +1359,7 @@ async def execute_command(
                                 capability=payload.capability or "ask_ai",
                                 params={"task": "ping", "prompt": "ping", "mode": "answer"},
                                 connection=conn_view,
-                                timeout_s=10.0,
+                                timeout_s=120.0,  # CLI cold start (e.g. Codex via WSL) exceeds 10 s
                             )
                             res = await executor.execute(req)
                             if res.ok:
