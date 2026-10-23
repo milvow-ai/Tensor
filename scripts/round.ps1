@@ -107,9 +107,13 @@ if ($Action -eq 'work') {
     }
   }
   else {
-    $m = $(if ($Model) { $Model } else { 'qwen.qwen3-coder-next' })
-    $prof = $(if ($m -like 'qwen.*' -or $m -like 'zai.*') { 'farm-builder-bedrock' } else { 'farm-builder' })
-    $b = powershell -NoProfile -ExecutionPolicy Bypass -File "$Repo\scripts\run-hermes.ps1" -Brief $Brief -Cwd $Wt -Model $m -Profile $prof 2>&1 | Out-String
+    # Bedrock models (zai.glm-5, qwen.*) go through the default Hermes profile and the Bedrock mantle endpoint;
+    # anything else through a Bifrost profile.
+    $m = $(if ($Model) { $Model } else { 'zai.glm-5' })
+    $bedrock = ($m -like 'zai.*' -or $m -like 'qwen.*')
+    $prof = $(if ($bedrock) { 'default' } else { 'farm-builder' })
+    $prov = $(if ($bedrock) { 'custom:bedrock-mantle' } else { '' })
+    $b = powershell -NoProfile -ExecutionPolicy Bypass -File "$Repo\scripts\run-hermes.ps1" -Brief $Brief -Cwd $Wt -Model $m -Profile $prof -Provider $prov 2>&1 | Out-String
   }
   $g = Invoke-Gate $Wt
   $files = @(git -C $Wt status --short)
