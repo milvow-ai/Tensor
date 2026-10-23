@@ -35,7 +35,8 @@
 | q0c | `briefs/Q0C-audit.md` | claude-02 Sonnet | docs/audits/Q0-audit.md only (read-only) | Running |
 | f1a | `briefs/F1A-tenancy-schema.md` | claude-02 Sonnet | migration 0014, farm/tenancy, workspace_id renames | Running |
 | a3a | `briefs/A3A-ui-kit.md` | agy-01 Gemini 3.8 flash high | console kit, format.ts, /dev/components gallery | Running |
-Fallbacks: claude-02 limit → `-ClaudeConfigDir D:\farm-data\ai\claude-04`; agy limit → claude-04 Sonnet. Hermes GLM-5 blocked (AWS token expired); Hermes via Bifrost (deepseek-v4-flash) available for mechanical rounds.
+| f3p | `briefs/F3P-linux-scripts.md` | Hermes GLM-5 (default profile, `--provider custom:bedrock-mantle`) | scripts/linux/*, deploy/systemd/* (new files only) | Running |
+Fallbacks: claude-02 limit → `-ClaudeConfigDir D:\farm-data\ai\claude-04`; agy limit → claude-04 Sonnet. **Hermes route (owner, 2026-10-24): GLM-5 via the default profile + Bedrock mantle endpoint** (the `farm-builder-bedrock` profile's token is expired — do not use it); DeepSeek V4 Flash via Bifrost as the second option. GLM-5 needs exact, step-by-step briefs.
 Merge order when done: q0b → q0a → f1a → q0c (docs) → a3a; after each merge, re-run the next round's gate on the updated branch (`round.ps1 -Action merge` does this).
 
 ## Effort 2 — Contract
