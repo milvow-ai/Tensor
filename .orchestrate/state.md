@@ -32,8 +32,9 @@
 |---|---|---|---|---|
 | q0a | `briefs/Q0A-tools.md` | claude-02 Sonnet | gateway/mcp_tools, mcp/naming, expose, store (not workspace_id line), guide, new tests | Running (2026-10-24) |
 | q0b | `briefs/Q0B-classify.md` | claude-02 Sonnet | cli_agent drivers + classify.py, cli fixtures, hypothesis dep | Running |
-| q0c | `briefs/Q0C-audit.md` | claude-02 Sonnet | docs/audits/Q0-audit.md only (read-only) | Running |
-| f1a | `briefs/F1A-tenancy-schema.md` | claude-02 Sonnet | migration 0014, farm/tenancy, workspace_id renames | Running |
+| q0c | `briefs/Q0C-audit.md` | claude-02 Sonnet | docs/audits/Q0-audit.md only (read-only) | **Merged 0b37430** (25 findings: 1 critical, 10 major, 14 minor; docs-only, merged without the gate) |
+| f1a | `briefs/F1A-tenancy-schema.md` | claude-02 Sonnet | migration 0014, farm/tenancy, workspace_id renames | Round 1: migration OK, 260 tests broken by `tests/conftest.py` truncating `tenants` → revise 1 (conftest ownership granted, session resumed) running |
+| q0d / q0e / q0f | `briefs/Q0D-…`, `Q0E-…`, `Q0F-…` | claude-02 Sonnet ×3 | routing core / control + bookkeeping / MCP + Console numbers — disjoint files; migrations 0015 → 0016 → 0017 | Queued: start after f1a merges (their migrations chain from 0014); merge in order D → E → F. Q0-18/19 deferred to F2 (lease table) |
 | a3a | `briefs/A3A-ui-kit.md` | agy-01 Gemini 3.8 flash high | console kit, format.ts, /dev/components gallery | Running |
 | f3p | `briefs/F3P-linux-scripts.md` → revise `briefs/F3P-R1.md` (in the worktree) | Hermes GLM-5 (default profile, `--provider custom:bedrock-mantle`) | scripts/linux/*, deploy/systemd/* (new files only) | Round 1 done; lead review found 7 defects (secret scan silently disabled by `(?!…)` under `grep -E`; timer hourly not per minute; endless loop under a oneshot unit; non-root systemctl; shebang not first; `uv` instead of venv path; `env farm` / network-online) → R1 running |
 Fallbacks: claude-02 limit → `-ClaudeConfigDir D:\farm-data\ai\claude-04`; agy limit → claude-04 Sonnet. **Hermes route (owner, 2026-10-24): GLM-5 via the default profile + Bedrock mantle endpoint** (the `farm-builder-bedrock` profile's token is expired — do not use it); DeepSeek V4 Flash via Bifrost as the second option. GLM-5 needs exact, step-by-step briefs.
