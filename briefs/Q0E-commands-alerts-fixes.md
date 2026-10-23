@@ -25,16 +25,20 @@ a permanent regression test that fails on the old code and passes on the new.
   give the same number on 15 Oct 12:00.
 - **Q0-16** one renewal-date rule for `billing_day` 29–31 in both the view and the reminder job (clamp to the month's last day,
   never roll into the next month); test Feb, Mar and 30-day months.
-- **D7 (AI-job test)** make `test_accept_aip2::test_stopping_farm_serve_while_a_job_runs_fails_it_as_farm_restart_and_kills_the_worker`
-  deterministic under CPU load (events instead of wall-clock waits; never a bigger timeout).
+- **D7 (your two quarantined tests)** `test_accept_aip2::test_stopping_farm_serve_while_a_job_runs_fails_it_as_farm_restart_and_kills_the_worker`
+  fails **every run, even alone** — find out whether the test or the shutdown behaviour is wrong, and fix the real cause (if a
+  job is not failed as `farm_restart` on a graceful stop, that is a product bug). `test_accept_run1::test_watchdog_restart_and_alert_on_failure`
+  fails under load — make it deterministic (events, never a bigger timeout). Then delete both lines from
+  `tests/quarantine.txt`; prove each by running it 20 times in a row while the full suite runs in parallel.
 - Q0-18 and Q0-19 (AI-job lease fencing, per-process limits) are **not** in this round — the F2 lease table fixes them.
 
 **Database changes** go in one new migration `farm/db/migrations/versions/0016_q0_control_fixes.py` with
 `down_revision = "0015"` (raw SQL). If a Console view changes (Q0-15, Q0-16), recreate it in this migration.
 
 **Owns:** `farm/control/{commands,alerts,heartbeat}.py` · `farm/manager/{alerts,budgets,renewals}.py` ·
-`farm/resources/trajectory.py` · `farm/ai/jobs.py` (only what the D7 test needs; no behaviour change) · the new migration 0016 ·
-`tests/test_q0e_*.py` (new) · `tests/test_accept_aip2.py` · existing tests that asserted the old, wrong behaviour (list each).
+`farm/resources/trajectory.py` · `farm/ai/jobs.py` and `farm/control/run.py` (only what the D7 fix needs) · the new
+migration 0016 · `tests/test_q0e_*.py` (new) · `tests/test_accept_aip2.py` · `tests/test_accept_run1.py` · your two lines in
+`tests/quarantine.txt` · existing tests that asserted the old, wrong behaviour (list each).
 
 **Must not touch:** `farm/resources/` other than `trajectory.py`, `farm/manager/scheduler.py`, `farm/executors/**`,
 `farm/gateway/**`, `farm/mcp/**`, earlier migrations, `config/*`, `console/` source files, `pyproject.toml`, any other file.

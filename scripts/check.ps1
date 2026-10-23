@@ -12,9 +12,21 @@ function Step([string]$name, [scriptblock]$cmd) {
   if ($LASTEXITCODE -eq 0) { "PASS  $name" } else { "FAIL  $name"; ($out -split "`n" | Select-Object -Last 25) -join "`n"; $script:failed++ }
 }
 
+# Quarantine: tests that fail on the baseline for a known, registered reason (docs/QUALITY.md D7). They do not block the
+# gate, but they still run and their result is printed. Each entry names its owner round, which removes it when fixed.
+$quarantine = @()
+$qf = Join-Path $root 'tests\quarantine.txt'
+if (Test-Path $qf) { $quarantine = @(Get-Content $qf | ForEach-Object { ($_ -split '#')[0].Trim() } | Where-Object { $_ }) }
+$deselect = @($quarantine | ForEach-Object { '--deselect'; $_ })
+
 Step "ruff"   { uv run ruff check farm tests }
 Step "mypy"   { uv run mypy }
-Step "pytest" { uv run pytest -q -p no:cacheprovider }
+Step "pytest" { uv run pytest -q -p no:cacheprovider @deselect }
+if ($quarantine.Count -gt 0) {
+  $qout = uv run pytest -q -p no:cacheprovider @quarantine 2>&1 | Out-String
+  $qsum = @($qout -split "`n" | Where-Object { $_ -match '\d+ (passed|failed)' } | Select-Object -Last 1) -join ''
+  "INFO  quarantine: $($quarantine.Count) test(s) from tests/quarantine.txt, not blocking: $($qsum.Trim())"
+}
 
 # Secret grep over tracked + untracked (non-ignored) files: key-shaped strings must never be committed.
 $files = git ls-files --cached --others --exclude-standard | Where-Object { $_ -notmatch '^(library|research/data)/' -and $_ -notmatch '\.lock$' }

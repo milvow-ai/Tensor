@@ -30,20 +30,24 @@ turn each reproduction into a permanent regression test that fails on the old co
 - **Q0-22** cache only answers with `found is True`.
 - **Q0-23** remove the debug `string_agg` / `RAISE NOTICE` from `farm_reactivate_due`.
 - **Q0-24** `record_failure` must not hold one pooled connection while taking another (no pool-exhaustion deadlock).
-- **D7 (bulkhead test)** make `test_accept_m2_bulkhead::test_bulkhead_slow_connection_a_bypassed_to_b_within_max_queue_wait`
-  deterministic under CPU load (controlled time or events, never a bigger timeout).
+- **D7 (your two quarantined tests)** make `test_accept_m2_bulkhead::test_bulkhead_slow_connection_a_bypassed_to_b_within_max_queue_wait`
+  and `test_adapter_zerobounce::test_http_status_maps_to_error_kind[json-429-rate_limited]` deterministic under CPU load
+  (controlled time or events, never a bigger timeout), then delete their two lines from `tests/quarantine.txt`. Prove it by
+  running each 20 times in a row while the full suite runs in parallel.
 
 **Database changes** go in one new migration `farm/db/migrations/versions/0015_q0_router_fixes.py` with
 `down_revision = "0014"` (raw SQL, like the others).
 
 **Owns:** `farm/resources/{router,health,strategies,ranking,ledger,flight,budget,periods,gate}.py` · `farm/manager/scheduler.py`
-· `farm/manager/pacing.py` · the new migration 0015 · `tests/test_q0d_*.py` (new) · `tests/test_accept_m2_bulkhead.py` · existing
+· `farm/manager/pacing.py` · the new migration 0015 · `tests/test_q0d_*.py` (new) · `tests/test_accept_m2_bulkhead.py` ·
+`tests/test_adapter_zerobounce.py` · `farm/adapters/_template.py` and `farm/adapters/zerobounce.py` (only if the D7 fix needs
+them) · your two lines in `tests/quarantine.txt` · existing
 tests in `tests/` that asserted the old, wrong behaviour (list each change in the reply).
 
 **Must not touch:** `farm/control/**`, `farm/executors/**`, `farm/ai/**`, `farm/gateway/**`, `farm/mcp/**`, earlier migrations,
 `config/*`, `console/`, `pyproject.toml`, any other file.
 
-**Done when:** `check.ps1` ends with `RESULT: all passed` (the other D7 test, `test_accept_aip2 … kills_the_worker`, may still
-flake under load — report it, it belongs to Q0E); every finding above has a regression test that fails on the old code.
+**Done when:** `check.ps1` ends with `RESULT: all passed` (quarantined tests run separately and do not block; yours must no
+longer be in the list); every finding above has a regression test that fails on the old code.
 
 **Reply (15 lines or fewer):** per finding: fixed + test name · migration summary · `check.ps1` tail · open issues.
