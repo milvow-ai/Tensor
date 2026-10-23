@@ -31,14 +31,29 @@ fi
 pat='sk-or-v1-[0-9a-f]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|eyJhbGciOi[A-Za-z0-9_-]{30,}|sk-bf-(?!farm-p0-local-test)[A-Za-z0-9-]{16,}|postgres(ql)?://[^:\s]+:[^@\s]{6,}@'
 
 # Self-test: pattern must match test string
-if ! echo 'sk-ant-aaaaaaaaaaaaaaaaaaaaaaaa' | grep -PIn "$pat" >/dev/null 2>&1; then
+# The fake key is built at runtime so no key-shaped literal sits in this file (the repo secret scan would flag it).
+fake_key="sk-ant-$(printf 'a%.0s' {1..24})"
+if ! printf '%s\n' "$fake_key" | grep -PIn "$pat" >/dev/null 2>&1; then
     echo "FAIL  secret-grep"
     echo "secret pattern self-test failed"
     echo "RESULT: 1 step(s) failed"
     exit 1
 fi
 
-files=$(git ls-files --cached --others --exclude-standard | grep -v -E '^(library|research/data)/' | grep -v -E '\.lock$' || true)
+# If git cannot list the files, the scan must fail loudly, never pass with nothing scanned.
+if ! all_files=$(git ls-files --cached --others --exclude-standard 2>&1); then
+    echo "FAIL  secret-grep"
+    echo "git ls-files failed: $all_files"
+    echo "RESULT: 1 step(s) failed"
+    exit 1
+fi
+files=$(printf '%s\n' "$all_files" | grep -v -E '^(library|research/data)/' | grep -v -E '\.lock$' || true)
+if [[ -z "$files" ]]; then
+    echo "FAIL  secret-grep"
+    echo "no files to scan"
+    echo "RESULT: 1 step(s) failed"
+    exit 1
+fi
 
 hits=""
 count=0
