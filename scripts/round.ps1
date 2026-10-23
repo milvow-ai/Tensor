@@ -96,7 +96,7 @@ if ($Action -eq 'work') {
     Pop-Location
     [IO.File]::WriteAllText("$RunDir\claude.json", $raw)
     $b = $raw
-    $i = $raw.IndexOf('{"type"')
+    $i = $raw.IndexOf('{')  # the result object's key order varies (e.g. starts with "duration_api_ms")
     if ($i -ge 0) {
       try {
         $j = $raw.Substring($i) | ConvertFrom-Json
