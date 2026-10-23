@@ -12,9 +12,9 @@ from farm.executors.cli_agent.base import (
     clean_cli_text,
     parse_json_or_none,
     parse_jsonl,
-    parse_reset_at,
     run_cli_process,
 )
+from farm.executors.cli_agent.classify import classify_codex
 
 
 def _wsl_path(path: str) -> str:
@@ -149,25 +149,12 @@ class CodexCliExecutor(BaseCliAgentExecutor):
                 error=out.stderr or f"Codex CLI timed out after {timeout_s}s",
             )
 
-        combined_text = f"{out.stdout} {out.stderr}".strip()
-
         # Parse JSON / JSONL
         single_json = parse_json_or_none(out.stdout)
         jsonl_events = parse_jsonl(out.stdout)
+        verdict = classify_codex(out.stdout, out.stderr, out.exit_code)
 
-        # Check for auth errors
-        auth_patterns = [
-            r"not logged in",
-            r"please log in",
-            r"codex login",
-            r"authentication required",
-            r"unauthorized",
-            r"invalid api key",
-            r"token expired",
-            r"\b401\b",
-            r"\b403\b",
-        ]
-        if any(re.search(pat, combined_text, re.IGNORECASE) for pat in auth_patterns):
+        if not verdict.ok:
             return self.build_exec_result(
                 ok=False,
                 ai="codex",
@@ -175,36 +162,10 @@ class CodexCliExecutor(BaseCliAgentExecutor):
                 connection=req.connection,
                 raw_data=single_json if isinstance(single_json, dict) else None,
                 duration_s=out.duration_s,
-                error_kind=ErrorKind.NEEDS_LOGIN,
-                error=clean_cli_text(
-                    out.stderr or out.stdout or "Codex authentication required; please log in"
-                ),
-            )
-
-        # Check for usage limits
-        limit_patterns = [
-            r"usage limit",
-            r"rate limit",
-            r"quota exceeded",
-            r"exceeded your current quota",
-            r"insufficient_quota",
-            r"overloaded",
-            r"resets?\s+at",
-            r"resets?\s+in",
-            r"\b429\b",
-        ]
-        if any(re.search(pat, combined_text, re.IGNORECASE) for pat in limit_patterns):
-            reset_at = parse_reset_at(combined_text, single_json if isinstance(single_json, dict) else None)
-            return self.build_exec_result(
-                ok=False,
-                ai="codex",
-                model=str(model) if model else None,
-                connection=req.connection,
-                raw_data=single_json if isinstance(single_json, dict) else None,
-                duration_s=out.duration_s,
-                error_kind=ErrorKind.LIMIT_REACHED,
-                error=clean_cli_text(out.stderr or out.stdout or "Codex usage limit reached"),
-                reset_at=reset_at,
+                error_kind=verdict.kind,
+                error=verdict.message or "Codex error",
+                reset_at=verdict.reset_at,
+                session_id=session_id if isinstance(session_id, str) else None,
             )
 
         # Extract session_id, text, and usage from single JSON or JSONL
@@ -256,18 +217,6 @@ class CodexCliExecutor(BaseCliAgentExecutor):
                     cost_usd = float(ev.get("cost_usd") or ev.get("total_cost_usd") or 0.0)
 
             extracted_text = "\n".join(text_parts).strip() if text_parts else clean_cli_text(out.stdout)
-
-        if out.exit_code != 0 and not extracted_text:
-            return self.build_exec_result(
-                ok=False,
-                ai="codex",
-                model=str(model) if model else None,
-                connection=req.connection,
-                duration_s=out.duration_s,
-                error_kind=ErrorKind.SERVER,
-                error=clean_cli_text(out.stderr or out.stdout or f"Codex exited with code {out.exit_code}"),
-                session_id=str(extracted_session_id) if extracted_session_id else None,
-            )
 
         raw_data = {
             "usage": extracted_usage,
