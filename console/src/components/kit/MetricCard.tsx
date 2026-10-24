@@ -79,7 +79,7 @@ export const MetricCard = forwardRef<HTMLDivElement, MetricCardProps>(
           <div className="font-semibold text-[var(--kit-negative-text,#b91c1c)] text-xs dark:text-[#ff7b72]">
             {label}
           </div>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Failed to load metric: {error}
           </p>
         </div>
@@ -101,11 +101,11 @@ export const MetricCard = forwardRef<HTMLDivElement, MetricCardProps>(
       <div className="space-y-3">
         {/* Header: Label and Logo / Icon */}
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate font-medium text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <span className="truncate font-medium text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             {label}
           </span>
           {icon && (
-            <div className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
               {icon}
             </div>
           )}
@@ -124,7 +124,7 @@ export const MetricCard = forwardRef<HTMLDivElement, MetricCardProps>(
                 <DeltaPill value={delta.value} goodDirection={delta.goodDirection} neutralBelow={delta.neutralBelow} />
               )}
               {comparison && (
-                <span className="truncate text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+                <span className="truncate text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                   {comparison}
                 </span>
               )}
@@ -132,7 +132,7 @@ export const MetricCard = forwardRef<HTMLDivElement, MetricCardProps>(
             {href && (
               <ChevronRight
                 aria-hidden="true"
-                className="h-4 w-4 shrink-0 text-[var(--kit-text-secondary,#6b7280)] transition-transform group-hover:translate-x-0.5 dark:text-[#8b949e]"
+                className="h-4 w-4 shrink-0 text-[var(--kit-text-secondary,#5b6370)] transition-transform group-hover:translate-x-0.5 dark:text-[#8b949e]"
               />
             )}
           </div>
@@ -141,7 +141,7 @@ export const MetricCard = forwardRef<HTMLDivElement, MetricCardProps>(
     );
 
     const baseClasses = `p-5 rounded-[var(--kit-radius-card,12px)] bg-[var(--kit-bg-card,#ffffff)] dark:bg-[#161b22] border border-[var(--kit-border,#e6e8ec)] dark:border-[#30363d] shadow-[var(--kit-shadow-card)] transition-all ${
-      href ? "group cursor-pointer hover:border-[var(--kit-accent,#1f6feb)]/50 hover:shadow-md" : ""
+      href ? "group cursor-pointer hover:border-[var(--kit-accent,#1a63d6)]/50 hover:shadow-md" : ""
     } ${className}`;
 
     if (href) {

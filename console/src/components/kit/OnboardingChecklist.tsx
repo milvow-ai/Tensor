@@ -70,11 +70,11 @@ export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklis
         {/* Header */}
         <div className="space-y-1">
           <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-[var(--kit-accent,#1f6feb)] dark:text-[#58a6ff]" />
+            <Sparkles className="h-4 w-4 text-[var(--kit-accent,#1a63d6)] dark:text-[#58a6ff]" />
             <h3 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">{title}</h3>
           </div>
           {subtitle && (
-            <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">{subtitle}</p>
+            <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">{subtitle}</p>
           )}
         </div>
 
@@ -101,7 +101,7 @@ export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklis
                 "border-[var(--kit-border,#e6e8ec)] dark:border-[#30363d] bg-[var(--kit-bg-card,#ffffff)] dark:bg-[#161b22] opacity-80";
             } else if (isCurrent) {
               containerClasses =
-                "border-[var(--kit-accent,#1f6feb)]/60 bg-[var(--kit-accent-soft,rgba(31,111,235,0.06))] dark:bg-[rgba(56,139,253,0.1)]";
+                "border-[var(--kit-accent,#1a63d6)]/60 bg-[var(--kit-accent-soft,rgba(31,111,235,0.06))] dark:bg-[rgba(56,139,253,0.1)]";
             }
 
             let statusIndicator: React.ReactNode = (
@@ -115,8 +115,8 @@ export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklis
               );
             } else if (isCurrent) {
               statusIndicator = (
-                <span className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-[var(--kit-accent,#1f6feb)] dark:border-[#58a6ff]">
-                  <span className="h-2 w-2 rounded-full bg-[var(--kit-accent,#1f6feb)] dark:bg-[#58a6ff]" />
+                <span className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-[var(--kit-accent,#1a63d6)] dark:border-[#58a6ff]">
+                  <span className="h-2 w-2 rounded-full bg-[var(--kit-accent,#1a63d6)] dark:bg-[#58a6ff]" />
                 </span>
               );
             }
@@ -133,14 +133,14 @@ export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklis
                     <h4
                       className={`font-semibold text-xs ${
                         isCompleted
-                          ? "text-[var(--kit-text-secondary,#6b7280)] line-through dark:text-[#8b949e]"
+                          ? "text-[var(--kit-text-secondary,#5b6370)] line-through dark:text-[#8b949e]"
                           : "text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]"
                       }`}
                     >
                       {step.title}
                     </h4>
                     {step.description && (
-                      <p className="text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+                      <p className="text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                         {step.description}
                       </p>
                     )}
@@ -154,7 +154,7 @@ export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklis
                         href={step.action.href}
                         className={`inline-flex items-center justify-center rounded-[var(--kit-radius-control,8px)] px-3 py-1.5 font-medium text-xs transition-colors ${
                           isCurrent
-                            ? "bg-[var(--kit-accent,#1f6feb)] text-white shadow-sm hover:bg-[var(--kit-accent-hover,#195ac0)]"
+                            ? "bg-[var(--kit-accent,#1a63d6)] text-white shadow-sm hover:bg-[var(--kit-accent-hover,#195ac0)]"
                             : "border border-[var(--kit-border,#e6e8ec)] text-[var(--kit-text-primary,#111827)] hover:bg-[var(--kit-bg-subtle,#f3f4f6)] dark:border-[#30363d] dark:text-[#f0f6fc]"
                         }`}
                       >
@@ -166,7 +166,7 @@ export const OnboardingChecklist = forwardRef<HTMLDivElement, OnboardingChecklis
                         onClick={step.action.onClick}
                         className={`inline-flex cursor-pointer items-center justify-center rounded-[var(--kit-radius-control,8px)] px-3 py-1.5 font-medium text-xs transition-colors ${
                           isCurrent
-                            ? "bg-[var(--kit-accent,#1f6feb)] text-white shadow-sm hover:bg-[var(--kit-accent-hover,#195ac0)]"
+                            ? "bg-[var(--kit-accent,#1a63d6)] text-white shadow-sm hover:bg-[var(--kit-accent-hover,#195ac0)]"
                             : "border border-[var(--kit-border,#e6e8ec)] text-[var(--kit-text-primary,#111827)] hover:bg-[var(--kit-bg-subtle,#f3f4f6)] dark:border-[#30363d] dark:text-[#f0f6fc]"
                         }`}
                       >

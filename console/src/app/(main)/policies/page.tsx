@@ -2,9 +2,9 @@ import { ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/farm/page-header";
-import { getFarmData } from "@/lib/farm/data";
 
 import { PoliciesView } from "./_components/policies-view";
+import { loadPolicies } from "./_lib/load-policies";
 
 export const metadata: Metadata = {
   title: "Policies & Budgets",
@@ -12,21 +12,16 @@ export const metadata: Metadata = {
 };
 
 export default async function PoliciesPage() {
-  const farmData = await getFarmData();
-  const [budgets, overview, auditPage] = await Promise.all([
-    farmData.listBudgets(),
-    farmData.getOverview(),
-    farmData.listAuditEvents({ pageSize: 50 }),
-  ]);
+  const { budgets, spendMonth, auditEvents } = await loadPolicies();
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4 md:gap-5">
       <PageHeader
         title="Policies & Budgets"
         description="Global spending caps, per-provider hard stops, alert thresholds, and security policies."
         icon={ShieldCheck}
       />
-      <PoliciesView initialBudgets={budgets} spendMonth={overview.spend} initialAuditEvents={auditPage.items} />
+      <PoliciesView initialBudgets={budgets} spendMonth={spendMonth} initialAuditEvents={auditEvents} />
     </div>
   );
 }

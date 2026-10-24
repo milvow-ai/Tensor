@@ -47,7 +47,7 @@ export const PageHeader = forwardRef<HTMLElement, PageHeaderProps>(
             {title}
           </h1>
           {subtitle && (
-            <p className="truncate text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">{subtitle}</p>
+            <p className="truncate text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">{subtitle}</p>
           )}
         </div>
 

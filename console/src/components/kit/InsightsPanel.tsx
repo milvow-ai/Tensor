@@ -33,7 +33,7 @@ export const MetricRow: React.FC<MetricRowProps> = ({ row, className = "" }) => 
           {row.label}
         </div>
         {row.average !== undefined && (
-          <div className="text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+          <div className="text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
             Avg: <span className="font-semibold tabular-nums">{formattedAvg}</span>
           </div>
         )}
@@ -105,7 +105,7 @@ export const SplitBar: React.FC<SplitBarProps> = ({ split, className = "" }) => 
               <span className="font-medium text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">
                 {segment.label}
               </span>
-              <span className="font-semibold text-[var(--kit-text-secondary,#6b7280)] tabular-nums dark:text-[#8b949e]">
+              <span className="font-semibold text-[var(--kit-text-secondary,#5b6370)] tabular-nums dark:text-[#8b949e]">
                 {Math.round(segment.share)}%
               </span>
               {segment.delta && <DeltaPill value={segment.delta.value} goodDirection={segment.delta.goodDirection} />}
@@ -199,13 +199,13 @@ export const InsightsPanel = forwardRef<HTMLDivElement, InsightsPanelProps>(
         {/* Header */}
         <div className="flex items-center justify-between border-[var(--kit-border,#e6e8ec)] border-b pb-2 dark:border-[#30363d]">
           <div className="flex items-center gap-2">
-            {header.icon && <span className="text-[var(--kit-accent,#1f6feb)] dark:text-[#58a6ff]">{header.icon}</span>}
+            {header.icon && <span className="text-[var(--kit-accent,#1a63d6)] dark:text-[#58a6ff]">{header.icon}</span>}
             <div>
               <h3 className="font-semibold text-[var(--kit-text-primary,#111827)] text-sm dark:text-[#f0f6fc]">
                 {header.title}
               </h3>
               {header.meta && (
-                <p className="text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+                <p className="text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                   {header.meta}
                 </p>
               )}
@@ -214,7 +214,7 @@ export const InsightsPanel = forwardRef<HTMLDivElement, InsightsPanelProps>(
         </div>
 
         {empty || (rows.length === 0 && (!split || split.length === 0)) ? (
-          <div className="py-6 text-center text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <div className="py-6 text-center text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             No insights available for this period.
           </div>
         ) : (
@@ -232,7 +232,7 @@ export const InsightsPanel = forwardRef<HTMLDivElement, InsightsPanelProps>(
             {split && split.length > 0 && (
               <div className="space-y-2 border-[var(--kit-border,#e6e8ec)] border-t pt-2 dark:border-[#30363d]">
                 {splitTitle && (
-                  <h4 className="font-semibold text-[var(--kit-text-secondary,#6b7280)] text-xs uppercase tracking-wider dark:text-[#8b949e]">
+                  <h4 className="font-semibold text-[var(--kit-text-secondary,#5b6370)] text-xs uppercase tracking-wider dark:text-[#8b949e]">
                     {splitTitle}
                   </h4>
                 )}

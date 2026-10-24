@@ -44,7 +44,7 @@ export const DayChip = forwardRef<HTMLButtonElement, DayChipProps>(
     }
 
     const selectedClasses = isSelected
-      ? "bg-[var(--kit-accent,#1f6feb)] text-white border-[var(--kit-accent,#1f6feb)] shadow-sm font-semibold"
+      ? "bg-[var(--kit-accent,#1a63d6)] text-white border-[var(--kit-accent,#1a63d6)] shadow-sm font-semibold"
       : "bg-[var(--kit-bg-card,#ffffff)] dark:bg-[#161b22] text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc] border-[var(--kit-border,#e6e8ec)] dark:border-[#30363d] hover:bg-[var(--kit-bg-subtle,#f3f4f6)] dark:hover:bg-[#21262d]";
 
     return (
@@ -54,12 +54,12 @@ export const DayChip = forwardRef<HTMLButtonElement, DayChipProps>(
         disabled={disabled}
         aria-pressed={isSelected}
         aria-label={`${label} ${dayNumber}${hasItems ? ", has scheduled tasks" : ""}`}
-        className={`relative flex ${sizeClasses} cursor-pointer select-none flex-col items-center justify-center rounded-[var(--kit-radius-control,8px)] border transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1f6feb)] disabled:cursor-not-allowed disabled:opacity-40 ${selectedClasses} ${className}`}
+        className={`relative flex ${sizeClasses} cursor-pointer select-none flex-col items-center justify-center rounded-[var(--kit-radius-control,8px)] border transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1a63d6)] disabled:cursor-not-allowed disabled:opacity-40 ${selectedClasses} ${className}`}
         {...props}
       >
         <span
           className={`block max-w-full truncate text-[11px] font-medium leading-tight ${
-            isSelected ? "text-blue-100" : "text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]"
+            isSelected ? "text-blue-100" : "text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]"
           }`}
         >
           {label}
@@ -69,7 +69,7 @@ export const DayChip = forwardRef<HTMLButtonElement, DayChipProps>(
         {hasItems && !isSelected && (
           <span
             aria-hidden="true"
-            className="absolute bottom-1.5 h-1.5 w-1.5 rounded-full bg-[var(--kit-accent,#1f6feb)] dark:bg-[#388bfd]"
+            className="absolute bottom-1.5 h-1.5 w-1.5 rounded-full bg-[var(--kit-accent,#1a63d6)] dark:bg-[#388bfd]"
           />
         )}
 
@@ -77,7 +77,7 @@ export const DayChip = forwardRef<HTMLButtonElement, DayChipProps>(
           <span
             aria-hidden="true"
             className={`absolute -top-1.5 -right-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 font-bold text-[10px] ${
-              isSelected ? "bg-white text-[var(--kit-accent,#1f6feb)]" : "bg-[var(--kit-accent,#1f6feb)] text-white"
+              isSelected ? "bg-white text-[var(--kit-accent,#1a63d6)]" : "bg-[var(--kit-accent,#1a63d6)] text-white"
             }`}
           >
             {badgeCount}

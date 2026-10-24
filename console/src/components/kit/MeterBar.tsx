@@ -89,7 +89,7 @@ export const MeterBar = forwardRef<HTMLDivElement, MeterBarProps>(
               <span className="font-medium text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">{label}</span>
             )}
             {showValue && (
-              <span className="font-semibold text-[var(--kit-text-secondary,#6b7280)] tabular-nums dark:text-[#8b949e]">
+              <span className="font-semibold text-[var(--kit-text-secondary,#5b6370)] tabular-nums dark:text-[#8b949e]">
                 {roundedPercent}%
               </span>
             )}
@@ -114,7 +114,7 @@ export const MeterBar = forwardRef<HTMLDivElement, MeterBarProps>(
         </div>
 
         {caption && (
-          <p className="text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">{caption}</p>
+          <p className="text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">{caption}</p>
         )}
       </div>
     );

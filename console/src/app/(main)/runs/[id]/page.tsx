@@ -4,19 +4,19 @@ import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/farm/page-header";
 import { ErrorState } from "@/components/farm/states";
-import { ToneBadge } from "@/components/farm/status";
+import { StatusChip } from "@/components/kit";
 import { RelativeTime } from "@/components/farm/time";
 import { attempt } from "@/lib/farm/data";
-import { RUN_STATUS_META } from "@/lib/farm/state";
 
 import { RunDetailView } from "../_components/run-detail-view";
+import { RUN_CHIP } from "../_components/run-status";
 
-export const metadata: Metadata = { title: "Run Detail" };
+export const metadata: Metadata = { title: "Activity trace" };
 
 export default async function RunPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const result = await attempt((data) => data.getRunDetail(id));
-  const crumbs = [{ label: "Runs", href: "/runs" }, { label: id.slice(0, 8) }];
+  const crumbs = [{ label: "Activity", href: "/runs" }, { label: id.slice(0, 8) }];
 
   if (!result.ok) {
     return (
@@ -30,7 +30,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
   const run = result.data;
   if (!run) notFound();
 
-  const meta = RUN_STATUS_META[run.status];
+  const chip = RUN_CHIP[run.status];
 
   return (
     <div className="flex flex-col gap-4 md:gap-5">
@@ -43,7 +43,7 @@ export default async function RunPage({ params }: { params: Promise<{ id: string
             <span className="font-medium font-mono">{run.caller}</span>
           </>
         }
-        badge={<ToneBadge tone={meta.tone}>{meta.label}</ToneBadge>}
+        badge={<StatusChip size="sm" status={chip.status} label={chip.label} />}
       />
 
       <RunDetailView run={run} />

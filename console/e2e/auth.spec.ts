@@ -10,8 +10,10 @@ test.beforeAll(async () => {
   server = startServer(3197, {
     FARM_DATA_SOURCE: "supabase",
     FARM_E2E: undefined,
-    // Placeholders so the form renders as configured even without .env.local; nothing here is ever contacted.
-    NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:9",
+    // Placeholders so the form renders as configured even without .env.local. "Supabase" is this server's own
+    // origin: the browser's auth calls stay same-origin (no CORS preflight to a missing host) so page.route can
+    // answer them, and the server's own session checks get a 404, i.e. signed out.
+    NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:3197",
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_placeholder",
   });
   await waitUntilReady(server);
@@ -76,10 +78,25 @@ test("after the link is sent, the code from the email can be typed instead and a
 }) => {
   // Supabase is not reachable from the test: answer its two auth calls here and record what was asked.
   const asked: Record<string, unknown>[] = [];
-  await page.route("**/auth/v1/otp**", (route) => route.fulfill({ status: 200, json: {} }));
+  // The fake Supabase is another origin, so the answers carry CORS headers and preflights are answered.
+  const cors = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-headers": "*",
+    "access-control-allow-methods": "*",
+  };
+  await page.route("**/auth/v1/otp**", (route) =>
+    route.request().method() === "OPTIONS"
+      ? route.fulfill({ status: 204, headers: cors })
+      : route.fulfill({ status: 200, headers: cors, json: {} }),
+  );
   await page.route("**/auth/v1/verify**", async (route) => {
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: cors });
     asked.push(route.request().postDataJSON() as Record<string, unknown>);
-    await route.fulfill({ status: 403, json: { code: 403, error_code: "otp_expired", msg: "Token has expired" } });
+    await route.fulfill({
+      status: 403,
+      headers: cors,
+      json: { code: 403, error_code: "otp_expired", msg: "Token has expired" },
+    });
   });
   await page.goto(`${server.url}/login`);
   await page.getByLabel("Email").fill("owner@example.com");

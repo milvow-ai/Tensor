@@ -21,7 +21,7 @@ import { LayoutControls } from "../../../app/(main)/_components/header/layout-co
 import { AppSidebar } from "../../../app/(main)/_components/sidebar/app-sidebar";
 import { NavMain } from "../../../app/(main)/_components/sidebar/nav-main";
 import { NavUserMenu } from "../../../app/(main)/_components/sidebar/nav-user-menu";
-import { BillingKpiRow } from "../../../app/(main)/billing/_components/billing-kpi-row";
+import { UsageKpis } from "../../../app/(main)/usage/_components/usage-kpis";
 import { StateDot } from "../../../components/farm/status";
 import { SidebarMenuButton, SidebarProvider } from "../../../components/ui/sidebar";
 import { TooltipProvider } from "../../../components/ui/tooltip";
@@ -149,11 +149,24 @@ describe("Layout and Sidebar components (Radix Slot regression guard)", () => {
     }).not.toThrow();
   });
 
-  it("renders BillingKpiRow without slot errors", () => {
+  it("renders UsageKpis without slot errors", () => {
     expect(() => {
       ReactDOMServer.renderToString(
-        React.createElement(BillingKpiRow, {
-          totalSpendRow: {
+        React.createElement(UsageKpis, {
+          usage: {
+            period: "7d",
+            periodLabel: "last 7 days",
+            days: 7,
+            spend: 42,
+            previousSpend: 30,
+            deltaPct: 40,
+            chart: [],
+            series: [],
+            byAi: [],
+            byTool: [],
+            byDay: [],
+            byAccount: [],
+            month: {
             provider_id: "total",
             provider_name: "Total",
             kind: "all",
@@ -164,6 +177,7 @@ describe("Layout and Sidebar components (Radix Slot regression guard)", () => {
             forecast_usd: 240,
             elapsed_days: 15,
             days_in_month: 30,
+            },
           },
           paidAccountsCount: 5,
           idlePaidCount: 1,

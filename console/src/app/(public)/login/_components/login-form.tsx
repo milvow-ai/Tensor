@@ -9,18 +9,20 @@ import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import type { SupabaseEnv } from "@/lib/supabase/env";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function LoginForm({
   next,
-  configured,
+  supabase,
   initialError,
 }: {
   next: string;
-  configured: boolean;
+  supabase: SupabaseEnv | null;
   initialError: string | null;
 }) {
+  const configured = supabase !== null;
   const inputId = useId();
   const [email, setEmail] = useState("");
   const [fieldError, setFieldError] = useState<string | null>(null);
@@ -38,7 +40,7 @@ export function LoginForm({
     setVerifying(true);
     try {
       const { createClient } = await import("@/lib/supabase/client");
-      const { error: verifyError } = await createClient().auth.verifyOtp({ email: sentTo, token: code, type: "email" });
+      const { error: verifyError } = await createClient(supabase ?? undefined).auth.verifyOtp({ email: sentTo, token: code, type: "email" });
       if (verifyError) {
         setError("That code is wrong or has expired. Check the newest email, or request a new one.");
         return;
@@ -64,7 +66,7 @@ export function LoginForm({
       // The Supabase browser client is only needed here, so it loads on submit and stays out of the page bundle.
       const { createClient } = await import("@/lib/supabase/client");
       const redirect = `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`;
-      const { error: otpError } = await createClient().auth.signInWithOtp({
+      const { error: otpError } = await createClient(supabase ?? undefined).auth.signInWithOtp({
         email: address,
         options: { emailRedirectTo: redirect, shouldCreateUser: false },
       });

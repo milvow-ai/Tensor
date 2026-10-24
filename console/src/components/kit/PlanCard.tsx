@@ -62,7 +62,7 @@ export const PlanCard = forwardRef<HTMLDivElement, PlanCardProps>(
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1.5 font-semibold text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">
-            <Sparkles className="h-3.5 w-3.5 shrink-0 text-[var(--kit-accent,#1f6feb)] dark:text-[#58a6ff]" />
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-[var(--kit-accent,#1a63d6)] dark:text-[#58a6ff]" />
             <span>{plan}</span>
           </div>
         </div>
@@ -93,7 +93,7 @@ export const PlanCard = forwardRef<HTMLDivElement, PlanCardProps>(
             {cta.href ? (
               <a
                 href={cta.href}
-                className="inline-flex w-full cursor-pointer items-center justify-center rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1f6feb)] px-3 py-1.5 text-center font-medium text-white shadow-sm transition-colors hover:bg-[var(--kit-accent-hover,#195ac0)]"
+                className="inline-flex w-full cursor-pointer items-center justify-center rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1a63d6)] px-3 py-1.5 text-center font-medium text-white shadow-sm transition-colors hover:bg-[var(--kit-accent-hover,#195ac0)]"
               >
                 {cta.label}
               </a>
@@ -101,7 +101,7 @@ export const PlanCard = forwardRef<HTMLDivElement, PlanCardProps>(
               <button
                 type="button"
                 onClick={cta.onClick}
-                className="inline-flex w-full cursor-pointer items-center justify-center rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1f6feb)] px-3 py-1.5 text-center font-medium text-white shadow-sm transition-colors hover:bg-[var(--kit-accent-hover,#195ac0)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1f6feb)]"
+                className="inline-flex w-full cursor-pointer items-center justify-center rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1a63d6)] px-3 py-1.5 text-center font-medium text-white shadow-sm transition-colors hover:bg-[var(--kit-accent-hover,#195ac0)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1a63d6)]"
               >
                 {cta.label}
               </button>

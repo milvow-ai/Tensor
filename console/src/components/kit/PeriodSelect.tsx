@@ -48,9 +48,9 @@ export const PeriodSelect = forwardRef<HTMLButtonElement, PeriodSelectProps>(
           ref={ref}
           id={id}
           aria-label="Select time period"
-          className={`h-9 cursor-pointer gap-2 rounded-[var(--kit-radius-control,8px)] border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] px-3 font-medium text-[var(--kit-text-primary,#111827)] text-xs transition-colors hover:bg-[var(--kit-bg-subtle,#f3f4f6)] focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1f6feb)] dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#f0f6fc] dark:hover:bg-[#21262d] ${className}`}
+          className={`h-9 cursor-pointer gap-2 rounded-[var(--kit-radius-control,8px)] border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] px-3 font-medium text-[var(--kit-text-primary,#111827)] text-xs transition-colors hover:bg-[var(--kit-bg-subtle,#f3f4f6)] focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1a63d6)] dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#f0f6fc] dark:hover:bg-[#21262d] ${className}`}
         >
-          <Calendar className="h-3.5 w-3.5 shrink-0 text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]" />
+          <Calendar className="h-3.5 w-3.5 shrink-0 text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]" />
           <SelectValue placeholder="Select period" />
         </SelectTrigger>
         <SelectContent className="z-50 rounded-[var(--kit-radius-control,8px)] border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] shadow-[var(--kit-shadow-popover)] dark:border-[#30363d] dark:bg-[#161b22]">
@@ -58,7 +58,7 @@ export const PeriodSelect = forwardRef<HTMLButtonElement, PeriodSelectProps>(
             <SelectItem
               key={option.value}
               value={option.value}
-              className="cursor-pointer rounded-[calc(var(--kit-radius-control,8px)-2px)] py-1.5 text-[var(--kit-text-primary,#111827)] text-xs focus:bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] focus:text-[var(--kit-accent,#1f6feb)] dark:text-[#f0f6fc] dark:focus:text-[#58a6ff]"
+              className="cursor-pointer rounded-[calc(var(--kit-radius-control,8px)-2px)] py-1.5 text-[var(--kit-text-primary,#111827)] text-xs focus:bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] focus:text-[var(--kit-accent,#1a63d6)] dark:text-[#f0f6fc] dark:focus:text-[#58a6ff]"
             >
               {option.label}
             </SelectItem>

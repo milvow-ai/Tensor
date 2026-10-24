@@ -57,7 +57,7 @@ export default async function LoginPage({
         <CardDescription>Enter the owner's email. We send a one-time link; there is no password.</CardDescription>
       </CardHeader>
       <CardContent>
-        <LoginForm next={next} configured={readSupabaseEnv() !== null} initialError={error} />
+        <LoginForm next={next} supabase={readSupabaseEnv()} initialError={error} />
       </CardContent>
     </Card>
   );

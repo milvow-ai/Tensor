@@ -18,13 +18,14 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
   }) => {
     const problems = watchProblems(page, baseURL ?? "");
     await page.goto("/billing");
+    await expect(page).toHaveURL(/\/usage/);
 
     // Header & page structure
-    await expect(page.getByRole("heading", { level: 1, name: "Billing", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Usage & Cost", exact: true })).toBeVisible();
 
     // 1. KPI row & forecast flag
     // In fixtures, spend is $7,500 against $7,000 global budget; forecast is $7,750 > budget.
-    await expect(page.getByText("Month-to-date spend")).toBeVisible();
+    await expect(page.getByText("Month-to-date spend").first()).toBeVisible();
     await expect(page.getByText("$7,500", { exact: true })).toBeVisible();
     await expect(page.getByText("of $7,000 budget")).toBeVisible();
 
@@ -39,7 +40,7 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
     await expect(forecastFlag).toContainText("Forecast exceeds monthly budget!");
 
     // Paid & idle accounts KPIs
-    await expect(page.getByText("Paid accounts", { exact: true })).toBeVisible();
+    await expect(page.getByText(/\d+ paid accounts/)).toBeVisible();
     await expect(page.getByText("Idle paid accounts", { exact: true })).toBeVisible();
 
     // 2. Budgets table & inline editing
@@ -106,7 +107,7 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
     const problems = watchProblems(page, baseURL ?? "");
     await page.goto("/runs");
 
-    await expect(page.getByRole("heading", { level: 1, name: "Runs", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity", exact: true })).toBeVisible();
 
     // In initial state, multiple runs are shown, including Succeeded
     const table = page.locator("table");
@@ -132,7 +133,9 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
 
     // Test capability filter
     const capSelect = page.getByRole("combobox", { name: "Filter by capability" });
-    await capSelect.selectOption("verify_email");
+    // The filter is the kit's FilterSelect (a Radix select): open it and pick the option.
+    await capSelect.click();
+    await page.getByRole("option", { name: "verify_email" }).press("Enter");
     await expect(page).toHaveURL(/capability=verify_email/);
     await expect(page.getByRole("cell", { name: "verify_email" }).first()).toBeVisible();
     await expect(page.getByRole("cell", { name: "enrich_company" })).toHaveCount(0);

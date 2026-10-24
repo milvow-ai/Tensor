@@ -67,7 +67,7 @@ export function RunDetailDrawer({
               </Button>
             ) : null}
           </div>
-          <SheetDescription>Live trajectory, ranking reasons, fallbacks, and step decisions.</SheetDescription>
+          <SheetDescription>Trace of this call: ranking reasons, fallbacks and step decisions.</SheetDescription>
         </SheetHeader>
 
         <div className="mt-4">

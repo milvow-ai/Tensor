@@ -235,12 +235,12 @@ export function GalleryView() {
       <div className="flex flex-col justify-between gap-4 rounded-[var(--kit-radius-card,12px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] p-5 shadow-[var(--kit-shadow-card)] sm:flex-row sm:items-center dark:border-[#30363d] dark:bg-[#161b22]">
         <div>
           <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[var(--kit-accent,#1f6feb)]" />
+            <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[var(--kit-accent,#1a63d6)]" />
             <h1 className="font-bold text-[var(--kit-text-primary,#111827)] text-xl tracking-tight dark:text-[#f0f6fc]">
               Component gallery
             </h1>
           </div>
-          <p className="mt-1 text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="mt-1 text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Every Harness Farm component in every state, light and dark.
           </p>
         </div>
@@ -248,7 +248,7 @@ export function GalleryView() {
         <div className="flex shrink-0 items-center gap-3">
           {/* Locale switcher */}
           <div className="flex items-center gap-1.5 rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-bg-subtle,#f3f4f6)] p-1 text-xs dark:bg-[#21262d]">
-            <span className="px-1.5 font-medium text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+            <span className="px-1.5 font-medium text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
               Locale:
             </span>
             <button
@@ -257,8 +257,8 @@ export function GalleryView() {
               onClick={() => setLocale("en-US")}
               className={`cursor-pointer rounded px-2 py-0.5 font-semibold text-xs ${
                 locale === "en-US"
-                  ? "bg-[var(--kit-bg-card,#ffffff)] text-[var(--kit-accent,#1f6feb)] shadow-sm dark:bg-[#161b22]"
-                  : "text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]"
+                  ? "bg-[var(--kit-bg-card,#ffffff)] text-[var(--kit-accent,#1a63d6)] shadow-sm dark:bg-[#161b22]"
+                  : "text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]"
               }`}
             >
               en-US
@@ -269,8 +269,8 @@ export function GalleryView() {
               onClick={() => setLocale("en-IN")}
               className={`cursor-pointer rounded px-2 py-0.5 font-semibold text-xs ${
                 locale === "en-IN"
-                  ? "bg-[var(--kit-bg-card,#ffffff)] text-[var(--kit-accent,#1f6feb)] shadow-sm dark:bg-[#161b22]"
-                  : "text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]"
+                  ? "bg-[var(--kit-bg-card,#ffffff)] text-[var(--kit-accent,#1a63d6)] shadow-sm dark:bg-[#161b22]"
+                  : "text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]"
               }`}
             >
               en-IN
@@ -305,7 +305,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             1. StatusChip
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Icon and text status indicators across all operational states in standard, small, and pulsing modes.
           </p>
         </div>
@@ -349,7 +349,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             2. DeltaPill
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Direction-aware change pills where spend decreases are highlighted positively, with accessible screen-reader labels.
           </p>
         </div>
@@ -389,7 +389,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             3. MetricCard
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Primary metric tiles with change indicators, comparisons, and locale-aware digit grouping.
           </p>
         </div>
@@ -462,7 +462,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             4. MeterBar
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Threshold mode (&lt;80% neutral, 80–99% amber, 100% red) and category fixed color mode.
           </p>
         </div>
@@ -532,7 +532,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             5. TrendChartCard & ChartTooltip
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Recharts stacked area chart with soft gradient, model filters, and hover tooltip with percentage splits.
           </p>
         </div>
@@ -569,7 +569,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             6. BreakdownCard (+ SegmentedTabs & RankedBarList)
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Interactive tabs (By AI / By role / By tool) with ranked bar list, category colors, and view-all link.
           </p>
         </div>
@@ -648,7 +648,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             7. WeekStrip & DayChip
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Schedule day selection, dot indicators, and task count badges.
           </p>
         </div>
@@ -662,7 +662,7 @@ export function GalleryView() {
             action={
               <button
                 type="button"
-                className="inline-flex items-center gap-1 font-medium text-[var(--kit-accent,#1f6feb)] text-xs hover:underline dark:text-[#58a6ff]"
+                className="inline-flex items-center gap-1 font-medium text-[var(--kit-accent,#1a63d6)] text-xs hover:underline dark:text-[#58a6ff]"
               >
                 <Plus className="h-3.5 w-3.5" />
                 <span>New task</span>
@@ -692,7 +692,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             8. TaskCard & TaskBoard
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Schedule cards with operator, agent avatars, status chip, cost, file thumbnails, and menu.
           </p>
         </div>
@@ -730,7 +730,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             9. InsightsPanel (+ MetricRow & SplitBar)
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Performance metrics with benchmark averages and AI distribution.
           </p>
         </div>
@@ -786,7 +786,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             10. AppSidebar & PlanCard
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Left sidebar with section headers (MAIN / OTHERS), active nav item, approvals count badge, and PlanCard
             bottom tile.
           </p>
@@ -838,7 +838,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             11. PageHeader (+ PeriodSelect, NotificationsBell, CommandSearchButton)
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Global header composition with search trigger (⌘K), notifications bell, global URL period selector, and
             action buttons.
           </p>
@@ -863,14 +863,14 @@ export function GalleryView() {
                 <button
                   key="add"
                   type="button"
-                  className="cursor-pointer rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1f6feb)] px-3 py-1.5 font-medium text-white text-xs shadow-sm hover:bg-[var(--kit-accent-hover,#195ac0)]"
+                  className="cursor-pointer rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1a63d6)] px-3 py-1.5 font-medium text-white text-xs shadow-sm hover:bg-[var(--kit-accent-hover,#195ac0)]"
                 >
                   Add to farm
                 </button>,
               ]}
               userMenu={
                 <div className="flex cursor-pointer items-center gap-2 pl-2">
-                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--kit-accent,#1f6feb)] font-bold text-white text-xs">
+                  <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--kit-accent,#1a63d6)] font-bold text-white text-xs">
                     A
                   </div>
                 </div>
@@ -893,7 +893,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             12. FilterSelect, EvidencePopover, ApprovalCard
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Evidence-backed states ("The Why ▸"), keyboard-ready Approvals (A / D), and icon filters.
           </p>
         </div>
@@ -904,7 +904,7 @@ export function GalleryView() {
             <span className="font-bold text-[11px] text-[var(--kit-text-muted,#9ca3af)] uppercase tracking-wider dark:text-[#6e7681]">
               EvidencePopover (Click to open)
             </span>
-            <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+            <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
               Account{" "}
               <span className="font-mono text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">
                 claude-02
@@ -947,7 +947,7 @@ export function GalleryView() {
               onDeny={() => setApprovalFeedback("Denied Clay MCP write action")}
             />
             {approvalFeedback && (
-              <div className="rounded bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] p-2 font-semibold text-[var(--kit-accent,#1f6feb)] text-xs dark:text-[#58a6ff]">
+              <div className="rounded bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] p-2 font-semibold text-[var(--kit-accent,#1a63d6)] text-xs dark:text-[#58a6ff]">
                 Action: {approvalFeedback}
               </div>
             )}
@@ -1003,7 +1003,7 @@ export function GalleryView() {
           <h2 className="font-bold text-[var(--kit-text-primary,#111827)] text-base dark:text-[#f0f6fc]">
             13. ConnectAppCard & OnboardingChecklist
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Ready configs + permission profiles + test connection; first-ten-minutes guided setup.
           </p>
         </div>

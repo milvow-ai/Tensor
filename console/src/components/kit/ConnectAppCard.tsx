@@ -103,7 +103,7 @@ export const ConnectAppCard = forwardRef<HTMLDivElement, ConnectAppCardProps>(
                 {app.icon}
               </div>
             ) : (
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] font-bold text-[var(--kit-accent,#1f6feb)] text-xs dark:text-[#58a6ff]">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] font-bold text-[var(--kit-accent,#1a63d6)] text-xs dark:text-[#58a6ff]">
                 {app.name.slice(0, 2).toUpperCase()}
               </div>
             )}
@@ -112,7 +112,7 @@ export const ConnectAppCard = forwardRef<HTMLDivElement, ConnectAppCardProps>(
                 {app.name}
               </h3>
               {app.description && (
-                <p className="text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+                <p className="text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                   {app.description}
                 </p>
               )}
@@ -123,13 +123,13 @@ export const ConnectAppCard = forwardRef<HTMLDivElement, ConnectAppCardProps>(
         {/* Config Snippet */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <span className="font-semibold text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+            <span className="font-semibold text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
               Configuration snippet:
             </span>
             <button
               type="button"
               onClick={handleCopy}
-              className="inline-flex cursor-pointer items-center gap-1 text-[11px] text-[var(--kit-accent,#1f6feb)] hover:underline dark:text-[#58a6ff]"
+              className="inline-flex cursor-pointer items-center gap-1 text-[11px] text-[var(--kit-accent,#1a63d6)] hover:underline dark:text-[#58a6ff]"
             >
               {copied ? (
                 <>
@@ -152,9 +152,9 @@ export const ConnectAppCard = forwardRef<HTMLDivElement, ConnectAppCardProps>(
 
         {/* Permission Profile */}
         <div className="flex items-center gap-2 rounded-[var(--kit-radius-control,8px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-subtle,#f3f4f6)] p-2 dark:border-[#30363d] dark:bg-[#21262d]">
-          <ShieldCheck className="h-4 w-4 shrink-0 text-[var(--kit-accent,#1f6feb)] dark:text-[#58a6ff]" />
+          <ShieldCheck className="h-4 w-4 shrink-0 text-[var(--kit-accent,#1a63d6)] dark:text-[#58a6ff]" />
           <div className="truncate text-[11px]">
-            <span className="text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">Permission profile:</span>{" "}
+            <span className="text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">Permission profile:</span>{" "}
             <span className="font-medium text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">
               {permissionProfile}
             </span>
@@ -167,7 +167,7 @@ export const ConnectAppCard = forwardRef<HTMLDivElement, ConnectAppCardProps>(
             type="button"
             onClick={handleTest}
             disabled={status === "testing"}
-            className="inline-flex cursor-pointer select-none items-center justify-center gap-1.5 rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1f6feb)] px-3 py-1.5 font-medium text-white shadow-sm transition-colors hover:bg-[var(--kit-accent-hover,#195ac0)] disabled:opacity-50"
+            className="inline-flex cursor-pointer select-none items-center justify-center gap-1.5 rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1a63d6)] px-3 py-1.5 font-medium text-white shadow-sm transition-colors hover:bg-[var(--kit-accent-hover,#195ac0)] disabled:opacity-50"
           >
             <Play className={`h-3.5 w-3.5 ${status === "testing" ? "animate-spin" : ""}`} />
             <span>{status === "testing" ? "Testing..." : "Test connection"}</span>
@@ -192,7 +192,7 @@ export const ConnectAppCard = forwardRef<HTMLDivElement, ConnectAppCardProps>(
                 </>
               )}
               {status === "testing" && (
-                <span className="text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">{message}</span>
+                <span className="text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">{message}</span>
               )}
             </div>
           )}

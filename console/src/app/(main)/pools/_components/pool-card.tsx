@@ -9,12 +9,20 @@ import { toast } from "sonner";
 
 import { DotList, ToneBadge } from "@/components/farm/status";
 import { Button } from "@/components/ui/button";
+import { type FarmStatus, MeterBar, StatusChip } from "@/components/kit";
 import { Card } from "@/components/ui/card";
 import { STRATEGY_LABELS } from "@/lib/farm/command-meta";
 import { fmtCompact, fmtPlanUsd } from "@/lib/farm/format";
 import { readFirstNeedsLoginConnection } from "@/lib/farm/login-actions";
 import { HEALTH_META, poolHref } from "@/lib/farm/state";
-import type { PoolOverviewRow, PoolStrategy } from "@/lib/farm/types";
+import type { PoolHealth, PoolOverviewRow, PoolStrategy } from "@/lib/farm/types";
+
+const HEALTH_STATUS: Record<PoolHealth, FarmStatus> = {
+  healthy: "ready",
+  degraded: "limited",
+  down: "failed",
+  disabled: "waiting-for-you",
+};
 
 import { AddAccountsDialog } from "./add-accounts-dialog";
 import { SignInDrawer } from "./sign-in-drawer";
@@ -36,6 +44,7 @@ export function PoolCard({ pool }: { pool: PoolOverviewRow }) {
   const strategy = pool.default_strategy ? STRATEGY_LABELS[pool.default_strategy as PoolStrategy]?.label : undefined;
   const lines = breakdown(pool);
   const isAi = pool.kind === "ai";
+  const needsLogin = pool.accounts_needs_login > 0 && pool.accounts_usable === 0;
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerConnId, setDrawerConnId] = useState<string | null>(null);
@@ -86,10 +95,27 @@ export function PoolCard({ pool }: { pool: PoolOverviewRow }) {
               {pool.accounts_total === 1 ? "account" : "accounts"}
             </p>
           </div>
-          <ToneBadge tone={health.tone}>{health.label}</ToneBadge>
+          {isAi ? (
+            <StatusChip
+              status={needsLogin ? "needs-login" : HEALTH_STATUS[pool.health]}
+              label={needsLogin ? "Needs login" : health.label}
+              size="sm"
+            />
+          ) : (
+            <ToneBadge tone={health.tone}>{health.label}</ToneBadge>
+          )}
         </div>
 
         <div className="pointer-events-none relative z-10 space-y-1.5">
+          {isAi && pool.accounts_total > 0 ? (
+            <MeterBar
+              value={pool.accounts_usable}
+              max={pool.accounts_total}
+              mode="category"
+              label={`${pool.provider_name} accounts ready`}
+              showValue={false}
+            />
+          ) : null}
           <DotList dots={pool.account_dots} label={`${pool.provider_name} accounts`} />
           <div className="flex min-h-4 items-center justify-between text-xs">
             {isAi ? (

@@ -1,7 +1,7 @@
-import { Blocks } from "lucide-react";
 import type { Metadata } from "next";
 
-import { PageHeader } from "@/components/farm/page-header";
+import { PageHeader } from "@/components/kit";
+import { attempt } from "@/lib/farm/data";
 import { getIntegrationsList } from "@/lib/farm/integrations-data";
 
 import { IntegrationsView } from "./_components/integrations-view";
@@ -12,16 +12,22 @@ export const metadata: Metadata = {
 };
 
 export default async function IntegrationsPage() {
-  const integrations = await getIntegrationsList();
+  const result = await attempt(async (data) => {
+    const [integrations, pools] = await Promise.all([getIntegrationsList(), data.listPools()]);
+    const connections = await Promise.all(
+      pools.map(async (pool) => (await data.listConnections(pool.provider_id, { pageSize: 50 })).items),
+    );
+    return { integrations, connections: connections.flat() };
+  });
+
+  if (!result.ok) {
+    return <div className="space-y-5"><PageHeader title="Integrations" subtitle="MCP servers, OpenAPI providers, and AI accounts connected to Harness Farm." /><p role="alert" className="text-sm text-destructive">{result.message}</p></div>;
+  }
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Integrations"
-        description="Every MCP server, OpenAPI provider, and AI account connected to Harness Farm."
-        icon={Blocks}
-      />
-      <IntegrationsView initialIntegrations={integrations} />
+      <PageHeader title="Integrations" subtitle="MCP servers, OpenAPI providers, and AI accounts connected to Harness Farm." />
+      <IntegrationsView initialIntegrations={result.data.integrations} connections={result.data.connections} />
     </div>
   );
 }

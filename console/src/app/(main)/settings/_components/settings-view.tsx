@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Activity, Bell, BookOpen, CheckCircle2, ExternalLink, Mail, Send, User } from "lucide-react";
 import { toast } from "sonner";
 
+import { StatusChip } from "@/components/kit";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,7 +49,7 @@ export function SettingsView({
   }
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-4xl space-y-4 md:space-y-5">
       {/* Runtime & Heartbeat Status Banner */}
       <Card className="border-primary/20 bg-primary/5">
         <CardHeader className="pb-3">
@@ -75,22 +76,13 @@ export function SettingsView({
           <div className="grid grid-cols-2 gap-4 text-xs sm:grid-cols-4">
             <div>
               <span className="block text-muted-foreground">Daemon Status</span>
-              <span className="mt-0.5 flex items-center gap-1 font-semibold text-emerald-600 dark:text-emerald-400">
-                <CheckCircle2 className="size-3.5" />
-                <span>Healthy</span>
+              <span className="mt-1 block">
+                <StatusChip status="ready" label="Healthy" size="sm" />
               </span>
             </div>
             <div>
-              <span className="block text-muted-foreground">Farm Version</span>
-              <span className="mt-0.5 block font-medium font-mono">v1.0.0 (c3-prod)</span>
-            </div>
-            <div>
-              <span className="block text-muted-foreground">Protocol Gateway</span>
-              <span className="mt-0.5 block font-medium font-mono">FastMCP 4.0</span>
-            </div>
-            <div>
-              <span className="block text-muted-foreground">Environment</span>
-              <span className="mt-0.5 block font-medium font-mono">Node 22 / React 19</span>
+              <span className="block text-muted-foreground">Data source</span>
+              <span className="mt-0.5 block font-medium font-mono">{dataSource}</span>
             </div>
           </div>
         </CardContent>

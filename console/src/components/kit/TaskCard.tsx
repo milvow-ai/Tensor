@@ -85,7 +85,7 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
     return (
       <div
         ref={ref}
-        className={`space-y-3 rounded-[var(--kit-radius-card,12px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] p-4 shadow-[var(--kit-shadow-card)] transition-all hover:border-[var(--kit-accent,#1f6feb)]/40 dark:border-[#30363d] dark:bg-[#161b22] ${className}`}
+        className={`space-y-3 rounded-[var(--kit-radius-card,12px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] p-4 shadow-[var(--kit-shadow-card)] transition-all hover:border-[var(--kit-accent,#1a63d6)]/40 dark:border-[#30363d] dark:bg-[#161b22] ${className}`}
         {...props}
       >
         {/* Header: Title + Status + Menu */}
@@ -94,7 +94,7 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
             <h4 className="truncate font-semibold text-[var(--kit-text-primary,#111827)] text-sm leading-snug dark:text-[#f0f6fc]">
               {title}
             </h4>
-            <p className="truncate text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+            <p className="truncate text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
               Operator:{" "}
               <span className="font-medium text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">{operator}</span>
               {time && ` · ${time}`}
@@ -109,7 +109,7 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
                 type="button"
                 onClick={onMenuClick}
                 aria-label="Task options"
-                className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-[var(--kit-radius-control,8px)] text-[var(--kit-text-secondary,#6b7280)] transition-colors hover:bg-[var(--kit-bg-subtle,#f3f4f6)] hover:text-[var(--kit-text-primary,#111827)] dark:text-[#8b949e] dark:hover:bg-[#21262d] dark:hover:text-[#f0f6fc]"
+                className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-[var(--kit-radius-control,8px)] text-[var(--kit-text-secondary,#5b6370)] transition-colors hover:bg-[var(--kit-bg-subtle,#f3f4f6)] hover:text-[var(--kit-text-primary,#111827)] dark:text-[#8b949e] dark:hover:bg-[#21262d] dark:hover:text-[#f0f6fc]"
               >
                 <MoreHorizontal className="h-4 w-4" />
               </button>
@@ -123,14 +123,14 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
             {visibleFiles.map((file) => (
               <div
                 key={file.name}
-                className="inline-flex max-w-[120px] items-center gap-1 truncate rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-bg-subtle,#f3f4f6)] px-2 py-0.5 text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:bg-[#21262d] dark:text-[#8b949e]"
+                className="inline-flex max-w-[120px] items-center gap-1 truncate rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-bg-subtle,#f3f4f6)] px-2 py-0.5 text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:bg-[#21262d] dark:text-[#8b949e]"
               >
                 <FileText className="h-3 w-3 shrink-0" />
                 <span className="truncate">{file.name}</span>
               </div>
             ))}
             {overflowFilesCount > 0 && (
-              <span className="px-1 font-medium text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+              <span className="px-1 font-medium text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                 +{overflowFilesCount}
               </span>
             )}
@@ -146,14 +146,14 @@ export const TaskCard = forwardRef<HTMLDivElement, TaskCardProps>(
                   <div
                     key={agent.name}
                     title={`${agent.name}${agent.role ? ` (${agent.role})` : ""}`}
-                    className="inline-flex h-6 w-6 select-none items-center justify-center rounded-full bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] font-bold text-[10px] text-[var(--kit-accent,#1f6feb)] ring-2 ring-[var(--kit-bg-card,#ffffff)] dark:text-[#58a6ff] dark:ring-[#161b22]"
+                    className="inline-flex h-6 w-6 select-none items-center justify-center rounded-full bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] font-bold text-[10px] text-[var(--kit-accent,#1a63d6)] ring-2 ring-[var(--kit-bg-card,#ffffff)] dark:text-[#58a6ff] dark:ring-[#161b22]"
                   >
                     {agent.name.charAt(0).toUpperCase()}
                   </div>
                 ))}
               </div>
             ) : (
-              <span className="text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+              <span className="text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                 Autonomous
               </span>
             )}
@@ -215,7 +215,7 @@ export const TaskBoard = forwardRef<HTMLDivElement, TaskBoardProps>(
       return (
         <div
           ref={ref}
-          className={`rounded-[var(--kit-radius-card,12px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] p-10 text-center text-[var(--kit-text-secondary,#6b7280)] text-xs dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#8b949e] ${className}`}
+          className={`rounded-[var(--kit-radius-card,12px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] p-10 text-center text-[var(--kit-text-secondary,#5b6370)] text-xs dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#8b949e] ${className}`}
           {...props}
         >
           {emptyMessage}
@@ -228,10 +228,10 @@ export const TaskBoard = forwardRef<HTMLDivElement, TaskBoardProps>(
         {groups.map((group) => (
           <div key={group.id} className="space-y-3">
             <div className="flex items-center justify-between">
-              <h4 className="font-bold text-[var(--kit-text-secondary,#6b7280)] text-xs uppercase tracking-wider dark:text-[#8b949e]">
+              <h4 className="font-bold text-[var(--kit-text-secondary,#5b6370)] text-xs uppercase tracking-wider dark:text-[#8b949e]">
                 {group.title}
               </h4>
-              <span className="rounded bg-[var(--kit-bg-subtle,#f3f4f6)] px-1.5 py-0.5 font-semibold text-[11px] text-[var(--kit-text-secondary,#6b7280)] tabular-nums dark:bg-[#21262d] dark:text-[#8b949e]">
+              <span className="rounded bg-[var(--kit-bg-subtle,#f3f4f6)] px-1.5 py-0.5 font-semibold text-[11px] text-[var(--kit-text-secondary,#5b6370)] tabular-nums dark:bg-[#21262d] dark:text-[#8b949e]">
                 {group.tasks.length}
               </span>
             </div>
