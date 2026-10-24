@@ -2,9 +2,9 @@ import { GitFork } from "lucide-react";
 import type { Metadata } from "next";
 
 import { PageHeader } from "@/components/farm/page-header";
-import { getFarmData } from "@/lib/farm/data";
 
 import { RoutingView } from "./_components/routing-view";
+import { loadRouting } from "./_lib/load-routing";
 
 export const metadata: Metadata = {
   title: "Routing",
@@ -12,41 +12,10 @@ export const metadata: Metadata = {
 };
 
 export default async function RoutingPage() {
-  const farmData = await getFarmData();
-  const routes = await farmData.listRoutes();
-
-  // Load account previews for all unique pools in routes
-  const poolIds = Array.from(new Set(routes.map((r) => r.provider_id)));
-  const accountsByPool: Record<
-    string,
-    Array<{
-      id: string;
-      label: string;
-      status: string;
-      remaining: number | null;
-      unit: string | null;
-      latencyMs: number | null;
-      circuit: string;
-    }>
-  > = {};
-
-  await Promise.all(
-    poolIds.map(async (poolId) => {
-      const page = await farmData.listConnections(poolId, { pageSize: 50 });
-      accountsByPool[poolId] = page.items.map((conn) => ({
-        id: conn.id,
-        label: conn.label,
-        status: conn.status,
-        remaining: conn.units[0]?.remaining ?? null,
-        unit: conn.units[0]?.unit ?? null,
-        latencyMs: conn.health.latencyMsP50,
-        circuit: conn.health.circuit,
-      }));
-    }),
-  );
+  const { routes, accountsByPool } = await loadRouting();
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4 md:gap-5">
       <PageHeader
         title="Routing"
         description="Which pools serve each capability, in what order, and with what default strategy."

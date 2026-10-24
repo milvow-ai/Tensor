@@ -7,6 +7,7 @@ import Link from "next/link";
 import { ArrowLeft, CheckCircle2, Code, Lock, Play, RefreshCw, Search, Terminal, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
+import { MeterBar, StatusChip } from "@/components/kit";
 import { CopyCommand } from "@/components/farm/copy-command";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,8 +19,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { submitCommand } from "@/lib/farm/actions";
 import { fmtAbsolute } from "@/lib/farm/format";
 import type { McpDetail, McpToolItem } from "@/lib/farm/integrations-data";
+import type { Connection } from "@/lib/farm/types";
 
-export function McpDetailView({ initialDetail }: { initialDetail: McpDetail }) {
+export function McpDetailView({ initialDetail, connections }: { initialDetail: McpDetail; connections: Connection[] }) {
   const [detail, _setDetail] = useState<McpDetail>(initialDetail);
   const [tools, setTools] = useState<McpToolItem[]>(initialDetail.tools);
   const [toolSearch, setToolSearch] = useState("");
@@ -182,6 +184,15 @@ export function McpDetailView({ initialDetail }: { initialDetail: McpDetail }) {
           </div>
         </CardHeader>
         <CardContent className="p-0">
+          <div className="px-4 pt-3">
+            <MeterBar
+              value={detail.integration.accounts.filter((account) => account.status === "active").length}
+              max={detail.integration.accounts.length}
+              label="Active accounts"
+              showValue
+              caption={`${detail.integration.accounts.filter((account) => account.status === "active").length} of ${detail.integration.accounts.length} accounts active`}
+            />
+          </div>
           <Table>
             <TableHeader>
               <TableRow>
@@ -265,29 +276,31 @@ export function McpDetailView({ initialDetail }: { initialDetail: McpDetail }) {
                 <TableHead>Auth Ref</TableHead>
                 <TableHead>Concurrency</TableHead>
                 <TableHead>Last Success</TableHead>
+                <TableHead>Calls / limits</TableHead>
                 <TableHead className="text-right">Status</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {detail.integration.accounts.map((acc) => (
-                <TableRow key={acc.id}>
-                  <TableCell className="font-medium text-xs">{acc.label}</TableCell>
-                  <TableCell className="font-mono text-xs">{acc.id}</TableCell>
-                  <TableCell className="font-mono text-muted-foreground text-xs">{acc.authRef}</TableCell>
-                  <TableCell className="text-xs">{acc.concurrency} parallel</TableCell>
-                  <TableCell className="text-muted-foreground text-xs">
-                    {acc.lastSuccessAt ? fmtAbsolute(acc.lastSuccessAt) : "Never"}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Badge
-                      variant={acc.status === "active" ? "secondary" : "destructive"}
-                      className="text-xs capitalize"
-                    >
-                      {acc.status}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {detail.integration.accounts.map((acc) => {
+                const connection = connections.find((item) => item.id === acc.id);
+                const usage = connection?.units.find((unit) => unit.limit !== null);
+                const failed = Boolean(connection?.health.lastError);
+                const status = acc.status === "active" ? "ready" : acc.status === "needs_login" ? "needs-login" : acc.status === "exhausted" ? "limited" : "waiting-for-you";
+                return (
+                  <TableRow key={acc.id}>
+                    <TableCell className="font-medium text-xs">{acc.label}</TableCell>
+                    <TableCell className="font-mono text-xs">{acc.id}</TableCell>
+                    <TableCell className="font-mono text-muted-foreground text-xs">{acc.authRef}</TableCell>
+                    <TableCell className="text-xs">{acc.concurrency} parallel</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">{acc.lastSuccessAt ? fmtAbsolute(acc.lastSuccessAt) : "Never"}</TableCell>
+                    <TableCell>
+                      {usage ? <MeterBar value={usage.used + usage.reserved} max={usage.limit ?? 1} label={`${usage.unit} used`} showValue caption={`${usage.used + usage.reserved} / ${usage.limit} ${usage.unit}`} /> : connection ? <span>{connection.callsToday} calls today</span> : "—"}
+                      {failed && <p className="mt-1 text-xs text-destructive">{connection?.health.lastError}</p>}
+                    </TableCell>
+                    <TableCell className="text-right"><StatusChip status={status} label={acc.status.replaceAll("_", " ")} size="sm" /></TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </CardContent>

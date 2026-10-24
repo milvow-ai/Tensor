@@ -1,10 +1,11 @@
 import { notFound } from "next/navigation";
 
-import { Server } from "lucide-react";
 import type { Metadata } from "next";
 
-import { PageHeader } from "@/components/farm/page-header";
+import { PageHeader } from "@/components/kit";
+import { attempt } from "@/lib/farm/data";
 import { getMcpServerDetail } from "@/lib/farm/integrations-data";
+import type { Connection } from "@/lib/farm/types";
 
 import { McpDetailView } from "./_components/mcp-detail-view";
 
@@ -27,15 +28,13 @@ export default async function McpDetailPage({ params }: McpDetailPageProps) {
   if (!detail) {
     notFound();
   }
+  const connectionsResult = await attempt(async (data) => (await data.listConnections(id, { pageSize: 50 })).items);
+  const connections: Connection[] = connectionsResult.ok ? connectionsResult.data : [];
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={`${detail.integration.name} MCP Server`}
-        description={`Configure exposed tools, account credentials, and synchronization for ${detail.integration.namespace}.`}
-        icon={Server}
-      />
-      <McpDetailView initialDetail={detail} />
+      <PageHeader title={detail.integration.name} subtitle={`MCP server · ${detail.integration.namespace}`} />
+      <McpDetailView initialDetail={detail} connections={connections} />
     </div>
   );
 }

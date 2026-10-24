@@ -8,12 +8,13 @@ import { CommandsProvider } from "@/components/farm/commands-provider";
 import { KpiCard } from "@/components/farm/kpi-card";
 import { PageHeader } from "@/components/farm/page-header";
 import { ErrorState } from "@/components/farm/states";
+import { type FarmStatus, MeterBar, StatusChip } from "@/components/kit";
 import { ToneBadge } from "@/components/farm/status";
 import { AI_CLI_INFO, AI_CLIS, type AiCli, commandConcernsPool } from "@/lib/farm/command-meta";
 import { attempt } from "@/lib/farm/data";
 import { fmtCompact, fmtPct, fmtPlanUsd, fmtUsd } from "@/lib/farm/format";
 import { HEALTH_META, poolHref, poolsIndexHref, TONE } from "@/lib/farm/state";
-import type { ProviderKind } from "@/lib/farm/types";
+import type { PoolHealth, ProviderKind } from "@/lib/farm/types";
 
 import { type ListParams, toSearch } from "../_lib/list-params";
 import { AccountsTable } from "./accounts-table";
@@ -23,6 +24,13 @@ import { AddAiAccountDialog } from "./add-ai-account-dialog";
 import { ApiKeyForm } from "./api-key-form";
 import { PoolLive } from "./pool-live";
 import { StrategySelectLazy } from "./strategy-select-lazy";
+
+const AI_HEALTH_STATUS: Record<PoolHealth, FarmStatus> = {
+  healthy: "ready",
+  degraded: "limited",
+  down: "failed",
+  disabled: "waiting-for-you",
+};
 
 function cliFor(providerId: string): AiCli | undefined {
   return AI_CLIS.find((cli) => AI_CLI_INFO[cli].providerId === providerId);
@@ -84,7 +92,21 @@ export async function PoolDetailView({ id, kind, params }: { id: string; kind: P
               executor. {pool.accounts_total} {pool.accounts_total === 1 ? "account" : "accounts"}.
             </>
           }
-          badge={<ToneBadge tone={health.tone}>{health.label}</ToneBadge>}
+          badge={
+            kind === "ai" ? (
+              <StatusChip
+                status={
+                  pool.accounts_needs_login > 0 && pool.accounts_usable === 0
+                    ? "needs-login"
+                    : AI_HEALTH_STATUS[pool.health]
+                }
+                label={health.label}
+                size="sm"
+              />
+            ) : (
+              <ToneBadge tone={health.tone}>{health.label}</ToneBadge>
+            )
+          }
           actions={
             kind === "ai" ? (
               <div className="flex items-center gap-2">
@@ -109,6 +131,16 @@ export async function PoolDetailView({ id, kind, params }: { id: string; kind: P
             value={pool.accounts_usable}
             suffix={`/ ${pool.accounts_total}`}
           >
+            {kind === "ai" && pool.accounts_total > 0 ? (
+              <MeterBar
+                value={pool.accounts_usable}
+                max={pool.accounts_total}
+                mode="category"
+                label="Accounts ready"
+                showValue={false}
+                className="mb-1.5"
+              />
+            ) : null}
             <p className="text-muted-foreground">
               {pool.accounts_paused} paused, {pool.accounts_exhausted} exhausted, {pool.accounts_needs_login} need login
             </p>

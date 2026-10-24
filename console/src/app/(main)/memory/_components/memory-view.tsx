@@ -4,7 +4,6 @@ import { useState } from "react";
 import Link from "next/link";
 
 import {
-  AlertTriangle,
   CheckCircle2,
   Clock,
   Copy,
@@ -20,13 +19,13 @@ import {
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/farm/states";
+import { FilterSelect, MetricCard, StatusChip } from "@/components/kit";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fmtAbsolute } from "@/lib/farm/format";
@@ -83,26 +82,11 @@ export function MemoryView({
   function renderFreshnessBadge(state: FactRow["freshness_state"]) {
     switch (state) {
       case "fresh":
-        return (
-          <Badge className="gap-1 border-emerald-500/30 bg-emerald-500/15 font-medium text-[11px] text-emerald-700 dark:text-emerald-400">
-            <CheckCircle2 className="size-3" />
-            <span>Fresh</span>
-          </Badge>
-        );
+        return <StatusChip size="sm" status="ready" label="Fresh" />;
       case "stale":
-        return (
-          <Badge className="gap-1 border-amber-500/30 bg-amber-500/15 font-medium text-[11px] text-amber-700 dark:text-amber-400">
-            <Clock className="size-3" />
-            <span>Stale</span>
-          </Badge>
-        );
+        return <StatusChip size="sm" status="limited" label="Stale" />;
       case "expired":
-        return (
-          <Badge className="gap-1 border-destructive/30 bg-destructive/15 font-medium text-[11px] text-destructive">
-            <AlertTriangle className="size-3" />
-            <span>Expired</span>
-          </Badge>
-        );
+        return <StatusChip size="sm" status="failed" label="Expired" />;
     }
   }
 
@@ -133,8 +117,28 @@ export function MemoryView({
     );
   }
 
+  const freshCount = initialFacts.filter((f) => f.freshness_state === "fresh").length;
+  const attentionCount = initialFacts.length - freshCount;
+
   return (
     <div className="space-y-6">
+      <section aria-label="Memory overview" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Facts" value={initialFacts.length} icon={<Database className="size-4" />} />
+        <MetricCard
+          label="Fresh facts"
+          value={freshCount}
+          icon={<CheckCircle2 className="size-4" />}
+          comparison={`of ${initialFacts.length} verified`}
+        />
+        <MetricCard
+          label="Stale or expired"
+          value={attentionCount}
+          icon={<Clock className="size-4" />}
+          comparison="need a re-check"
+        />
+        <MetricCard label="Evidence captures" value={initialEvidence.length} icon={<ImageIcon className="size-4" />} />
+      </section>
+
       {/* Top filters bar */}
       <div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
         <div className="relative max-w-md flex-1">
@@ -151,42 +155,27 @@ export function MemoryView({
         <div className="flex items-center gap-2">
           {activeTab === "facts" && (
             <>
-              <Select value={freshnessFilter} onValueChange={setFreshnessFilter}>
-                <SelectTrigger className="h-8 w-[125px] text-xs">
-                  <SelectValue placeholder="Freshness" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all" className="text-xs">
-                    All Freshness
-                  </SelectItem>
-                  <SelectItem value="fresh" className="text-xs">
-                    Fresh
-                  </SelectItem>
-                  <SelectItem value="stale" className="text-xs">
-                    Stale (&gt;30d)
-                  </SelectItem>
-                  <SelectItem value="expired" className="text-xs">
-                    Expired
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Select value={kindFilter} onValueChange={setKindFilter}>
-                <SelectTrigger className="h-8 w-[120px] text-xs">
-                  <SelectValue placeholder="Kind" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all" className="text-xs">
-                    All Kinds
-                  </SelectItem>
-                  <SelectItem value="company" className="text-xs">
-                    Company
-                  </SelectItem>
-                  <SelectItem value="person" className="text-xs">
-                    Person
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <FilterSelect
+                value={freshnessFilter}
+                onChange={setFreshnessFilter}
+                aria-label="Filter by freshness"
+                options={[
+                  { value: "all", label: "All freshness" },
+                  { value: "fresh", label: "Fresh" },
+                  { value: "stale", label: "Stale (>30d)" },
+                  { value: "expired", label: "Expired" },
+                ]}
+              />
+              <FilterSelect
+                value={kindFilter}
+                onChange={setKindFilter}
+                aria-label="Filter by kind"
+                options={[
+                  { value: "all", label: "All kinds" },
+                  { value: "company", label: "Company" },
+                  { value: "person", label: "Person" },
+                ]}
+              />
             </>
           )}
 

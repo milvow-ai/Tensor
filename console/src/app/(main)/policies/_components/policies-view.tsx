@@ -11,18 +11,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { FilterSelect, MeterBar } from "@/components/kit";
 import { submitCommand } from "@/lib/farm/actions";
 import { fmtAbsolute, fmtInt } from "@/lib/farm/format";
 import type { AuditEventRow, BudgetRow, SpendMonthRow } from "@/lib/farm/types";
 
-function getBudgetBarColor(pct: number): string {
-  if (pct >= 90) return "bg-destructive";
-  if (pct >= 75) return "bg-amber-500";
-  return "bg-primary";
-}
+const AUDIT_ACTION_OPTIONS = [
+  { value: "all", label: "All actions" },
+  { value: "set_budget", label: "set_budget" },
+  { value: "set_route", label: "set_route" },
+  { value: "add_connection", label: "add_connection" },
+  { value: "pause_account", label: "pause_account" },
+  { value: "update_strategy", label: "update_strategy" },
+];
 
 export function PoliciesView({
   initialBudgets,
@@ -235,12 +238,7 @@ export function PoliciesView({
             </div>
 
             {/* Progress Bar */}
-            <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-              <div
-                className={`h-full transition-all ${getBudgetBarColor(globalPct)}`}
-                style={{ width: `${globalPct}%` }}
-              />
-            </div>
+            <MeterBar value={globalPct} max={100} mode="threshold" aria-label="Global budget used" />
 
             <div className="flex items-center justify-between border-t pt-1 text-xs">
               <div className="flex items-center gap-2">
@@ -481,31 +479,12 @@ export function PoliciesView({
             </div>
 
             <div className="flex items-center gap-2">
-              <Select value={auditActionFilter} onValueChange={setAuditActionFilter}>
-                <SelectTrigger className="h-8 w-[140px] font-mono text-xs">
-                  <SelectValue placeholder="Action" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all" className="text-xs">
-                    All Actions
-                  </SelectItem>
-                  <SelectItem value="set_budget" className="font-mono text-xs">
-                    set_budget
-                  </SelectItem>
-                  <SelectItem value="set_route" className="font-mono text-xs">
-                    set_route
-                  </SelectItem>
-                  <SelectItem value="add_connection" className="font-mono text-xs">
-                    add_connection
-                  </SelectItem>
-                  <SelectItem value="pause_account" className="font-mono text-xs">
-                    pause_account
-                  </SelectItem>
-                  <SelectItem value="update_strategy" className="font-mono text-xs">
-                    update_strategy
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <FilterSelect
+                value={auditActionFilter}
+                onChange={setAuditActionFilter}
+                options={AUDIT_ACTION_OPTIONS}
+                aria-label="Filter audit log by action"
+              />
 
               <div className="relative w-48 sm:w-60">
                 <Search className="absolute top-2.5 left-2.5 size-3.5 text-muted-foreground" />

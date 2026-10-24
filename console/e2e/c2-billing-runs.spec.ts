@@ -18,9 +18,10 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
   }) => {
     const problems = watchProblems(page, baseURL ?? "");
     await page.goto("/billing");
+    await expect(page).toHaveURL(/\/usage/);
 
     // Header & page structure
-    await expect(page.getByRole("heading", { level: 1, name: "Billing", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Usage & Cost", exact: true })).toBeVisible();
 
     // 1. KPI row & forecast flag
     // In fixtures, spend is $7,500 against $7,000 global budget; forecast is $7,750 > budget.
@@ -39,7 +40,7 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
     await expect(forecastFlag).toContainText("Forecast exceeds monthly budget!");
 
     // Paid & idle accounts KPIs
-    await expect(page.getByText("Paid accounts", { exact: true })).toBeVisible();
+    await expect(page.getByText(/\d+ paid accounts/)).toBeVisible();
     await expect(page.getByText("Idle paid accounts", { exact: true })).toBeVisible();
 
     // 2. Budgets table & inline editing

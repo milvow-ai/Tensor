@@ -12,22 +12,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { FilterSelect, StatusChip } from "@/components/kit";
 import { submitCommand } from "@/lib/farm/actions";
 import { fmtInt } from "@/lib/farm/format";
 import { POOL_STRATEGIES, type PoolStrategy, type RouteRow } from "@/lib/farm/types";
 
-interface AccountPreview {
-  id: string;
-  label: string;
-  status: string;
-  remaining: number | null;
-  unit: string | null;
-  latencyMs: number | null;
-  circuit: string;
-}
+import type { AccountPreview } from "../_lib/load-routing";
 
 export function RoutingView({
   initialRoutes,
@@ -254,12 +246,11 @@ export function RoutingView({
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-sm">{route.provider_name}</span>
-                          <Badge
-                            variant={route.health === "healthy" ? "outline" : "destructive"}
-                            className="text-[10px] capitalize"
-                          >
-                            {route.health}
-                          </Badge>
+                          <StatusChip
+                            size="sm"
+                            status={route.health === "healthy" ? "ready" : "failed"}
+                            label={route.health.charAt(0).toUpperCase() + route.health.slice(1)}
+                          />
                         </div>
                         <p className="text-muted-foreground text-xs">
                           {activeCount} of {accounts.length} accounts usable •{" "}
@@ -366,21 +357,15 @@ export function RoutingView({
                 <Label htmlFor="strategy-select" className="font-medium text-xs">
                   Default Strategy
                 </Label>
-                <Select
+                <FilterSelect
+                  id="strategy-select"
+                  className="w-full"
                   value={currentStrategy}
-                  onValueChange={(val) => setStrategyByCap((prev) => ({ ...prev, [selectedCap]: val as PoolStrategy }))}
-                >
-                  <SelectTrigger id="strategy-select" className="w-full font-mono text-xs">
-                    <SelectValue placeholder="Select strategy" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {POOL_STRATEGIES.map((strat) => (
-                      <SelectItem key={strat} value={strat} className="font-mono text-xs">
-                        {strat}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  onChange={(val) => setStrategyByCap((prev) => ({ ...prev, [selectedCap]: val as PoolStrategy }))}
+                  options={POOL_STRATEGIES.map((strat) => ({ value: strat, label: strat }))}
+                  placeholder="Select strategy"
+                  aria-label="Default strategy"
+                />
                 <p className="text-[11px] text-muted-foreground">
                   How candidate pools and accounts are selected when callers do not specify a strategy.
                 </p>

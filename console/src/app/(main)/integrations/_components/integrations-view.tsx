@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { MeterBar, StatusChip } from "@/components/kit";
 import { ApiKeyForm } from "@/app/(main)/pools/_components/api-key-form";
 import { SignInCard } from "@/app/(main)/pools/_components/sign-in-card";
 import { CopyCommand } from "@/components/farm/copy-command";
@@ -42,7 +43,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { submitCommand } from "@/lib/farm/actions";
 import type { IntegrationSummary } from "@/lib/farm/integrations-data";
 import { looksLikeSecret, SECRET_REFUSAL } from "@/lib/farm/redact";
-import type { ConnectionStatus } from "@/lib/farm/types";
+import type { Connection, ConnectionStatus } from "@/lib/farm/types";
 
 type AddWhat = "mcp" | "ai" | "existing" | "openapi";
 type DialogStep = "what" | "form" | "result";
@@ -53,7 +54,7 @@ function renderIntegrationIcon(kind: string) {
   return <Server className="size-4 text-primary" />;
 }
 
-export function IntegrationsView({ initialIntegrations }: { initialIntegrations: IntegrationSummary[] }) {
+export function IntegrationsView({ initialIntegrations, connections }: { initialIntegrations: IntegrationSummary[]; connections: Connection[] }) {
   const [integrations, setIntegrations] = useState<IntegrationSummary[]>(initialIntegrations);
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState<string>("all");
@@ -681,12 +682,11 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                       </div>
                     </div>
 
-                    <Badge
-                      variant={item.health === "healthy" ? "outline" : "destructive"}
-                      className="shrink-0 text-[10px] capitalize"
-                    >
-                      {item.health}
-                    </Badge>
+                    <StatusChip
+                      status={item.health === "healthy" ? "ready" : item.health === "disabled" ? "limited" : "failed"}
+                      label={item.health === "healthy" ? "Ready" : item.health === "disabled" ? "Disabled" : item.health === "degraded" ? "Degraded" : "Down"}
+                      size="sm"
+                    />
                   </div>
                 </CardHeader>
 
@@ -717,24 +717,37 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                     </span>
                     <div className="space-y-1">
                       {item.accounts.map((acc) => (
+                        (() => {
+                          const connection = connections.find((candidate) => candidate.id === acc.id);
+                          const usage = connection?.units.find((unit) => unit.limit !== null);
+                          const failed = Boolean(connection?.health.lastError);
+                          return (
                         <div
                           key={acc.id}
-                          className="flex items-center justify-between rounded border bg-background px-2 py-1 text-xs"
+                          className="space-y-1.5 rounded border bg-background px-2 py-1.5 text-xs"
                         >
-                          <span className="max-w-[140px] truncate font-medium text-[11px]">{acc.label}</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-[10px] text-muted-foreground">{acc.authRef}</span>
-                            <Badge
-                              variant={acc.status === "active" ? "secondary" : "destructive"}
-                              className="h-4 px-1 text-[9px]"
-                            >
-                              {acc.status}
-                            </Badge>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="max-w-[140px] truncate font-medium text-[11px]">{acc.label}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-[10px] text-muted-foreground">{acc.authRef}</span>
+                              <StatusChip status={acc.status === "active" ? "ready" : acc.status === "needs_login" ? "needs-login" : acc.status === "exhausted" ? "limited" : "waiting-for-you"} label={acc.status.replaceAll("_", " ")} size="sm" />
+                            </div>
                           </div>
+                          {usage ? <MeterBar value={usage.used + usage.reserved} max={usage.limit ?? 1} label={`${usage.unit} used`} showValue caption={`${usage.used + usage.reserved} / ${usage.limit} ${usage.unit}`} /> : connection ? <p className="text-[10px] text-muted-foreground">{connection.callsToday} calls today</p> : null}
+                          {failed && <p className="text-xs text-destructive">{connection?.health.lastError}</p>}
                         </div>
+                          );
+                        })()
                       ))}
                     </div>
                   </div>
+                  <MeterBar
+                    value={item.accounts.filter((account) => account.status === "active").length}
+                    max={item.accounts.length}
+                    label="Active accounts"
+                    showValue
+                    caption={`${item.accounts.filter((account) => account.status === "active").length} of ${item.accounts.length} accounts active`}
+                  />
                 </CardContent>
 
                 {/* Footer Actions */}
