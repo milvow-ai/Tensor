@@ -18,6 +18,15 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
   AcerSystemCentralService (374k), AcerCentralService (284k), MediaTek Bluetooth `mtkbtsvc` (229k) — and the console host the
   Farm was attached to crashed when it could not grow its stack. Fix on the PC: restart those services or reboot. Fix in the
   product: run the Farm without a console (D47). Until then heavy jobs run one at a time.
+- **Drive C: is full** (0.2 GB free of 280 GB; D: has 52 GB free). With no room on C: Windows cannot grow the page file,
+  which is why memory ran out. `scripts/round.ps1` now puts temp files on D: (`D:\dev-cache\tmp`) and saves the full gate
+  output to `D:\dev-cache\runs\<name>\gate-full.txt`. Dev caches still on C: are being moved to D: (owner: "move to D drive").
+- **F1B gate, first try: 118 failed / 2,330 passed** in 29 min, while A3A and S0 ran in parallel and C: was full. A failed
+  test passes alone, so the gate was re-run on its own with temp files on D:.
+- **S0 merged** (`6bb45ea`, docs only + `spikes/acp_client.py`): Claude Code takes a per-run Farm MCP with a tool allow-list
+  (the allowed call ran, a forbidden one was denied) and runs as a warm ACP session (follow-up turn 1.4 s against ~17 s
+  one-shot); Gemini and Codex ACP blocked at login; Hermes connects through a per-run `HERMES_HOME`, its live call needs the
+  provider key in the run's environment; metering fields per runtime recorded. ADR 14 input in `docs/spikes/README.md`.
 - `briefs/CONTEXT.md` §6: builders must never stop, restart or kill a process they did not start (above all the live Farm).
 - `scripts/round.ps1`: `-Foreground` (waits in-process so the lead is notified), `-Main` (defaults to the current branch),
   `-ClaudeConfigDir`; Hermes rounds use GLM-5 through the Bedrock mantle endpoint (owner's direction).
