@@ -27,13 +27,17 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Final, NamedTuple
+from uuid import uuid4
 
 from farm.ai.failures import AiRequestError
 from farm.db.pool import DbPool, tenant_connection
+from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult, Executor
 from farm.resources import health
 
 ASK_AI = "ask_ai"
 UNROUTED_RANK = 1000
+PING: Final[Mapping[str, str]] = {"task": "Respond with only the word PONG", "mode": "answer"}
+"""The tiny call of ``farm ai test`` and of a login re-check."""
 DEFAULT_EFFORTS: Final[Mapping[str, tuple[str, ...]]] = {
     "claude": ("low", "medium", "high", "xhigh", "max"),
     "codex": ("low", "medium", "high"),
@@ -499,3 +503,51 @@ async def list_ai_accounts(pool: DbPool, now: datetime) -> dict[str, Any]:
             }
         )
     return {"ais": ais, "accounts": entries}
+
+
+# --- re-checking an account marked needs_login ------------------------------------------------------------
+
+
+async def recheck_login(
+    pool: DbPool, executor: Executor, account_id: str, *, now: datetime, timeout_s: float = 180.0
+) -> ExecResult:
+    """One tiny call on an account marked ``needs_login``, straight through its executor.
+
+    The router never routes to such an account, so before this only a registry sync brought it back: not
+    ``farm ai login``, and not a state an old classifier set wrongly (codex-01 kept the ``needs_login`` that a
+    misread Codex session error gave it, D4). An answer proves the login: the success is recorded and the
+    account is ``active`` again. A failure is recorded like any other (a login failure keeps ``needs_login``).
+    """
+    async with tenant_connection(pool) as conn:
+        cur = await conn.execute(
+            "select provider_id, auth_ref, meta, concurrency from public.connections where id = %s",
+            (account_id,),
+        )
+        row = await cur.fetchone()
+    if row is None:
+        raise AiRequestError("bad_request", f"account '{account_id}' does not exist", account=account_id)
+    view = ConnectionView(
+        id=account_id, provider_id=row[0], auth_ref=row[1], meta=row[2] or {}, concurrency=row[3] or 1
+    )
+    request = ExecRequest(
+        request_id=uuid4(), capability=ASK_AI, params=dict(PING), connection=view, timeout_s=timeout_s
+    )
+    result = await executor.execute(request)
+    if result.ok:
+        await health.record_success(pool, account_id, now=now)
+        async with tenant_connection(pool) as conn:
+            await conn.execute(
+                "update public.connections set status = 'active' where id = %s and status = 'needs_login'",
+                (account_id,),
+            )
+    else:
+        await health.record_failure(
+            pool,
+            account_id,
+            result.error_kind or ErrorKind.UNKNOWN,
+            result.error,
+            now=now,
+            retry_after_s=result.retry_after_s,
+            reset_at=result.reset_at,
+        )
+    return result

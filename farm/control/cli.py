@@ -6,6 +6,7 @@ import os
 import re
 import sys
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -523,36 +524,64 @@ def ai_test(
     connection: Annotated[str, typer.Argument(help="Connection ID to test, e.g. agy-01, hermes-01.")],
     local: LocalOption = False,
 ) -> None:
-    """Run a tiny test call on an AI connection, then check its models against the ones its CLI accepts."""
-    from farm.resources.router import route
+    """Run a tiny test call on an AI connection (re-checks a needs_login one), then check its models."""
 
-    async def main() -> bool:
+    async def main() -> AiTestReport:
         ctx = await _context(local)
         try:
-            outcome = await route(
-                ctx,
-                "ask_ai",
-                {"task": "Respond with only the word PONG", "mode": "answer"},
-                pin=connection,
-                caller="cli",
-            )
-            models = await _models_check(ctx, connection)
+            return await ai_test_report(ctx, connection)
         finally:
             await ctx.aclose()
 
-        if outcome.ok and outcome.result:
-            text = str(outcome.result.get("text", "")).strip()
-            cost = outcome.cost.usd if outcome.cost else 0.0
-            typer.echo(f"OK: {connection} answered: {text} (cost: ${cost:.6f})")
-        else:
-            err = outcome.error.message if outcome.error else "unknown error"
-            typer.echo(f"FAIL: {connection}: {err}", err=True)
-        if models is not None:
-            typer.echo(models.describe(), err=bool(models.rejected))
-        return bool(outcome.ok and outcome.result) and not (models and models.rejected)
-
-    if not _run_farm(main()):
+    report = _run_farm(main())
+    if report.error is None:
+        again = " (login works: needs_login -> active)" if report.reactivated else ""
+        typer.echo(f"OK: {connection} answered: {report.answer} (cost: ${report.cost_usd:.6f}){again}")
+    else:
+        typer.echo(f"FAIL: {connection}: {report.error}", err=True)
+    if report.models is not None:
+        typer.echo(report.models.describe(), err=bool(report.models.rejected))
+    if not report.ok:
         raise typer.Exit(code=1)
+
+
+@dataclass(frozen=True)
+class AiTestReport:
+    """What ``farm ai test`` found: the answer or the error, a login it brought back, the models check."""
+
+    connection: str
+    answer: str | None
+    error: str | None
+    cost_usd: float = 0.0
+    reactivated: bool = False
+    models: "ModelCheck | None" = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None and not (self.models is not None and self.models.rejected)
+
+
+async def ai_test_report(ctx: "FarmContext", connection: str) -> AiTestReport:
+    """The tiny call through the router, pinned to ``connection``. An account marked ``needs_login`` is
+    re-checked straight through its executor instead (the router never routes to it), and is ``active`` again
+    when it answers. Then the account's models against the ones its CLI accepts."""
+    from farm.ai.accounts import PING, load_accounts, recheck_login
+    from farm.resources.router import route
+
+    accounts = await load_accounts(ctx.pool, ids=[connection])
+    executor = ctx.executors.get("cli_agent")
+    if accounts and accounts[0].status == "needs_login" and executor is not None:
+        result = await recheck_login(ctx.pool, executor, connection, now=ctx.clock())
+        answer = str((result.data or {}).get("text", "")).strip() if result.ok else None
+        error = None if result.ok else (result.error or "unknown error")
+        cost, reactivated = float(result.cost_usd), result.ok
+    else:
+        outcome = await route(ctx, "ask_ai", dict(PING), pin=connection, caller="cli")
+        answered = bool(outcome.ok and outcome.result)
+        answer = str(outcome.result.get("text", "")).strip() if answered and outcome.result else None
+        error = None if answered else (outcome.error.message if outcome.error else "unknown error")
+        cost, reactivated = (outcome.cost.usd if outcome.cost else 0.0), False
+    return AiTestReport(connection, answer, error, cost, reactivated, await _models_check(ctx, connection))
 
 
 async def _models_check(ctx: "FarmContext", connection: str) -> "ModelCheck | None":

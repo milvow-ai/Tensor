@@ -18,4 +18,7 @@ Never put anything from a `.env` file here.
 - `agy/models_list` *live* — `agy models`: one `<id>\t<display name>` line per model on stdout, a progress line on stderr.
 - `agy/not_eligible` — account not eligible for Antigravity (stderr, exit 1).
 - `hermes/auth` — expired provider key: error text on stdout, exit 0, usage file `failed: true`.
+- `hermes/model_unavailable_free` *live* — hermes-01 with `openrouter/qwen/qwen3.8-27b:free` (OpenRouter dropped
+  the free variant): "Provider said: HTTP 404: This model is unavailable for free ...". The text is the run's
+  recorded error (job `ef30a8ce…`, 2026-10-24); exit and usage file as in `hermes/auth`.
 - `codex/rollout_error` — Codex session bookkeeping error on stderr; NOT an auth failure.

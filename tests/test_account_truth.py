@@ -8,6 +8,8 @@
 * D55 a model the CLI rejects is a bad request, not a crash, and leaves the account's health alone; the models
   an account lists are checked against the ones its CLI accepts (agy dropped gemini-3.1-pro-high)
 * D56 ``list_ais`` reports each account once, in a few hundred characters (about 20k per call before)
+* D57 ``farm ai test`` re-checks an account marked ``needs_login`` and brings it back when it answers (codex-01
+  was logged in but kept the ``needs_login`` a misread Codex session error gave it, D4; nothing could clear it)
 """
 
 from __future__ import annotations
@@ -21,10 +23,12 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from farm.ai.accounts import ERROR_CHARS, ModelCheck, load_accounts
+from farm.control.cli import ai_test_report
+from farm.db.pool import tenant_connection
 from farm.executors.base import ConnectionView, ErrorKind
 from farm.executors.cli_agent import CliAgentExecutor
 from farm.executors.cli_agent.agy import parse_models_list
-from farm.executors.cli_agent.classify import classify_agy, classify_claude
+from farm.executors.cli_agent.classify import classify_agy, classify_claude, classify_hermes
 from farm.gateway.guide import format_ai_section
 from farm.resources import health
 from tests.conftest import START
@@ -38,7 +42,7 @@ from tests.test_ai_jobs import (  # noqa: F401
     finish,
     start,
 )
-from tests.test_q0b_classify import load
+from tests.test_q0b_classify import FIX, load
 
 
 def answer(case: tuple[str, str, int]) -> dict[str, Any]:
@@ -57,6 +61,11 @@ def pool_of(report: dict[str, Any], ai: str) -> dict[str, Any]:
 
 def at(stamp: str) -> datetime:
     return datetime.fromisoformat(stamp)
+
+
+async def execute(aip: Aip, sql: str, *args: Any) -> None:
+    async with tenant_connection(aip.pool) as conn:
+        await conn.execute(sql, args)
 
 
 # --- D53 / D55: the classifier tables ---------------------------------------------------------------------------
@@ -86,6 +95,14 @@ def test_agy_rejected_model_is_a_bad_request_stated_once() -> None:
     assert (verdict.ok, verdict.kind) == (False, ErrorKind.BAD_REQUEST)
     assert verdict.message is not None
     assert verdict.message.count("is not recognized as a known model") == 1  # JSON error + stderr: kept once
+
+
+def test_hermes_model_no_longer_free_is_a_bad_request_and_a_bare_404_stays_unknown() -> None:
+    stdout, stderr, code = load("hermes", "model_unavailable_free")
+    usage = json.loads((FIX / "hermes" / "model_unavailable_free.usage.json").read_text(encoding="utf-8"))
+    assert classify_hermes(stdout, stderr, code, usage).kind == ErrorKind.BAD_REQUEST
+    bare = stdout.split("Provider said:")[0] + "Provider said: HTTP 404: Provider returned error"  # live, nemotron
+    assert classify_hermes(bare, "", 0, usage).kind == ErrorKind.UNKNOWN
 
 
 def test_claude_unknown_model_is_a_bad_request() -> None:
@@ -310,3 +327,54 @@ async def test_list_ais_reports_each_account_once_in_a_few_hundred_characters(
     assert "<link>" in message or message.endswith("…")
     sizes = [len(json.dumps(a)) for a in report["accounts"]]  # the one with an error included
     assert max(sizes) <= 560 and len(json.dumps(report)) <= 300 * len(ids) + 220 * len(report["ais"]), sizes
+
+
+# --- D57 / D55: farm ai test re-checks a needs_login account and checks the models -------------------------------
+
+
+async def test_farm_ai_test_rechecks_a_needs_login_account_and_brings_it_back(
+    aip_factory: Callable[..., Awaitable[Aip]],
+) -> None:
+    aip = await aip_factory(claude=1, gemini=1)
+    await execute(aip, "update public.connections set status = 'needs_login' where id = %s", "claude-02")
+    aip.harness.set_response(stdout=claude_ok("PONG"))
+
+    report = await ai_test_report(aip.ctx, "claude-02")  # the router would refuse a needs_login account
+
+    assert (report.ok, report.answer, report.reactivated) == (True, "PONG", True)
+    assert await fetch(aip.pool, "select status from connections where id = %s", "claude-02") == [("active",)]
+    assert report.models is not None and report.models.accepted is None  # claude cannot list its models
+
+
+async def test_farm_ai_test_keeps_needs_login_when_the_login_is_really_gone(
+    aip_factory: Callable[..., Awaitable[Aip]],
+) -> None:
+    aip = await aip_factory(claude=1, gemini=1)
+    await execute(aip, "update public.connections set status = 'needs_login' where id = %s", "claude-02")
+    aip.harness.set_response(**answer(load("claude", "oauth_expired")))
+
+    report = await ai_test_report(aip.ctx, "claude-02")
+
+    assert (report.ok, report.reactivated) == (False, False)
+    assert "OAuth session expired" in (report.error or "")
+    rows = await fetch(
+        aip.pool,
+        "select c.status, h.last_error_kind from connections c join connection_health h "
+        "on h.connection_id = c.id where c.id = %s",
+        "claude-02",
+    )
+    assert rows == [("needs_login", "needs_login")]
+
+
+async def test_farm_ai_test_fails_on_a_model_the_cli_does_not_accept(
+    aip_factory: Callable[..., Awaitable[Aip]],
+) -> None:
+    aip = await aip_factory(claude=1, gemini=1)
+    stale = json.dumps({"models": ["gemini-3.8-flash-high", "gemini-3.1-pro-high"]})
+    await execute(aip, "update public.connections set meta = meta || %s::jsonb where id = %s", stale, "agy-01")
+    aip.harness.set_response(**answer(load("agy", "models_list")))  # the fake answers the PONG and `agy models`
+
+    report = await ai_test_report(aip.ctx, "agy-01")
+
+    assert report.error is None and report.models is not None
+    assert report.models.rejected == ["gemini-3.1-pro-high"] and report.ok is False

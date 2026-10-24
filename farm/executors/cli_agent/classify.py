@@ -100,6 +100,10 @@ _REQUEST: dict[str, tuple[str, ...]] = {
     # agy checks --model against its own list before any call: "invalid model selection (--model "x" ...):
     # model x is not recognized as a known model or custom model in settings" (no tokens used).
     "agy": (r"invalid model selection", r"is not recognized as a known model"),
+    # OpenRouter through Hermes, for a model whose free variant is gone: "Provider said: HTTP 404: This model
+    # is unavailable for free. The paid version is available now ...". A bare "HTTP 404: Provider returned
+    # error" names no cause and stays unknown.
+    "hermes": (r"model is unavailable for free",),
 }
 _COMPILED = {
     cli: (
