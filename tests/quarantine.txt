@@ -3,3 +3,4 @@
 # Every entry has an owner round; that round makes the test deterministic and deletes its line here.
 tests/test_accept_aip2.py::test_stopping_farm_serve_while_a_job_runs_fails_it_as_farm_restart_and_kills_the_worker  # D38: shutdown-order product bug fixed in Q0E; still ~1 in 20 under load (Farm closes during MCP start-up, cause unknown) — owner F2
 tests/test_mcp_passthrough.py::test_a_real_stdio_server_gets_only_its_configured_environment_and_is_stopped_on_close  # D48: waits a fixed 5 s for the stdio child to exit; failed once in the full suite under memory pressure, passes 3/3 alone — owner F3 (process lifecycle)
+tests/test_q0d_routing.py::test_a_waiter_that_comes_too_late_for_the_grace_period_does_not_join  # D52: fixed 0.2 s sleep before the fake clock jumps; failed once in the SERVER1 gate under load, 10/10 alone — owner F2
