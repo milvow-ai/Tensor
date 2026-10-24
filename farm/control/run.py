@@ -21,12 +21,15 @@ import hmac
 import secrets
 import signal
 import time
+from collections.abc import Sequence
 from contextvars import ContextVar
 from typing import Any
+from uuid import UUID
 
 import mcp_types as mt
 import structlog
 import uvicorn
+from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.middleware.middleware import CallNext
 from fastmcp.tools import ToolResult
@@ -38,11 +41,13 @@ from farm.context import FarmContext, build_context
 from farm.control.commands import CommandConsumer
 from farm.control.heartbeat import HeartbeatWriter
 from farm.control.keepawake import disable_keepawake, enable_keepawake
-from farm.db.pool import DbPool, get_db_url
+from farm.db.pool import DbPool, get_db_url, system_connection, tenant_connection
 from farm.executors.mcp.client import McpExecutor
 from farm.gateway.ai_tools import register_ai_tools
 from farm.gateway.middleware import (
+    IDENTITY_SCOPE_KEY,
     AuthMiddleware,
+    TenantMiddleware,
     TrajectoryMiddleware,
     _client_name,
     caller_from_client_name,
@@ -53,6 +58,8 @@ from farm.manager.scheduler import ManagerScheduler
 from farm.mcp.store import DbDirectory
 from farm.mcp.sync import sync_all
 from farm.settings import data_dir, http_host, http_path, http_port
+from farm.tenancy import MILVOW_TENANT_ID, TokenIdentity, current_tenant, use_tenant
+from farm.tenancy.active import for_each_tenant
 
 log = structlog.get_logger(__name__)
 
@@ -61,21 +68,9 @@ authenticated_client_name: ContextVar[str | None] = ContextVar("farm_authenticat
 
 # --- Token Management in Database -------------------------------------------------------------------------
 
-
-async def ensure_tokens_table(pool: DbPool) -> None:
-    """Ensure public.client_tokens exists in the database."""
-    async with pool.connection() as conn:
-        await conn.execute(
-            """
-            create table if not exists public.client_tokens (
-                token_hash text primary key,
-                client_name text not null,
-                created_at timestamptz not null default now(),
-                last_used timestamptz
-            );
-            alter table public.client_tokens enable row level security;
-            """
-        )
+TOKEN_PREFIX = "hf_"
+PREFIX_CHARS = 8
+"""Leading characters of a token kept in clear (``api_tokens.token_prefix``) to tell tokens apart."""
 
 
 def hash_token(raw_token: str) -> str:
@@ -83,59 +78,63 @@ def hash_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.strip().encode()).hexdigest()
 
 
-async def create_token(pool: DbPool, client_name: str) -> str:
-    """Generate a new random token, store its hash in the DB, and return the raw token.
+async def create_token(
+    pool: DbPool,
+    client_name: str,
+    *,
+    user_id: UUID | None = None,
+    scopes: Sequence[str] = ("*",),
+) -> str:
+    """Generate a new random token for the current tenant, store its hash, and return the raw token.
 
     The raw token is returned once and must never be stored or logged.
     """
-    await ensure_tokens_table(pool)
-    raw_token = f"farm_{secrets.token_urlsafe(32)}"
-    tok_hash = hash_token(raw_token)
-
-    async with pool.connection() as conn:
+    raw_token = f"{TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
+    async with tenant_connection(pool) as conn:
         await conn.execute(
             """
-            insert into public.client_tokens (token_hash, client_name, created_at)
-            values (%s, %s, now())
+            insert into public.api_tokens (user_id, name, token_prefix, token_hash, scopes)
+            values (%s, %s, %s, %s, %s)
             """,
-            (tok_hash, client_name.strip()),
+            (user_id, client_name.strip(), raw_token[:PREFIX_CHARS], hash_token(raw_token), list(scopes)),
         )
     log.info("token.created", client=client_name.strip())
     return raw_token
 
 
 async def list_tokens(pool: DbPool) -> list[dict[str, Any]]:
-    """List all registered client tokens without exposing secrets."""
-    await ensure_tokens_table(pool)
-    async with pool.connection() as conn:
+    """List the current tenant's live API tokens without exposing secrets."""
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             """
-            select client_name, token_hash, created_at, last_used
-            from public.client_tokens
+            select name, token_hash, created_at, last_used_at, token_prefix, scopes
+            from public.api_tokens
+            where revoked_at is null
             order by created_at desc
             """
         )
         rows = await cur.fetchall()
-        return [
-            {
-                "client_name": row[0],
-                "token_hash": row[1],
-                "created_at": row[2],
-                "last_used": row[3],
-            }
-            for row in rows
-        ]
+    return [
+        {
+            "client_name": row[0],
+            "token_hash": row[1],
+            "created_at": row[2],
+            "last_used": row[3],
+            "token_prefix": row[4],
+            "scopes": list(row[5]),
+        }
+        for row in rows
+    ]
 
 
 async def revoke_token(pool: DbPool, identifier: str) -> bool:
-    """Revoke a token by client name or token hash."""
-    await ensure_tokens_table(pool)
+    """Revoke the current tenant's tokens by client name or token hash."""
     ident = identifier.strip()
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             """
-            delete from public.client_tokens
-            where client_name = %s or token_hash = %s
+            update public.api_tokens set revoked_at = now()
+            where revoked_at is null and (name = %s or token_hash = %s)
             """,
             (ident, ident),
         )
@@ -145,37 +144,45 @@ async def revoke_token(pool: DbPool, identifier: str) -> bool:
     return revoked
 
 
-async def verify_token(pool: DbPool, raw_token: str) -> str | None:
-    """Validate raw_token using constant-time hash comparison and return client_name."""
-    await ensure_tokens_table(pool)
+async def verify_token(pool: DbPool, raw_token: str) -> TokenIdentity | None:
+    """Resolve a raw token to the tenant, user and scopes it acts for (None: unknown, revoked, suspended).
+
+    This runs before any tenant is known, so it is one of the few cross-tenant reads (``system_connection``).
+    The stored hash is compared in constant time.
+    """
     tok = raw_token.strip()
     if not tok:
         return None
     incoming_hash = hash_token(tok)
 
-    async with pool.connection() as conn:
-        cur = await conn.execute("select token_hash, client_name from public.client_tokens")
-        rows = await cur.fetchall()
-
-        matched_client: str | None = None
-        matched_hash: str | None = None
-        for row_hash, client_name in rows:
-            if hmac.compare_digest(row_hash.encode(), incoming_hash.encode()):
-                matched_client = str(client_name)
-                matched_hash = str(row_hash)
-                break
-
-        if matched_client is not None and matched_hash is not None:
-            await conn.execute(
-                "update public.client_tokens set last_used = now() where token_hash = %s",
-                (matched_hash,),
-            )
-            return matched_client
-
-    return None
+    async with system_connection(pool) as conn:
+        cur = await conn.execute(
+            """
+            select a.id, a.tenant_id, a.user_id, a.name, a.scopes, a.token_hash
+            from public.api_tokens a join public.tenants t on t.id = a.tenant_id
+            where a.token_hash = %s and a.revoked_at is null and t.status = 'active'
+            """,
+            (incoming_hash,),
+        )
+        row = await cur.fetchone()
+        if row is None or not hmac.compare_digest(str(row[5]).encode(), incoming_hash.encode()):
+            return None
+        await conn.execute("update public.api_tokens set last_used_at = now() where id = %s", (row[0],))
+    return TokenIdentity(
+        token_id=row[0], tenant_id=row[1], user_id=row[2], name=str(row[3]), scopes=tuple(row[4])
+    )
 
 
 # --- Custom Middlewares -----------------------------------------------------------------------------------
+
+
+def _request_identity_name() -> str | None:
+    """The client name of the token behind the MCP request being handled (per request, not per session)."""
+    try:
+        identity = get_http_request().scope.get(IDENTITY_SCOPE_KEY)
+    except RuntimeError:
+        return None
+    return identity.name if isinstance(identity, TokenIdentity) else None
 
 
 class TokenTrajectoryMiddleware(Middleware):
@@ -186,7 +193,7 @@ class TokenTrajectoryMiddleware(Middleware):
         context: MiddlewareContext[mt.CallToolRequestParams],
         call_next: CallNext[mt.CallToolRequestParams, ToolResult],
     ) -> ToolResult:
-        client = authenticated_client_name.get()
+        client = _request_identity_name() or authenticated_client_name.get()
         caller = client or caller_from_client_name(_client_name(context))
         tok = current_caller.set(caller)
         started = time.monotonic()
@@ -230,11 +237,11 @@ class FarmAuthMiddleware:
         headers = dict(scope.get("headers", []))
         auth_header = headers.get(b"authorization", b"").decode("latin1").strip()
         scheme, _, token_val = auth_header.partition(" ")
-        client_name: str | None = None
+        identity: TokenIdentity | None = None
         if scheme.lower() == "bearer" and token_val:
-            client_name = await verify_token(self.pool, token_val.strip())
+            identity = await verify_token(self.pool, token_val.strip())
 
-        if client_name is None:
+        if identity is None:
             log.warning("gateway.auth_refused", path=path)
             unauth_resp = Response(
                 content="Unauthorized: valid bearer token required\n",
@@ -245,9 +252,11 @@ class FarmAuthMiddleware:
             await unauth_resp(scope, receive, send)
             return
 
-        tok = authenticated_client_name.set(client_name)
+        scope[IDENTITY_SCOPE_KEY] = identity  # read per MCP request by TenantMiddleware
+        tok = authenticated_client_name.set(identity.name)
         try:
-            await self.app(scope, receive, send)
+            with use_tenant(identity.tenant_id, identity.user_id):
+                await self.app(scope, receive, send)
         finally:
             authenticated_client_name.reset(tok)
 
@@ -261,12 +270,14 @@ async def refresh_mcp_catalogue(ctx: FarmContext) -> None:
     if not isinstance(executor, McpExecutor):
         return
     try:
-        results = await sync_all(ctx.pool, executor)
-        log.info(
-            "mcp.refreshed",
-            providers=len(results),
-            failed=[r.provider for r in results if not r.ok],
-        )
+        # The catalogue is per tenant: refresh it for each active tenant.
+        refreshed = await for_each_tenant(ctx.pool, lambda: sync_all(ctx.pool, executor), task="mcp_refresh")
+        for results in refreshed:
+            log.info(
+                "mcp.refreshed",
+                providers=len(results),
+                failed=[r.provider for r in results if not r.ok],
+            )
     except Exception as exc:
         log.error("mcp.refresh_failed", error=type(exc).__name__)
 
@@ -292,6 +303,7 @@ async def create_farm_app(
     server.middleware = [
         m for m in server.middleware if not isinstance(m, (AuthMiddleware, TrajectoryMiddleware))
     ]
+    server.middleware.insert(0, TenantMiddleware())
     server.middleware.append(TokenTrajectoryMiddleware())
 
     # Wire JobManager to AI tools if provided
@@ -323,11 +335,15 @@ async def run_farm(
     ctx = await build_context(get_db_url(force_local=True) if local else None)
     ctx.executors.setdefault("mcp", McpExecutor(directory=DbDirectory(ctx.pool)))
 
-    await ensure_tokens_table(ctx.pool)
+    # The HTTP process has no ambient tenant: each request, job, command and maintenance pass sets its own.
+    current_tenant.set(None)
     enable_keepawake(away_mode=True, data_directory=data_dir())
 
     job_manager = JobManager(ctx)
-    app = await create_farm_app(ctx, job_manager=job_manager, path=target_path)
+    # One tool surface per process until the per-tenant catalogue (A1, D51): it is built from tenant #1's MCP
+    # providers. Calls through it still run for the caller's tenant (TenantMiddleware sets it per request).
+    with use_tenant(MILVOW_TENANT_ID):
+        app = await create_farm_app(ctx, job_manager=job_manager, path=target_path)
 
     heartbeat_writer = HeartbeatWriter(
         component="command_consumer",

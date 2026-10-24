@@ -82,8 +82,18 @@ the roles above are the same code started with different entry points (`farm api
 Rules:
 - **`workspace_id` becomes `tenant_id`** (rename or alias in one migration, expand/contract). Every tenant-owned table has it
   `NOT NULL`, with no default, as the first column of its main indexes. Platform tables (plans, cells, migrations) do not.
-- **Tenant context** is resolved once per request from the token and passed explicitly through gateway → router → executors →
-  repositories. A repository function without a tenant context does not compile (typed parameter, no global).
+- **Tenant context** is resolved once per request from the token at the entry point (gateway auth, job runner, command
+  consumer, scheduler loop) and carried in a `ContextVar`. *(Revised 2026-10-24, lead: threading a typed parameter through
+  ~25k lines is weeks of churn for no extra safety.)* Safety comes from three fail-closed layers instead:
+  1. the database checkout (`tenant_connection()`) **refuses** to hand out a connection when no tenant is set, and sets
+     `app.tenant_id` on it (reset on return);
+  2. every tenant-owned column defaults to `current_setting('app.tenant_id', true)::uuid` — an insert without a tenant fails
+     the NOT NULL constraint instead of landing in another tenant;
+  3. RLS policies `USING / WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid)` for the runtime role.
+  Cross-tenant maintenance (expiring reservations, sweeps, reactivation) runs as a separate `farm_system` role with
+  `BYPASSRLS`, only inside functions explicitly marked as platform maintenance.
+- **Views** read by the Console are `security_invoker = on`, so RLS applies to the person reading them (a view owned by the
+  migration role would otherwise bypass RLS and show every tenant).
 - **Database roles** **[change]**: today the Farm connects as the database owner and bypasses RLS. Target: `farm_admin`
   (migrations only) and `farm_app` (runtime, RLS enforced). Every transaction runs `SET LOCAL app.tenant_id = …`; RLS policies
   compare against it. Console users reach rows through RLS on their memberships.

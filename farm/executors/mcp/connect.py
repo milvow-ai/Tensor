@@ -16,9 +16,14 @@ child process or the request headers and are registered for redaction by ``resol
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
+import sys
+import time
+import uuid
+from collections import deque
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -57,13 +62,13 @@ from mcp.client.auth.utils import (
     issuers_match,
     validate_metadata_issuer,
 )
-from mcp.shared.auth import OAuthMetadata, ProtectedResourceMetadata
+from mcp.shared.auth import OAuthMetadata, OAuthToken, ProtectedResourceMetadata
 from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
 
 from farm import __version__
 from farm.executors.base import ConnectionView, ErrorKind
 from farm.registry.models import McpConnectionOverride, McpProviderSpec
-from farm.secrets import AuthRefError, redact, resolve_auth
+from farm.secrets import AuthRefError, redact, register_secret, resolve_auth
 
 logger = structlog.get_logger(__name__)
 
@@ -231,18 +236,85 @@ def single_client_auth(prepare: PrepareTokenAuth) -> PrepareTokenAuth:
     return prepare_token_auth
 
 
+REFRESH_LOCK_TIMEOUT_S = 90.0
+"""How long a refresh waits for another process's refresh (a token request itself times out well before)."""
+
+if sys.platform == "win32":
+    import msvcrt
+
+    def _try_lock(fd: int) -> bool:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+
+    def _unlock(fd: int) -> None:
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+else:
+    import fcntl
+
+    def _try_lock(fd: int) -> bool:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        return True
+
+    def _unlock(fd: int) -> None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextlib.asynccontextmanager
+async def process_lock(path: Path, *, timeout_s: float = REFRESH_LOCK_TIMEOUT_S) -> AsyncIterator[None]:
+    """An exclusive lock on ``path`` that holds across processes (and across holders inside one process).
+
+    The operating system drops it when its holder dies, so a crashed refresh never wedges the account.
+    Waiting polls, so a cancelled call gives up at once.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT)
+    try:
+        deadline = time.monotonic() + timeout_s
+        while not _try_lock(fd):
+            if time.monotonic() >= deadline:
+                raise McpFailure(ErrorKind.TIMEOUT, "another process held the token refresh for too long")
+            await asyncio.sleep(0.05)
+        try:
+            yield
+        finally:
+            _unlock(fd)
+    finally:
+        os.close(fd)
+
+
+def _register_token(token: OAuthToken) -> None:
+    """Let ``redact`` mask the account's tokens (a tool that echoes its credentials must not leak them)."""
+    register_secret(token.access_token)
+    if token.refresh_token:
+        register_secret(token.refresh_token)
+
+
 class FarmOAuth(OAuth):
     """OAuth provider that persists metadata, refreshes via the server's real token endpoint,
-    and classifies refresh failures into transient vs needs_login."""
+    and classifies refresh failures into transient vs needs_login.
+
+    A refresh is serialised across processes on ``refresh_lock`` (``farm run``, ``farm mcp sync`` and the
+    command consumer share one token store), and what another process stored wins over a failed refresh.
+    """
 
     def __init__(
         self,
         mcp_url: str | None = None,
         *args: Any,
         connection_id: str | None = None,
+        refresh_lock: Path | None = None,
         **kwargs: Any,
     ) -> None:
         self._connection_id = connection_id or ""
+        self._refresh_lock = refresh_lock
         super().__init__(mcp_url, *args, **kwargs)
         if (
             not self._connection_id
@@ -264,7 +336,15 @@ class FarmOAuth(OAuth):
         self.context.prepare_token_auth = single_client_auth(self.context.prepare_token_auth)  # type: ignore[method-assign, assignment]
 
     async def _initialize(self) -> None:
+        # Read the store under the refresh lock: on Windows a read can collide with another process replacing
+        # the file it reads, and a refresh in progress is about to replace it.
+        async with self._refresh_guard():
+            await self._load_stored_state()
+
+    async def _load_stored_state(self) -> None:
         await super()._initialize()
+        if self.context.current_tokens is not None:
+            _register_token(self.context.current_tokens)
         if self.context.oauth_metadata is None and isinstance(
             self.token_storage_adapter, FarmTokenStorageAdapter
         ):
@@ -305,6 +385,26 @@ class FarmOAuth(OAuth):
             if self.context.protected_resource_metadata is not None:
                 await self.token_storage_adapter.set_prm(self.context.protected_resource_metadata)
 
+    async def _reload_stored_tokens(self) -> OAuthToken | None:
+        """Make the stored tokens (maybe refreshed by another process) the current ones."""
+        adapter = self.token_storage_adapter
+        stored = await adapter.get_tokens()
+        if stored is None:
+            return None
+        self.context.current_tokens = stored
+        _register_token(stored)
+        expiry = await adapter.get_token_expiry() if isinstance(adapter, TokenStorageAdapter) else None
+        if expiry is not None:
+            self.context.token_expiry_time = expiry
+        else:
+            self.context.update_token_expiry(stored)
+        return stored
+
+    def _refresh_guard(self) -> contextlib.AbstractAsyncContextManager[None]:
+        if self._refresh_lock is None:
+            return contextlib.nullcontext()
+        return process_lock(self._refresh_lock)
+
     async def _handle_refresh_response(self, response: httpx2.Response) -> bool:
         token_url = self._get_token_endpoint()
         token_host = urlparse(token_url).netloc
@@ -335,6 +435,16 @@ class FarmOAuth(OAuth):
                 is_invalid_grant = True
 
         if is_invalid_grant:
+            sent = self.context.current_tokens.refresh_token if self.context.current_tokens else None
+            stored = await self.token_storage_adapter.get_tokens()
+            if stored is not None and stored.refresh_token != sent:
+                # Lost a race: another process refreshed first and stored its (rotated) tokens. Use them;
+                # clearing the store would delete the winner's fresh tokens.
+                await self._reload_stored_tokens()
+                logger.info(
+                    "mcp.oauth_refresh_lost_race", connection=self._connection_id, token_host=token_host
+                )
+                return self.context.is_token_valid()
             logger.warning(
                 "mcp.oauth_refresh_failed",
                 connection=self._connection_id,
@@ -361,6 +471,69 @@ class FarmOAuth(OAuth):
             f"token refresh failed (HTTP {response.status_code}) at {redact(token_url)}",
         )
 
+    async def _refresh_expired_token(self) -> None:
+        """Refresh the access token. Under the cross-process lock the store is read first: a refresh another
+        process has just made is used as it is, and only a token that is still expired is refreshed."""
+        async with self._refresh_guard():
+            if await self._reload_stored_tokens() is None:
+                raise LoginRequired("this account has no usable OAuth token; log it in with `farm mcp login`")
+            if self.context.is_token_valid():
+                return
+            if self.context.oauth_metadata is None:
+                try:
+                    asm = await self.discover_metadata()
+                except (httpx2.TransportError, httpx2.TimeoutException, OSError) as exc:
+                    server_url = self.context.server_url or self.mcp_url
+                    token_host = urlparse(server_url).netloc
+                    logger.warning(
+                        "mcp.oauth_refresh_failed",
+                        connection=self._connection_id,
+                        status=None,
+                        token_host=token_host,
+                        token_url=redact(server_url),
+                    )
+                    raise McpFailure(
+                        ErrorKind.SERVER,
+                        f"OAuth metadata discovery failed (network error: {exc}) at {redact(server_url)}",
+                    ) from exc
+
+                if asm is None:
+                    server_url = self.context.server_url or self.mcp_url
+                    token_host = urlparse(server_url).netloc
+                    logger.warning(
+                        "mcp.oauth_refresh_failed",
+                        connection=self._connection_id,
+                        status=404,
+                        token_host=token_host,
+                        token_url=redact(server_url),
+                    )
+                    raise McpFailure(
+                        ErrorKind.SERVER,
+                        f"OAuth metadata discovery failed at {redact(server_url)}",
+                    )
+
+            refresh_request = await self._refresh_token()
+            token_url = str(refresh_request.url)
+            token_host = urlparse(token_url).netloc
+            try:
+                async with self.httpx_client_factory() as refresh_client:
+                    refresh_response = await refresh_client.send(refresh_request)
+            except (httpx2.TransportError, httpx2.TimeoutException, OSError) as exc:
+                logger.warning(
+                    "mcp.oauth_refresh_failed",
+                    connection=self._connection_id,
+                    status=None,
+                    token_host=token_host,
+                    token_url=redact(token_url),
+                )
+                raise McpFailure(
+                    ErrorKind.SERVER,
+                    f"token refresh failed (network error: {exc}) at {redact(token_url)}",
+                ) from exc
+
+            if not await self._handle_refresh_response(refresh_response):
+                self._initialized = False
+
     async def _auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         async with self.context.lock:
             if not self._initialized:
@@ -384,60 +557,7 @@ class FarmOAuth(OAuth):
             self.context.protocol_version = request.headers.get(MCP_PROTOCOL_VERSION_HEADER)
 
             if not self.context.is_token_valid():
-                if self.context.oauth_metadata is None:
-                    try:
-                        asm = await self.discover_metadata()
-                    except (httpx2.TransportError, httpx2.TimeoutException, OSError) as exc:
-                        server_url = self.context.server_url or self.mcp_url
-                        token_host = urlparse(server_url).netloc
-                        logger.warning(
-                            "mcp.oauth_refresh_failed",
-                            connection=self._connection_id,
-                            status=None,
-                            token_host=token_host,
-                            token_url=redact(server_url),
-                        )
-                        raise McpFailure(
-                            ErrorKind.SERVER,
-                            f"OAuth metadata discovery failed (network error: {exc}) at {redact(server_url)}",
-                        ) from exc
-
-                    if asm is None:
-                        server_url = self.context.server_url or self.mcp_url
-                        token_host = urlparse(server_url).netloc
-                        logger.warning(
-                            "mcp.oauth_refresh_failed",
-                            connection=self._connection_id,
-                            status=404,
-                            token_host=token_host,
-                            token_url=redact(server_url),
-                        )
-                        raise McpFailure(
-                            ErrorKind.SERVER,
-                            f"OAuth metadata discovery failed at {redact(server_url)}",
-                        )
-
-                refresh_request = await self._refresh_token()
-                token_url = str(refresh_request.url)
-                token_host = urlparse(token_url).netloc
-                try:
-                    async with self.httpx_client_factory() as refresh_client:
-                        refresh_response = await refresh_client.send(refresh_request)
-                except (httpx2.TransportError, httpx2.TimeoutException, OSError) as exc:
-                    logger.warning(
-                        "mcp.oauth_refresh_failed",
-                        connection=self._connection_id,
-                        status=None,
-                        token_host=token_host,
-                        token_url=redact(token_url),
-                    )
-                    raise McpFailure(
-                        ErrorKind.SERVER,
-                        f"token refresh failed (network error: {exc}) at {redact(token_url)}",
-                    ) from exc
-
-                if not await self._handle_refresh_response(refresh_response):
-                    self._initialized = False
+                await self._refresh_expired_token()
 
             if self.context.is_token_valid():
                 self._add_auth_header(request)
@@ -497,25 +617,88 @@ def retry_after_s(response: httpx2.Response) -> float | None:
     return max(0.0, (when - datetime.now(UTC)).total_seconds())
 
 
+CALL_META_KEY = "farm/call"
+"""``_meta`` key under which a call carries its own token, to tell the answer to *that* request apart."""
+
+SESSION_EVIDENCE_KEPT = 16
+
+
+def _call_token(request: httpx2.Request) -> str | None:
+    """The call token a JSON-RPC request carries in ``params._meta`` (none for ``initialize``, say)."""
+    try:
+        body = json.loads(request.content)
+    except (httpx2.RequestNotRead, ValueError):
+        return None
+    messages = body if isinstance(body, list) else [body]
+    for message in messages:
+        params = message.get("params") if isinstance(message, dict) else None
+        meta = params.get("_meta") if isinstance(params, dict) else None
+        token = meta.get(CALL_META_KEY) if isinstance(meta, dict) else None
+        if isinstance(token, str):
+            return token
+    return None
+
+
+class CallTap:
+    """The HTTP error evidence of one call. Concurrent calls on one connection never see each other's."""
+
+    def __init__(self, tap: HttpStatusTap) -> None:
+        self._tap = tap
+        self.token = uuid.uuid4().hex
+        self._started = time.monotonic()
+
+    @property
+    def meta(self) -> dict[str, str]:
+        """Pass as the request's ``meta``: the answer to this request is then recorded under this call."""
+        return {CALL_META_KEY: self.token}
+
+    def failure(self) -> HttpFailure | None:
+        """The error answer to this call's own request, else a session-level one (``initialize``, a listing)
+        that arrived while the call was running. The latter is read, never taken: it belongs to every call
+        on the session."""
+        own = self._tap.calls.pop(self.token, None)
+        if own is not None:
+            return own
+        for at, failure in reversed(self._tap.session):
+            if at >= self._started:
+                return failure
+        return None
+
+    def end(self) -> None:
+        self._tap.calls.pop(self.token, None)
+
+
 class HttpStatusTap:
-    """Remembers the last HTTP error answer to a JSON-RPC request of an http / sse transport.
+    """Remembers the HTTP error answers to the JSON-RPC requests of an http / sse transport.
 
     The MCP SDK reduces every HTTP error answer to the same JSON-RPC error ("Server returned an error
     response"), so the status that tells the router what to do (401: log in again, 402: out of quota, 429:
-    wait, 5xx: the server is failing) is read off the wire here, with an httpx response hook.
+    wait, 5xx: the server is failing) is read off the wire here, with an httpx response hook. A call that
+    sends :attr:`CallTap.meta` gets the answer to its own request, whatever else runs on the connection.
     """
 
     def __init__(self) -> None:
+        self.calls: dict[str, HttpFailure] = {}
+        self.session: deque[tuple[float, HttpFailure]] = deque(maxlen=SESSION_EVIDENCE_KEPT)
         self._last: HttpFailure | None = None
 
     async def _record(self, response: httpx2.Response) -> None:
-        if response.status_code >= 400 and response.request.method == "POST":
-            self._last = HttpFailure(response.status_code, retry_after_s(response))
+        if response.status_code < 400 or response.request.method != "POST":
+            return
+        failure = HttpFailure(response.status_code, retry_after_s(response))
+        self._last = failure
+        token = _call_token(response.request)
+        if token is not None:
+            self.calls[token] = failure
+        else:
+            self.session.append((time.monotonic(), failure))
 
-    def clear(self) -> None:
-        self._last = None
+    def begin(self) -> CallTap:
+        """Start the evidence of one call (``end()`` it when the call is over)."""
+        return CallTap(self)
 
     def take(self) -> HttpFailure | None:
+        """The latest error answer of the connection, once (for a listing that is the only user)."""
         last, self._last = self._last, None
         return last
 
@@ -590,11 +773,13 @@ def build_transport(
     spec: McpProviderSpec,
     *,
     token_storage: Callable[[], AsyncKeyValue],
+    refresh_lock: Path | None = None,
     interactive: bool = False,
 ) -> ClientTransport:
     """The transport that reaches ``spec`` as ``connection``: provider block + the connection's overrides.
 
     ``interactive`` (``farm mcp login`` only) lets OAuth open the browser; a serving Farm never does.
+    ``refresh_lock`` is the file that serialises token refreshes of this account across processes.
     """
     override = McpConnectionOverride.model_validate(connection.meta.get("mcp") or {})
     if spec.transport == "stdio":
@@ -628,6 +813,7 @@ def build_transport(
             token_storage=token_storage(),
             client_name=f"Harness Farm ({connection.id})",
             connection_id=connection.id,
+            refresh_lock=refresh_lock,
         )
     return RemoteMCPServer(url=url, transport=spec.transport, headers=headers, auth=auth).to_transport()
 

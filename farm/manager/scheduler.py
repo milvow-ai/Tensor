@@ -9,18 +9,25 @@ Runs background tasks (or single maintenance ticks):
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import structlog
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.manager.balance import sync_all_balances
 from farm.manager.budgets import check_budget_thresholds
 from farm.manager.renewals import check_renewal_reminders
 from farm.resources import ledger
+from farm.tenancy.active import for_each_tenant
 
 log = structlog.get_logger(__name__)
+
+
+async def _everywhere[T](pool: DbPool, work: Callable[[], Awaitable[list[T]]], task: str) -> list[T]:
+    """``work`` for every active tenant, the results joined."""
+    return [item for found in await for_each_tenant(pool, work, task=task) for item in found]
 
 
 async def reactivate_due_connections(
@@ -29,23 +36,28 @@ async def reactivate_due_connections(
 ) -> list[str]:
     """Auto-resume exhausted connections whose reset time has arrived.
 
-    Checks connections with status='exhausted'. If next_reset_at <= now, or the quota period
-    has rolled over and new period capacity is available, resumes to status='active'.
+    An account is never resumed while its ``cooldown_until`` (what the provider said, or the next period
+    start) is in the future. Past that, it resumes when a unit's ``next_reset_at`` has come, or its quota
+    period has rolled over since the unit was last full. A resumed connection loses the ``next_reset_at``
+    values that came due: the window has reset, and a stale date must not undo the next exhaustion.
     """
     current = now or datetime.now(UTC)
     reactivated: list[str] = []
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
-            "select id, plan from public.connections where status = 'exhausted'"
+            "select c.id, h.cooldown_until from public.connections c "
+            "left join public.connection_health h on h.connection_id = c.id "
+            "where c.status = 'exhausted'"
         )
         exhausted = await cur.fetchall()
 
-    for row in exhausted:
-        conn_id = row[0]
+    for conn_id, cooldown_until in exhausted:
+        if cooldown_until is not None and cooldown_until > current:
+            continue
         should_resume = False
 
-        async with pool.connection() as conn:
+        async with tenant_connection(pool) as conn:
             cur_cu = await conn.execute(
                 "select unit, limit_value, period, reset_anchor, next_reset_at "
                 "from public.consumption_units where connection_id = %s",
@@ -83,10 +95,18 @@ async def reactivate_due_connections(
         if should_resume:
             from psycopg.types.json import Jsonb
 
-            async with pool.connection() as conn:
-                await conn.execute(
-                    "update public.connections set status = 'active' where id = %s and status = 'exhausted'",
+            async with tenant_connection(pool) as conn, conn.transaction():
+                cur_up = await conn.execute(
+                    "update public.connections set status = 'active' where id = %s and status = 'exhausted' "
+                    "returning id",
                     (conn_id,),
+                )
+                if await cur_up.fetchone() is None:
+                    continue
+                await conn.execute(
+                    "update public.consumption_units set next_reset_at = null "
+                    "where connection_id = %s and next_reset_at is not null and next_reset_at <= %s",
+                    (conn_id, current),
                 )
                 await conn.execute(
                     "insert into public.audit_events (actor, action, target, before, after) "
@@ -117,19 +137,22 @@ async def run_maintenance_tick(
     # 1. Expire reservations
     expired = await ledger.expire(pool)
 
+    # The rest is tenant work: it runs once for every active tenant, inside that tenant's context.
     # 2. Reactivate due connections
-    reactivated = await reactivate_due_connections(pool, current)
+    reactivated = await _everywhere(pool, lambda: reactivate_due_connections(pool, current), "reactivate")
 
     # 3. Budget thresholds
-    budget_alerts = await check_budget_thresholds(pool, current)
+    budget_alerts = await _everywhere(pool, lambda: check_budget_thresholds(pool, current), "budgets")
 
     # 4. Renewal reminders
-    renewal_alerts = await check_renewal_reminders(pool, current)
+    renewal_alerts = await _everywhere(pool, lambda: check_renewal_reminders(pool, current), "renewals")
 
     # 5. Balances (optional)
-    balance_syncs = {}
+    balance_syncs: dict[str, list[dict[str, Any]]] = {}
     if sync_balances:
-        balance_syncs = await sync_all_balances(pool)
+        for synced in await for_each_tenant(pool, lambda: sync_all_balances(pool), task="balances"):
+            for provider, entries in synced.items():
+                balance_syncs.setdefault(provider, []).extend(entries)
 
     return {
         "expired_reservations": expired,
@@ -174,18 +197,18 @@ class ManagerScheduler:
             try:
                 # 5-min tasks: expire reservations, reactivate exhausted
                 await ledger.expire(self.pool)
-                await reactivate_due_connections(self.pool)
+                await _everywhere(self.pool, lambda: reactivate_due_connections(self.pool), "reactivate")
 
                 tick_1h += 1
                 if tick_1h >= 12:  # 12 * 5m = 60m
                     tick_1h = 0
-                    await sync_all_balances(self.pool)
+                    await for_each_tenant(self.pool, lambda: sync_all_balances(self.pool), task="balances")
 
                 tick_24h += 1
                 if tick_24h >= 288:  # 288 * 5m = 24h
                     tick_24h = 0
-                    await check_budget_thresholds(self.pool)
-                    await check_renewal_reminders(self.pool)
+                    await _everywhere(self.pool, lambda: check_budget_thresholds(self.pool), "budgets")
+                    await _everywhere(self.pool, lambda: check_renewal_reminders(self.pool), "renewals")
 
             except asyncio.CancelledError:
                 break

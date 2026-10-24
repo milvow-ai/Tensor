@@ -34,7 +34,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, ValidationError
 
 from farm.capabilities.schemas import CAPABILITY_MODELS
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.registry.loader import RegistryError
 from farm.registry.models import (
     MCP_CAPABILITY_PREFIX,
@@ -349,7 +349,7 @@ async def sync_registry(
     connection_ids = {r["id"] for r in connection_rows}
     capability_names = set(registry.capabilities)
 
-    async with pool.connection() as conn, conn.transaction(force_rollback=dry_run):
+    async with tenant_connection(pool) as conn, conn.transaction(force_rollback=dry_run):
         await conn.execute("select pg_advisory_xact_lock(%s)", (ADVISORY_LOCK_KEY,))
         await _reconcile(conn, report, actor, SETTINGS, [_settings_row(registry.settings, registry.budgets)])
         await _reconcile(conn, report, actor, PROVIDERS, provider_rows)
@@ -391,7 +391,7 @@ async def export_registry(pool: DbPool) -> Registry:
     :class:`RegistryError`.
     """
     try:
-        async with pool.connection() as conn:
+        async with tenant_connection(pool) as conn:
             settings = await _fetch(conn, "select * from public.farm_settings where id = 1")
             providers = await _fetch(conn, "select * from public.providers order by id")
             connections = await _fetch(conn, "select * from public.connections order by priority, id")

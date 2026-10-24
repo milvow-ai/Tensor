@@ -13,7 +13,7 @@ Every string in an event is passed through ``redact`` so a key can never reach t
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -23,12 +23,14 @@ import structlog
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, system_connection, tenant_connection
 from farm.secrets import redact
 
 log = structlog.get_logger(__name__)
 
 MAX_TEXT_CHARS = 1000
+RUN_LEASE_S = 3600.0
+"""A run still ``running`` after this long has lost its process: the slowest call ends sooner."""
 
 
 def to_jsonable(value: Any, max_chars: int | None = MAX_TEXT_CHARS) -> Any:
@@ -76,7 +78,7 @@ class Trajectory:
         strategy: str | None,
     ) -> Trajectory:
         run_id = uuid4()
-        async with pool.connection() as conn:
+        async with tenant_connection(pool) as conn:
             await conn.execute(
                 "insert into public.runs (id, capability, caller, strategy, status, started_at) "
                 "values (%s, %s, %s, %s, 'running', %s)",
@@ -86,7 +88,7 @@ class Trajectory:
 
     async def attach_request(self, request_id: UUID) -> None:
         """Link the run to its ``capability_requests`` row (known only after the claim)."""
-        async with self._pool.connection() as conn:
+        async with tenant_connection(self._pool) as conn:
             await conn.execute(
                 "update public.runs set request_id = %s where id = %s", (request_id, self.run_id)
             )
@@ -94,7 +96,7 @@ class Trajectory:
     async def event(self, kind: str, connection_id: str | None = None, **data: Any) -> None:
         self._seq += 1
         try:
-            async with self._pool.connection() as conn:
+            async with tenant_connection(self._pool) as conn:
                 await conn.execute(
                     "insert into public.run_events (run_id, seq, kind, connection_id, data, at) "
                     "values (%s, %s, %s, %s, %s, %s)",
@@ -120,7 +122,7 @@ class Trajectory:
         error: str | None = None,
     ) -> None:
         self.finished = True
-        async with self._pool.connection() as conn:
+        async with tenant_connection(self._pool) as conn:
             await conn.execute(
                 "update public.runs set status = %s, cost_usd = %s, cached = %s, connection_id = %s, "
                 "error_kind = %s, error = %s, finished_at = %s where id = %s",
@@ -164,7 +166,7 @@ class RunRecord(BaseModel):
 
 
 async def fetch_run(pool: DbPool, run_id: UUID) -> RunRecord | None:
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select capability, caller, strategy, status, cost_usd, cached, connection_id, error_kind, "
             "error, started_at, finished_at from public.runs where id = %s",
@@ -193,3 +195,37 @@ async def fetch_run(pool: DbPool, run_id: UUID) -> RunRecord | None:
         finished_at=run[10],
         events=[RunEvent(seq=e[0], kind=e[1], connection_id=e[2], data=e[3], at=e[4]) for e in events],
     )
+
+
+async def fail_orphaned_runs(pool: DbPool, lease_s: float = RUN_LEASE_S, now: datetime | None = None) -> int:
+    """Fail every run that has been ``running`` longer than the lease (its process died before ``finish``).
+
+    Marks it ``failed`` with ``error_kind = 'interrupted'`` and writes a ``failure`` event saying why, so the
+    Console stops showing it as in progress. Returns the number of runs failed.
+    """
+    current = now or datetime.now(UTC)
+    reason = (
+        f"interrupted: the run was still 'running' after {int(lease_s)} s, so its process "
+        "died before it finished. The call may have reached the provider: check the usage ledger "
+        "before retrying."
+    )
+    async with system_connection(pool) as conn:
+        cur = await conn.execute(
+            "with orphaned as ("
+            "  update public.runs set status = 'failed', error_kind = 'interrupted', error = %(reason)s, "
+            "    finished_at = %(now)s "
+            "  where status = 'running' "
+            "    and started_at < %(now)s::timestamptz - make_interval(secs => %(lease)s) "
+            "  returning id, tenant_id) "
+            "insert into public.run_events (tenant_id, run_id, seq, kind, data, at) "
+            "select o.tenant_id, o.id, "
+            "  coalesce((select max(e.seq) from public.run_events e where e.run_id = o.id), 0) + 1, "
+            "  'failure', "
+            "  jsonb_build_object('error_kind', 'interrupted', 'reason', %(reason)s::text), %(now)s "
+            "from orphaned o returning run_id",
+            {"reason": reason, "now": current, "lease": lease_s},
+        )
+        rows = await cur.fetchall()
+    for row in rows:
+        log.warning("trajectory.run_interrupted", run_id=str(row[0]), lease_s=lease_s)
+    return len(rows)

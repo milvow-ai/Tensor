@@ -26,10 +26,11 @@ neither cache nor collapse two identical calls (a tool may have side effects).
 from __future__ import annotations
 
 import json
+import math
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import uuid4
 
 import mcp_types
@@ -38,17 +39,22 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import NotFoundError, ToolError
 from fastmcp.server.context import Context
 from fastmcp.server.transforms.search import BM25SearchTransform
+from fastmcp.server.transforms.search.base import _extract_searchable_text
+from fastmcp.server.transforms.search.bm25 import _BM25Index, _catalog_hash, _tokenize
 from fastmcp.tools import Tool, ToolResult
 from fastmcp.utilities.tasks import TaskConfig
+from fastmcp.utilities.versions import dedupe_with_versions
 from mcp_types import TextContent
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, ValidationError
 
 from farm.context import FarmContext
 from farm.db.pool import DbPool
 from farm.executors.mcp.client import REJECTION_KEY, RESULT_KEY
+from farm.gateway.guide import Risk, tool_risk
 from farm.gateway.middleware import current_caller
 from farm.mcp import store
 from farm.mcp.expose import ExposedTool, plan_exposure
+from farm.mcp.naming import candidates
 from farm.registry.models import Strategy
 from farm.resources.router import RouteOutcome, UnknownCapability, route
 
@@ -56,11 +62,16 @@ log = structlog.get_logger(__name__)
 
 FARM_ARGUMENT = "_farm"
 SEARCH_MAX_RESULTS = int(os.environ.get("FARM_MCP_SEARCH_MAX_RESULTS", "25"))
+SEARCH_DEFAULT_RESULTS = 10
+DESCRIPTION_LIMIT = 160
+DESCRIBE_TOOL = "describe_tool"
 
 INSTRUCTIONS = (
     " The Farm also fronts MCP servers ({namespaces}): their tools are named <server>__<tool> and keep the "
-    "server's own descriptions, schemas and results. search_tools(query) finds tools that are not listed, "
-    "call_tool(name, arguments) runs any of them. Every call goes to the best account of that server, with "
+    "server's own descriptions, schemas and results. search_tools(query, limit) finds tools that are not "
+    "listed (name, server, short description, risk; no schemas), describe_tool(name) returns one tool's "
+    "full definition and call_tool(name, arguments) runs any of them. Every call goes to the best account "
+    "of that server, with "
     "failover to the next one. A call's arguments may carry _farm: {{account, strategy, timeout_s}} "
     "(all optional) to pick the account or strategy; it is removed before the server sees the call."
 )
@@ -201,31 +212,76 @@ _LAST_SURFACE: McpSurface | None = None
 _LAST_POOL: DbPool | None = None
 
 
-def _normalize_name(name: str) -> str:
-    return name.lower().replace("-", "_").replace(":", "__").replace("/", "__")
-
-
 def resolve_tool_in_catalog(name: str, catalog: Sequence[Tool]) -> Tool | None:
-    """Resolve a tool name against catalog tools allowing prefix omission, aliases, and hyphen/underscore."""
-    for tool in catalog:
-        if tool.name == name:
-            return tool
+    """The one catalog tool ``name`` means (see :func:`farm.mcp.naming.candidates`), else ``None``.
 
-    norm = _normalize_name(name)
-    for tool in catalog:
-        if _normalize_name(tool.name) == norm:
-            return tool
+    Raises ``ToolError`` listing the candidates when the name fits several tools.
+    """
+    by_name = {tool.name: tool for tool in catalog}
+    found = candidates(name, by_name)
+    if len(found) > 1:
+        raise ToolError(
+            f"Ambiguous tool name {name!r}: it fits {', '.join(found)}. Call one of them by its exact name."
+        )
+    return by_name[found[0]] if found else None
 
-    suffix_matches = [t for t in catalog if t.name.split("__", 1)[-1] == name]
-    if suffix_matches:
-        return suffix_matches[0]
 
-    norm_tail = norm.split("__")[-1]
-    norm_matches = [t for t in catalog if _normalize_name(t.name).split("__")[-1] == norm_tail]
-    if norm_matches:
-        return norm_matches[0]
+def one_line(text: str | None, limit: int = DESCRIPTION_LIMIT) -> str:
+    """``text`` on one line of at most ``limit`` characters, cut at a word boundary, ending in an ellipsis."""
+    flat = " ".join((text or "").split())
+    if len(flat) <= limit:
+        return flat
+    head = flat[: limit - 1]
+    if flat[limit - 1] != " " and " " in head:
+        head = head.rsplit(" ", 1)[0]
+    return head.rstrip(" ,;:.-") + "\u2026"
 
-    return None
+
+class SearchHit(BaseModel):
+    """One ``search_tools`` result: enough to choose a tool, never a schema (``describe_tool`` has that)."""
+
+    name: str
+    server: str
+    description: str
+    risk: Risk
+    score: float
+
+
+class _ScoredIndex(_BM25Index):
+    """FastMCP's BM25 index that also says how well each ranked document matched."""
+
+    def scored(self, text: str, top_k: int) -> list[tuple[int, float]]:
+        query_tokens = _tokenize(text)
+        result: list[tuple[int, float]] = []
+        for i in self.query(text, top_k):
+            score = 0.0
+            for token in query_tokens:
+                tf = self._tf[i].get(token, 0)
+                if tf == 0:
+                    continue
+                idf = math.log((self._n - self._df[token] + 0.5) / (self._df[token] + 0.5) + 1.0)
+                norm = tf + self.k1 * (1 - self.b + self.b * self._doc_lengths[i] / self._avg_dl)
+                score += idf * tf * (self.k1 + 1) / norm
+            result.append((i, score))
+        return result
+
+
+def hit_of(tool: Tool, score: float) -> SearchHit:
+    """The search entry of a catalog tool; Farm-published tools carry their server and risk."""
+    if isinstance(tool, PassthroughTool):
+        server = tool._provider.namespace
+        risk = tool_risk(tool._provider.id, tool._stored)
+    else:
+        server = "farm"
+        read_only = bool(tool.annotations and tool.annotations.read_only_hint)
+        risk = "read-only" if read_only else "changes-data"
+    return SearchHit(
+        name=tool.name,
+        server=server,
+        description=one_line(tool.description),
+        risk=risk,
+        score=round(score, 2),
+    )
 
 
 async def list_server_tools(server: str, pool: DbPool | None = None) -> list[dict[str, str]]:
@@ -275,15 +331,85 @@ async def list_server_tools(server: str, pool: DbPool | None = None) -> list[dic
 
 
 class FarmBM25SearchTransform(BM25SearchTransform):
-    """BM25 search transform with capability discovery fixes:
-    1. Returns up to max_results (25).
-    2. Indexes all tools (including directly listed tools) so no tool is missing from search.
-    3. Resolves unprefixed, colon/slash namespaced, and hyphen/underscore variants in call_tool and get_tool.
+    """BM25 discovery over every tool the Farm can run:
+
+    1. ``search_tools`` returns compact hits (no schemas), 10 by default and 25 at most; ``describe_tool``
+       returns one tool's full definition.
+    2. The catalog holds every tool the Farm publishes: the listed ones, and ones whose server declared
+       ``_meta.ui.visibility`` without ``model`` (an MCP Apps hint for a host that the Farm is not).
+    3. Names resolve as in :func:`farm.mcp.naming.candidates`; an ambiguous name is an error listing them.
     """
 
+    def __init__(self, **options: Any) -> None:
+        super().__init__(**options)
+        self._index = _ScoredIndex()
+
+    async def get_tool_catalog(self, ctx: Context, *, run_middleware: bool = True) -> Sequence[Tool]:
+        """FastMCP's catalog without its ``is_model_visible`` filter (which would hide stored tools)."""
+        token = self._bypass.set(True)
+        try:
+            tools = await ctx.fastmcp.list_tools(run_middleware=run_middleware)
+        finally:
+            self._bypass.reset(token)
+        return list(dedupe_with_versions(tools, lambda t: t.name))
+
     async def _get_visible_tools(self, ctx: Context) -> Sequence[Tool]:
-        """Include all tools from catalog so directly listed tools are also searchable."""
-        return await self.get_tool_catalog(ctx)
+        """Every tool but the synthetic ones, so directly listed tools are also searchable."""
+        synthetic = {self._search_tool_name, self._call_tool_name, DESCRIBE_TOOL}
+        return [tool for tool in await self.get_tool_catalog(ctx) if tool.name not in synthetic]
+
+    async def transform_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
+        return [*await super().transform_tools(tools), self._make_describe_tool()]
+
+    async def _search(self, tools: Sequence[Tool], query: str) -> Sequence[Tool]:
+        """FastMCP's BM25 search over a :class:`_ScoredIndex`, rebuilt only when the catalog changed."""
+        current_hash = _catalog_hash(tools)
+        if current_hash != self._last_hash:
+            index = _ScoredIndex(self._index.k1, self._index.b)
+            index.build([_extract_searchable_text(t) for t in tools])
+            self._index, self._indexed_tools, self._last_hash = index, tools, current_hash
+        return [self._indexed_tools[i] for i in self._index.query(query, self._max_results)]
+
+    def _make_search_tool(self) -> Tool:
+        transform = self
+
+        async def search_tools(
+            query: Annotated[str, "Natural language query to search for tools"],
+            limit: Annotated[int, "Hits to return (default 10, at most 25)"] = SEARCH_DEFAULT_RESULTS,
+            ctx: Context = None,  # type: ignore[assignment]
+        ) -> list[SearchHit]:
+            """Search for tools using natural language.
+
+            Returns the best matches ranked by relevance: name, server, one-line description, risk
+            (read-only / changes-data / may-spend) and score. describe_tool(name) returns a tool's schema.
+            """
+            catalog = await transform._get_visible_tools(ctx)
+            await transform._search(catalog, "")  # reindexes if the catalog changed
+            top = max(1, min(limit, transform._max_results))
+            return [
+                hit_of(transform._indexed_tools[i], score)
+                for i, score in cast(_ScoredIndex, transform._index).scored(query, top)
+            ]
+
+        return Tool.from_function(fn=search_tools, name=self._search_tool_name)
+
+    def _make_describe_tool(self) -> Tool:
+        transform = self
+
+        async def describe_tool(
+            name: Annotated[str, "The name of the tool, as search_tools returned it"],
+            ctx: Context = None,  # type: ignore[assignment]
+        ) -> dict[str, Any]:
+            """The full definition of one tool: description, input and output schema, annotations."""
+            target = resolve_tool_in_catalog(name, await transform.get_tool_catalog(ctx))
+            if target is None:
+                raise NotFoundError(f"Unknown tool: {name!r}")
+            definition: dict[str, Any] = target.to_mcp_tool().model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+            return definition
+
+        return Tool.from_function(fn=describe_tool, name=DESCRIBE_TOOL)
 
     def _make_call_tool(self) -> Tool:
         transform = self
@@ -299,12 +425,11 @@ class FarmBM25SearchTransform(BM25SearchTransform):
 
             Use this to execute tools discovered via search_tools.
             """
-            if name in {transform._call_tool_name, transform._search_tool_name}:
+            if name in {transform._call_tool_name, transform._search_tool_name, DESCRIBE_TOOL}:
                 raise ValueError(
                     f"'{name}' is a synthetic search tool and cannot be called via the call_tool proxy"
                 )
-            catalog = await transform.get_tool_catalog(ctx)
-            target = resolve_tool_in_catalog(name, catalog)
+            target = resolve_tool_in_catalog(name, await transform.get_tool_catalog(ctx))
             if target is None:
                 raise NotFoundError(f"Unknown tool: {name!r}")
             return await ctx.fastmcp.call_tool(target.name, arguments)
@@ -314,21 +439,15 @@ class FarmBM25SearchTransform(BM25SearchTransform):
     async def get_tool(
         self, name: str, call_next: Any, *, version: Any = None
     ) -> Tool | None:
-        """Intercept synthetic tool names; resolve names downstream."""
+        """Intercept synthetic tool names; resolve other names downstream."""
         if name == self._search_tool_name:
             return self._make_search_tool()
         if name == self._call_tool_name:
             return self._make_call_tool()
+        if name == DESCRIBE_TOOL:
+            return self._make_describe_tool()
         res = await call_next(name, version=version)
-        if isinstance(res, Tool):
-            return res
-        if self._indexed_tools:
-            target = resolve_tool_in_catalog(name, self._indexed_tools)
-            if target is not None and target.name != name:
-                target_tool = await call_next(target.name, version=version)
-                if isinstance(target_tool, Tool):
-                    return target_tool
-        return None
+        return res if isinstance(res, Tool) else None
 
 
 async def register_mcp_tools(
@@ -393,8 +512,10 @@ __all__ = [
     "FarmControl",
     "McpSurface",
     "PassthroughTool",
+    "SearchHit",
     "failure_text",
     "list_server_tools",
+    "one_line",
     "parse_control",
     "register_mcp_tools",
     "relay",

@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 
 import structlog
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.manager.telegram import is_telegram_configured, send_telegram_alert
 
 __all__ = [
@@ -66,7 +66,7 @@ async def send_alert(
     dedup_ref = ref or f"{kind}:{message}"
     cutoff = current - DEDUP_WINDOW
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         # Check for unacknowledged or recent identical alert within deduplication window
         cur = await conn.execute(
             "select id, created_at from public.alerts "
@@ -98,7 +98,7 @@ async def send_alert(
 async def ack_alert(pool: DbPool, alert_id: UUID | str) -> bool:
     """Acknowledge an open alert by its ID."""
     aid = alert_id if isinstance(alert_id, UUID) else UUID(str(alert_id))
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "update public.alerts set acked_at = now() where id = %s and acked_at is null",
             (aid,),
@@ -114,7 +114,7 @@ async def list_alerts(pool: DbPool, limit: int = 50, only_unacked: bool = True) 
         + ("where acked_at is null " if only_unacked else "")
         + "order by created_at desc limit %s"
     )
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(query, (limit,))
         rows = await cur.fetchall()
         return [

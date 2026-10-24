@@ -15,7 +15,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 
 
 class PacingStatus(BaseModel):
@@ -77,9 +77,12 @@ def days_until_reset(
     next_reset_at: datetime | None = None,
     now: datetime | None = None,
 ) -> int:
-    """Estimate number of days remaining until the next quota reset."""
+    """Estimate number of days remaining until the next quota reset.
+
+    A ``next_reset_at`` that is already past is stale (the window reset); the period arithmetic decides then.
+    """
     current = now or datetime.now(UTC)
-    if next_reset_at is not None:
+    if next_reset_at is not None and next_reset_at > current:
         delta = next_reset_at - current
         return max(1, int(math.ceil(delta.total_seconds() / 86400.0)))
 
@@ -126,7 +129,7 @@ async def get_connection_pacing(
     """Query database to compute current pacing metrics for a connection and unit."""
     current = now or datetime.now(UTC)
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         # 1. Get consumption unit details
         cur = await conn.execute(
             "select limit_value, period, reset_anchor, next_reset_at from public.consumption_units "

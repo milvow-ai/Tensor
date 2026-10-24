@@ -23,7 +23,7 @@ import structlog
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.executors.base import ConnectionView
 from farm.registry.models import MCP_CAPABILITY_PREFIX, McpProviderSpec
 
@@ -108,7 +108,7 @@ async def list_providers(
     pool: DbPool, *, provider_id: str | None = None, enabled_only: bool = True
 ) -> list[McpProvider]:
     """The MCP pass-through providers, by id. ``provider_id`` narrows to one; invalid rows are skipped."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select id, name, enabled, config -> 'mcp' from public.providers "
             "where executor = 'mcp' and config -> 'mcp' is not null "
@@ -131,7 +131,7 @@ async def ensure_capability(pool: DbPool, provider: McpProvider) -> None:
     """Create ``mcp:<provider>`` and its route if they are missing (never touches an existing route: the
     owner may have switched it off). The capability has no default strategy of its own, so the provider's
     ``default_strategy`` decides how its accounts are used."""
-    async with pool.connection() as conn, conn.transaction():
+    async with tenant_connection(pool) as conn, conn.transaction():
         await conn.execute(
             "insert into public.capabilities (name, kind, description, default_strategy, cache_ttl_seconds) "
             "values (%s, 'tool', %s, null, 0) on conflict (name) do nothing",
@@ -146,7 +146,7 @@ async def ensure_capability(pool: DbPool, provider: McpProvider) -> None:
 
 async def load_tools(pool: DbPool, provider_ids: Sequence[str] | None = None) -> list[StoredTool]:
     """The stored catalogue (all providers, or the named ones), by provider and tool name."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select provider, definition, schema_hash, synced_at from public.mcp_tools "
             "where (%s::text[] is null or provider = any(%s)) order by provider, name",
@@ -168,7 +168,7 @@ async def replace_tools(
 ) -> SyncDiff:
     """Make the catalogue of ``provider_id`` equal ``tools`` in one transaction and say what changed."""
     wanted = {tool.name: tool for tool in tools}
-    async with pool.connection() as conn, conn.transaction():
+    async with tenant_connection(pool) as conn, conn.transaction():
         cur = await conn.execute(
             "select name, schema_hash from public.mcp_tools where provider = %s for update", (provider_id,)
         )
@@ -188,7 +188,7 @@ async def replace_tools(
                 "insert into public.mcp_tools (provider, name, description, input_schema, output_schema, "
                 "annotations, definition, schema_hash, synced_at) "
                 "values (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                "on conflict (workspace_id, provider, name) do update set "
+                "on conflict (tenant_id, provider, name) do update set "
                 "description = excluded.description, "
                 "input_schema = excluded.input_schema, output_schema = excluded.output_schema, "
                 "annotations = excluded.annotations, definition = excluded.definition, "
@@ -220,7 +220,7 @@ async def replace_tools(
 
 async def list_accounts(pool: DbPool, provider_id: str) -> list[Account]:
     """The provider's connections in the order the router would try them (priority, then id)."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select cn.id, cn.provider_id, cn.auth_ref, cn.meta, cn.concurrency, cn.rate_per_min, cn.status, "
             "coalesce(h.circuit, 'closed'), h.cooldown_until "

@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ from pydantic import SecretStr
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult
 from farm.executors.mcp import relay
 from farm.executors.mcp.connect import (
+    CallTap,
     McpDirectory,
     McpFailure,
     RelayTransport,
@@ -55,13 +57,28 @@ RESULT_KEY = "call_tool_result"
 """Key of the relayed ``CallToolResult`` in ``ExecResult.data`` (a wrapper, so no key the router reads
 for its own purposes, such as ``model`` or ``session_id``, can collide with the server's)."""
 REJECTION_KEY = "rpc_error"
+ERROR_CODES = frozenset({"CREDITS_EXHAUSTED", "LIMIT_REACHED", "UNAUTHORIZED", "RATE_LIMITED"})
+"""Codes in a tool's answer that mark it as an error (still the tool's answer, not an account state)."""
 
 
-def _fresh_attempt(client: Client[Any]) -> Client[Any]:
-    """Forget the HTTP error answers of earlier attempts (the tap is read when this attempt fails)."""
-    if isinstance(client.transport, RelayTransport):
-        client.transport.http_status.clear()
-    return client
+@dataclass
+class _Held:
+    """A client the executor keeps for a connection, and how many calls are using it right now.
+
+    A client that failed is *stale*: calls already running on it finish, new calls get a fresh one, and the
+    stale one is closed when its last call is done (never under a sibling call that is in flight).
+    """
+
+    fingerprint: str
+    client: Client[Any]
+    managed: bool = True
+    users: int = 0
+    stale: bool = False
+
+    def begin_call(self) -> CallTap | None:
+        """The call's own HTTP evidence (only http / sse transports have any)."""
+        transport = self.client.transport
+        return transport.http_status.begin() if isinstance(transport, RelayTransport) else None
 
 
 class McpExecutor:
@@ -80,14 +97,20 @@ class McpExecutor:
         self._clients: dict[str, Client[Any]] = {}
         self._directory = directory
         self._transports = transports
-        self._relays: dict[str, tuple[str, Client[Any]]] = {}
-        """Pass-through clients: connection id -> (fingerprint of what they were built from, client)."""
+        self._relays: dict[str, _Held] = {}
+        """Relay clients: connection id -> the client (and the fingerprint of what it was built from)."""
+        self._retired: list[_Held] = []
+        """Stale clients that still have calls running; each is closed when its last call is done."""
 
     async def aclose(self) -> None:
         """Close every client (stdio servers are terminated); ``FarmContext.aclose`` calls this."""
-        clients = [*self._clients.values(), *(client for _, client in self._relays.values())]
+        clients = [
+            *self._clients.values(),
+            *(held.client for held in [*self._relays.values(), *self._retired]),
+        ]
         self._clients.clear()
         self._relays.clear()
+        self._retired.clear()
         await asyncio.gather(*(close_client(client) for client in clients), return_exceptions=True)
 
     def get_token_store_dir(self, connection: ConnectionView) -> Path:
@@ -158,6 +181,11 @@ class McpExecutor:
             collection_sanitization_strategy=AlwaysHashStrategy(),
         )
 
+    def refresh_lock_path(self, connection: ConnectionView) -> Path:
+        """The file that serialises this account's token refreshes across processes (next to its store)."""
+        store_dir = self.get_token_store_dir(connection)
+        return store_dir.parent / f"{store_dir.name}.refresh.lock"
+
     def _get_or_create_client(self, connection: ConnectionView) -> Client[Any]:
         """Retrieve existing client or instantiate a new one."""
         server_id = id(connection.meta.get("server")) if "server" in connection.meta else 0
@@ -173,9 +201,12 @@ class McpExecutor:
             return None
         return await self._directory.mcp_spec(connection.provider_id)
 
-    async def _relay_client(self, connection: ConnectionView) -> Client[Any]:
+    async def _relay_client(self, connection: ConnectionView) -> _Held:
         """The connection's relay client, built from its provider's ``mcp`` block and kept while that does
-        not change (a stdio server stays running between calls; an edited block gets a fresh client)."""
+        not change (a stdio server stays running between calls; an edited block gets a fresh client).
+
+        Use it through :meth:`_acquire` / :meth:`_release`, which count the calls running on it.
+        """
         meta = connection.meta
         if "server" in meta or "transport" in meta:  # an in-process server or prepared transport (tests)
             target = meta.get("server") or meta["transport"]
@@ -191,13 +222,42 @@ class McpExecutor:
             source = f"{spec.model_dump_json()}|{override}|{connection.auth_ref}"
             fingerprint = hashlib.sha256(source.encode()).hexdigest()
         cached = self._relays.get(connection.id)
-        if cached is not None and cached[0] == fingerprint:
-            return _fresh_attempt(cached[1])
+        if cached is not None and cached.fingerprint == fingerprint:
+            return cached
         if cached is not None:
             await self.discard(connection.id)
         built = build_client(target if spec is None else self._transport(connection, spec), connection.id)
-        self._relays[connection.id] = (fingerprint, built)
-        return _fresh_attempt(built)
+        held = _Held(fingerprint, built)
+        self._relays[connection.id] = held
+        return held
+
+    async def _acquire(self, connection: ConnectionView) -> _Held:
+        held = await self._relay_client(connection)
+        held.users += 1  # nothing awaits between getting the client and counting the call
+        return held
+
+    async def _release(self, held: _Held) -> None:
+        held.users -= 1
+        if held.stale and held.users == 0:
+            await self._close(held)
+
+    async def _retire(self, connection_id: str, held: _Held) -> None:
+        """Stop handing ``held`` out; close it now, or when the calls still running on it are done."""
+        if not held.managed:
+            return
+        held.stale = True
+        if self._relays.get(connection_id) is held:
+            del self._relays[connection_id]
+        if held.users > 0:
+            if held not in self._retired:
+                self._retired.append(held)
+            return
+        await self._close(held)
+
+    async def _close(self, held: _Held) -> None:
+        if held in self._retired:
+            self._retired.remove(held)
+        await asyncio.gather(close_client(held.client), return_exceptions=True)
 
     def _transport(
         self, connection: ConnectionView, spec: McpProviderSpec, *, interactive: bool = False
@@ -208,6 +268,7 @@ class McpExecutor:
             connection,
             spec,
             token_storage=lambda: self.token_storage(connection),
+            refresh_lock=self.refresh_lock_path(connection),
             interactive=interactive,
         )
 
@@ -228,36 +289,48 @@ class McpExecutor:
         return len(tools)
 
     async def discard(self, connection_id: str) -> None:
-        """Close and forget a connection's relay client (its next use starts a fresh server / session)."""
-        cached = self._relays.pop(connection_id, None)
-        if cached is not None:
-            await asyncio.gather(close_client(cached[1]), return_exceptions=True)
+        """Forget a connection's relay client (its next use starts a fresh server / session); calls running
+        on it finish first."""
+        held = self._relays.get(connection_id)
+        if held is not None:
+            await self._retire(connection_id, held)
 
     async def list_tools(
         self, connection: ConnectionView, *, timeout_s: float = 60.0
     ) -> list[mcp_types.Tool]:
         """Every tool the server lists through this connection (all pages). Raises :class:`McpFailure`."""
-        client: Client[Any] | None = None
+        held: _Held | None = None
+        tap: CallTap | None = None
         try:
-            client = await self._relay_client(connection)
-            return await relay.list_tools(client, timeout_s=timeout_s)
+            held = await self._acquire(connection)
+            tap = held.begin_call()
+            return await relay.list_tools(held.client, timeout_s=timeout_s)
         except Exception as exc:
-            raise await self._failure(connection, client, exc) from exc
+            raise await self._failure(connection, held, exc, tap) from exc
+        finally:
+            await self._finish_call(held, tap)
+
+    async def _finish_call(self, held: _Held | None, tap: CallTap | None) -> None:
+        if tap is not None:
+            tap.end()
+        if held is not None:
+            await self._release(held)
 
     async def _uses_oauth(self, connection: ConnectionView) -> bool:
         spec = await self._spec(connection) if "server" not in connection.meta else None
         return spec is not None and spec.auth == "oauth"
 
     async def _failure(
-        self, connection: ConnectionView, client: Client[Any] | None, exc: Exception
+        self, connection: ConnectionView, held: _Held | None, exc: Exception, tap: CallTap | None
     ) -> McpFailure:
-        """How a failed attempt is reported; a client that failed is dropped (a dead or wedged server must
-        not be reused, its next attempt starts a fresh one)."""
-        transport = client.transport if client is not None else None
-        http = transport.http_status.take() if isinstance(transport, RelayTransport) else None
-        failure = relay.classify(exc, oauth=await self._uses_oauth(connection), http=http)
-        if failure.kind is not ErrorKind.BAD_REQUEST:
-            await self.discard(connection.id)
+        """How a failed attempt is reported. The HTTP status is the one this call's own request got. A client
+        that failed is retired (a dead or wedged server must not be reused: the next call starts a fresh
+        one), but calls already running on it are not cut off."""
+        failure = relay.classify(
+            exc, oauth=await self._uses_oauth(connection), http=None if tap is None else tap.failure()
+        )
+        if held is not None and failure.kind is not ErrorKind.BAD_REQUEST:
+            await self._retire(connection.id, held)
         return failure
 
     async def _passthrough(self, req: ExecRequest) -> ExecResult:
@@ -283,10 +356,14 @@ class McpExecutor:
         asked = req.params.get("timeout_s")
         timeout_s = min(req.timeout_s, float(asked)) if isinstance(asked, int | float) else req.timeout_s
 
-        client: Client[Any] | None = None
+        held: _Held | None = None
+        tap: CallTap | None = None
         try:
-            client = await self._relay_client(conn)
-            result = await relay.call_tool(client, tool, arguments, timeout_s=timeout_s)
+            held = await self._acquire(conn)
+            tap = held.begin_call()
+            result = await relay.call_tool(
+                held.client, tool, arguments, timeout_s=timeout_s, meta=None if tap is None else tap.meta
+            )
         except Exception as exc:
             rejection = relay.rejecting_error(exc)
             if rejection is not None:  # the server rejected the request itself: its answer, not a failure
@@ -302,9 +379,11 @@ class McpExecutor:
                     units_used={"calls": 1.0},
                     latency_ms=int((time.perf_counter() - started) * 1000),
                 )
-            failure = await self._failure(conn, client, exc)
+            failure = await self._failure(conn, held, exc, tap)
             logger.warning("mcp.passthrough_failed", connection=conn.id, tool=tool, kind=failure.kind.value)
             return failed(failure)
+        finally:
+            await self._finish_call(held, tap)
         return ExecResult(
             ok=True,
             data={RESULT_KEY: result.model_dump(mode="json", by_alias=True, exclude_none=True)},
@@ -314,12 +393,23 @@ class McpExecutor:
 
     # --- typed capabilities (M3c-A) -----------------------------------------------------------------------
 
-    async def _typed_client(self, connection: ConnectionView) -> Client[Any]:
+    async def _typed_client(self, connection: ConnectionView) -> _Held:
         """The client of a typed capability: the provider's ``mcp`` block when it has one, else ``meta``."""
         if "server" not in connection.meta and "transport" not in connection.meta:
             if await self._spec(connection) is not None:
-                return await self._relay_client(connection)
-        return self._get_or_create_client(connection)
+                return await self._acquire(connection)
+        return _Held("", self._get_or_create_client(connection), managed=False, users=1)
+
+    def _tool_error(self, text: str, conn_id: str, latency_ms: int) -> ExecResult:
+        """A tool's own error is the tool's answer, not a state of the account: ``BAD_REQUEST`` is neutral
+        for the account's health (no circuit, no login alert, no cooldown) and is not retried elsewhere.
+        Only the path to the server (``relay.classify``: HTTP status, JSON-RPC codes, OAuth) can change it."""
+        return ExecResult(
+            ok=False,
+            error_kind=ErrorKind.BAD_REQUEST,
+            error=f"[{conn_id}] the tool reported an error: {relay.clip(text)}",
+            latency_ms=latency_ms,
+        )
 
     async def execute(self, req: ExecRequest) -> ExecResult:
         """Run a pass-through call, or a typed capability through its mapped tool."""
@@ -333,8 +423,10 @@ class McpExecutor:
         tool_name = mapping.tool if mapping else req.capability
         tool_args = map_request_params(mapping.params if mapping else None, req.params)
 
+        held: _Held | None = None
+        tap: CallTap | None = None
         try:
-            client = await self._typed_client(conn)
+            held = await self._typed_client(conn)
         except Exception as e:
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             return ExecResult(
@@ -345,9 +437,12 @@ class McpExecutor:
             )
 
         try:
+            tap = held.begin_call()
             async with asyncio.timeout(req.timeout_s):
-                async with client:
-                    call_res = await client.call_tool(tool_name, tool_args)
+                async with held.client:
+                    call_res = await held.client.call_tool(
+                        tool_name, tool_args, raise_on_error=False, meta=None if tap is None else tap.meta
+                    )
         except TimeoutError:
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             return ExecResult(
@@ -358,17 +453,29 @@ class McpExecutor:
             )
         except ToolError as e:
             latency_ms = int((time.perf_counter() - start_time) * 1000)
-            return self._classify_error(str(e), conn.id, latency_ms)
+            return self._tool_error(str(e), conn.id, latency_ms)
         except Exception as e:
             latency_ms = int((time.perf_counter() - start_time) * 1000)
-            return self._classify_error(str(e), conn.id, latency_ms)
+            rejection = relay.rejecting_error(e)
+            if rejection is not None:  # the server rejected the request itself (unknown tool, invalid params)
+                return self._tool_error(rejection.error.message, conn.id, latency_ms)
+            failure = await self._failure(conn, held, e, tap)
+            return ExecResult(
+                ok=False,
+                error_kind=failure.kind,
+                error=self._failure_text(failure, conn.id),
+                retry_after_s=failure.retry_after_s,
+                latency_ms=latency_ms,
+            )
+        finally:
+            await self._finish_call(held, tap)
 
         latency_ms = int((time.perf_counter() - start_time) * 1000)
 
-        # If the MCP tool result marked is_error=True
+        # The tool's own error (isError) is its answer, not a state of the account.
         if call_res.is_error:
             err_text = self._extract_error_text(call_res)
-            return self._classify_error(err_text, conn.id, latency_ms)
+            return self._tool_error(err_text, conn.id, latency_ms)
 
         raw_data = self._extract_data(call_res)
 
@@ -445,127 +552,26 @@ class McpExecutor:
             return str(data)
         return "MCP tool returned an error"
 
+    def _failure_text(self, failure: McpFailure, conn_id: str) -> str:
+        text = f"[{conn_id}] {failure.kind.value}: {failure.message}"
+        if failure.kind is ErrorKind.NEEDS_LOGIN:
+            text += f" Run: farm mcp login {conn_id}"
+        return text
+
     def _check_error_payload(
         self, payload: dict[str, Any], conn_id: str, latency_ms: int
     ) -> ExecResult | None:
-        """Check if an output dict represents a business or execution failure."""
-        is_error = False
-        err_msg = ""
+        """An answer that says it is an error (``error``, ``status: error``, an error ``code``) is the tool's
+        own failure to do its job: a result for the caller, never a state of the account."""
         code = str(payload.get("code") or payload.get("error_code") or "").upper()
         status = str(payload.get("status") or "").lower()
 
-        if "error" in payload and payload["error"]:
-            is_error = True
-            err_msg = str(payload["error"])
+        if payload.get("error"):
+            message = str(payload["error"])
         elif status == "error":
-            is_error = True
-            err_msg = str(payload.get("message") or payload.get("error") or "Unknown error")
-        elif code in ("CREDITS_EXHAUSTED", "LIMIT_REACHED", "UNAUTHORIZED", "RATE_LIMITED"):
-            is_error = True
-            err_msg = str(payload.get("message") or payload.get("error") or code)
-
-        if payload.get("credits_remaining") == 0 and (
-            "exhausted" in status or "insufficient" in err_msg.lower() or code == "CREDITS_EXHAUSTED"
-        ):
-            is_error = True
-            if not err_msg:
-                err_msg = "Credits exhausted"
-
-        if not is_error:
+            message = str(payload.get("message") or "Unknown error")
+        elif code in ERROR_CODES:
+            message = str(payload.get("message") or code)
+        else:
             return None
-
-        combined = f"{code} {err_msg}".strip()
-        return self._classify_error(combined, conn_id, latency_ms)
-
-    def _classify_error(self, err_msg: str, conn_id: str, latency_ms: int) -> ExecResult:
-        """Classify an error message string into an ExecResult with appropriate ErrorKind."""
-        cleaned = redact(err_msg)
-        lowered = err_msg.lower()
-
-        # Auth / expired token patterns -> NEEDS_LOGIN
-        auth_signals = (
-            "unauthorized",
-            "token expired",
-            "expired token",
-            "auth failed",
-            "authentication required",
-            "authentication failed",
-            "invalid token",
-            "needs login",
-            "not logged in",
-            "please log in",
-            "401",
-            "forbidden",
-            "403",
-        )
-        if any(sig in lowered for sig in auth_signals):
-            return ExecResult(
-                ok=False,
-                error_kind=ErrorKind.NEEDS_LOGIN,
-                error=(
-                    f"Authentication failed or token expired for connection '{conn_id}'."
-                    f" Run: farm mcp login {conn_id}"
-                ),
-                latency_ms=latency_ms,
-            )
-
-        # Credit / quota patterns -> LIMIT_REACHED
-        limit_signals = (
-            "credits_exhausted",
-            "credit balance",
-            "insufficient credits",
-            "credit limit",
-            "limit reached",
-            "limit_reached",
-            "quota exceeded",
-            "quota_exceeded",
-            "out of credits",
-            "no credits remaining",
-            "exhausted",
-        )
-        if any(sig in lowered for sig in limit_signals):
-            return ExecResult(
-                ok=False,
-                error_kind=ErrorKind.LIMIT_REACHED,
-                error=cleaned,
-                latency_ms=latency_ms,
-            )
-
-        # Rate limited patterns -> RATE_LIMITED
-        rate_signals = ("rate limit", "too many requests", "429")
-        if any(sig in lowered for sig in rate_signals):
-            return ExecResult(
-                ok=False,
-                error_kind=ErrorKind.RATE_LIMITED,
-                error=cleaned,
-                latency_ms=latency_ms,
-            )
-
-        # Empty / Not found patterns -> EMPTY
-        empty_signals = ("not found", "no results", "404")
-        if any(sig in lowered for sig in empty_signals):
-            return ExecResult(
-                ok=False,
-                found=False,
-                error_kind=ErrorKind.EMPTY,
-                error=cleaned,
-                latency_ms=latency_ms,
-            )
-
-        # Bad request / validation patterns -> BAD_REQUEST
-        bad_req_signals = ("invalid params", "invalid argument", "missing required", "validation error")
-        if any(sig in lowered for sig in bad_req_signals):
-            return ExecResult(
-                ok=False,
-                error_kind=ErrorKind.BAD_REQUEST,
-                error=cleaned,
-                latency_ms=latency_ms,
-            )
-
-        # Default to SERVER
-        return ExecResult(
-            ok=False,
-            error_kind=ErrorKind.SERVER,
-            error=cleaned,
-            latency_ms=latency_ms,
-        )
+        return self._tool_error(f"{code} {message}".strip(), conn_id, latency_ms)

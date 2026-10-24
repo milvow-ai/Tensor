@@ -32,7 +32,7 @@ import structlog
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-from farm.db.pool import DbPool, get_db_url
+from farm.db.pool import DbPool, get_db_url, system_connection
 from farm.executors.cli_agent.base import build_child_env
 from farm.secrets import redact
 from farm.settings import data_dir as get_data_dir
@@ -181,7 +181,7 @@ async def check_bifrost_health(
 async def check_provider_pools(pool: DbPool) -> CheckResult:
     """Check that each enabled provider pool has at least 1 active connection."""
     try:
-        async with pool.connection() as conn:
+        async with system_connection(pool) as conn:  # operator diagnostics span tenants
             cur = await conn.execute(
                 "select p.id, count(c.id) filter (where c.status = 'active') as active_count "
                 "from public.providers p "
@@ -231,7 +231,7 @@ async def check_provider_pools(pool: DbPool) -> CheckResult:
 async def check_needs_login(pool: DbPool) -> CheckResult:
     """Check for connections flagged as 'needs_login'."""
     try:
-        async with pool.connection() as conn:
+        async with system_connection(pool) as conn:  # operator diagnostics span tenants
             cur = await conn.execute(
                 "select id, provider_id from public.connections "
                 "where status = 'needs_login' order by id"
@@ -263,7 +263,7 @@ async def check_needs_login(pool: DbPool) -> CheckResult:
 async def check_circuits(pool: DbPool) -> CheckResult:
     """Check for connections with open or half-open circuit breakers."""
     try:
-        async with pool.connection() as conn:
+        async with system_connection(pool) as conn:  # operator diagnostics span tenants
             cur = await conn.execute(
                 "select connection_id, circuit, consecutive_failures, last_error, cooldown_until "
                 "from public.connection_health "
@@ -296,7 +296,7 @@ async def check_circuits(pool: DbPool) -> CheckResult:
 async def check_exhausted_accounts(pool: DbPool) -> CheckResult:
     """Check for exhausted connections and report their reset times."""
     try:
-        async with pool.connection() as conn:
+        async with system_connection(pool) as conn:  # operator diagnostics span tenants
             cur = await conn.execute(
                 "select c.id, u.unit, u.next_reset_at "
                 "from public.connections c "

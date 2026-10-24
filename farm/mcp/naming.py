@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 SEPARATOR = "__"
 MAX_NAME_LENGTH = 64
@@ -42,3 +42,41 @@ def exposed_names(namespace: str, remote_names: Iterable[str]) -> dict[str, str]
     plain = {name: _plain(namespace, name) for name in names}
     taken = Counter(plain.values())
     return {name: plain[name] if taken[plain[name]] == 1 else _hashed(namespace, name) for name in names}
+
+
+def _separated(name: str) -> str:
+    """Case-folded, with the ``ns:tool`` and ``ns/tool`` spellings written as ``ns__tool``."""
+    return name.lower().replace(":", SEPARATOR).replace("/", SEPARATOR)
+
+
+def _tail(name: str) -> str:
+    return name.split(SEPARATOR, 1)[-1]
+
+
+def _loose(name: str) -> str:
+    return name.replace("-", "_")
+
+
+def candidates(name: str, known: Iterable[str]) -> list[str]:
+    """The exposed names ``name`` may mean, from the most to the least exact spelling; empty if none.
+
+    The first rule that matches anything decides, so a closer spelling is never made ambiguous by a looser
+    one: 1. the exact name; 2. the same name in another case or as ``ns:tool`` / ``ns/tool``; 3. the name
+    without its ``<namespace>__`` prefix; 4. rule 2 with ``-`` and ``_`` taken as one character; 5. rule 3
+    likewise. One result is the tool; several are ambiguous and the caller must say which.
+    """
+    names = sorted(set(known))
+    if name in names:
+        return [name]
+    wanted = _separated(name)
+    rules: tuple[Callable[[str], bool], ...] = (
+        lambda n: _separated(n) == wanted,
+        lambda n: _tail(n) == name,
+        lambda n: _loose(_separated(n)) == _loose(wanted),
+        lambda n: _loose(_tail(_separated(n))) == _loose(wanted),
+    )
+    for rule in rules:
+        matches = [n for n in names if rule(n)]
+        if matches:
+            return matches
+    return []

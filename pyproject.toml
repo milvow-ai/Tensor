@@ -46,6 +46,7 @@ dev = [
     "mypy",
     "types-PyYAML",
     "types-psutil",
+    "hypothesis>=6.170.8",
 ]
 
 [tool.hatch.build.targets.wheel]

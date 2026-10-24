@@ -1,6 +1,6 @@
 """Result cache and cross-process single-flight ("flight"), both on one table: ``capability_requests``.
 
-One row per ``request_hash`` (unique per workspace) is the whole protocol, so any number of Farm processes
+One row per ``request_hash`` (unique per tenant) is the whole protocol, so any number of Farm processes
 agree without a coordinator:
 
 =================  =========================================================================================
@@ -8,6 +8,12 @@ agree without a coordinator:
 ``succeeded``      ``result`` holds the answer; ``expires_at`` is the end of its cache life
 ``failed``         the last execution failed; failures are never cached (the next caller retries)
 =================  =========================================================================================
+
+A caller that waited for a running leader gets that leader's outcome even when the answer is not cached
+(TTL 0, ``found`` not true: ``expires_at`` is the finish time then, so a plain reader sees a stale row). Such
+an outcome stays joinable for ``JOIN_GRACE_S`` after it was published, independent of the cache TTL. A
+capability that is never cached (TTL 0) publishes no data at all (``withheld``): its answers are not kept in
+the database, so a waiter cannot join and runs the call itself.
 
 ``claim`` makes the caller the leader (insert, or a compare-and-swap takeover of a failed / expired /
 abandoned row), serves it a cached answer, or makes it wait for the leader that is running now. A leader
@@ -22,14 +28,17 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Final
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.resources.trajectory import to_jsonable
+
+JOIN_GRACE_S: Final = 30.0
+"""How long after publishing, a waiter that saw the leader running may still join its (uncached) outcome."""
 
 
 class StoredResult(BaseModel):
@@ -39,6 +48,9 @@ class StoredResult(BaseModel):
     provider: str
     connection_id: str
     found: bool | None = None
+    withheld: bool = False
+    """The answer was deliberately not stored (the capability is never cached, e.g. an AI answer): ``data`` is
+    empty and a waiter cannot join this outcome."""
 
 
 @dataclass(frozen=True)
@@ -70,7 +82,7 @@ type Claim = Leader | Hit | Joined
 
 
 async def lookup_cache(pool: DbPool, request_hash: str, now: datetime) -> Hit | None:
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select result, expires_at, run_id from public.capability_requests "
             "where request_hash = %s and status = 'succeeded' and expires_at > %s",
@@ -98,12 +110,12 @@ async def claim(
     while True:
         now = clock()
         lease_until = now + timedelta(seconds=lease_s)
-        async with pool.connection() as conn:
+        async with tenant_connection(pool) as conn:
             cur = await conn.execute(
                 "insert into public.capability_requests "
                 "(request_hash, capability, params, status, run_id, expires_at) "
                 "values (%s, %s, %s, 'running', %s, %s) "
-                "on conflict (workspace_id, request_hash) do nothing returning id",
+                "on conflict (tenant_id, request_hash) do nothing returning id",
                 (request_hash, capability, Jsonb(to_jsonable(params, None)), run_id, lease_until),
             )
             inserted = await cur.fetchone()
@@ -120,11 +132,13 @@ async def claim(
         row_id, status, result, row_run_id, expires_at = row
         live = expires_at is not None and expires_at > now
 
-        if status == "succeeded" and live:
+        if status == "succeeded" and expires_at is not None:
             stored = StoredResult.model_validate(result)
-            if observed_running is not None:
+            joinable = observed_running is not None and not stored.withheld
+            if joinable and expires_at + timedelta(seconds=JOIN_GRACE_S) > now:
                 return Joined(stored=stored, error=None, run_id=row_run_id)
-            return Hit(stored=stored, expires_at=expires_at, run_id=row_run_id)
+            if live:
+                return Hit(stored=stored, expires_at=expires_at, run_id=row_run_id)
         if status == "running" and live:
             observed_running = row_run_id
             await asyncio.sleep(poll_s)
@@ -133,7 +147,7 @@ async def claim(
             return Joined(stored=None, error=(result or {}).get("error"), run_id=row_run_id)
 
         # failed earlier, expired, or a leader that died (lease over): take the row over, exactly one winner.
-        async with pool.connection() as conn:
+        async with tenant_connection(pool) as conn:
             cur = await conn.execute(
                 "update public.capability_requests set status = 'running', run_id = %s, params = %s, "
                 "result = null, expires_at = %s "
@@ -150,7 +164,7 @@ async def finish_success(
     pool: DbPool, request_id: UUID, run_id: UUID, stored: StoredResult, expires_at: datetime
 ) -> bool:
     """Publish the answer. False when the lease was lost to another process (nothing is overwritten)."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "update public.capability_requests set status = 'succeeded', result = %s, expires_at = %s "
             "where id = %s and run_id = %s and status = 'running' returning id",
@@ -163,7 +177,7 @@ async def finish_failure(
     pool: DbPool, request_id: UUID, run_id: UUID, error: dict[str, Any], now: datetime
 ) -> bool:
     """Record the failure (never cached: ``expires_at`` is already over) so waiters stop waiting."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "update public.capability_requests set status = 'failed', result = %s, expires_at = %s "
             "where id = %s and run_id = %s and status = 'running' returning id",

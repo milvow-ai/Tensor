@@ -34,7 +34,7 @@ SDK_STAND_INS = frozenset({"Server returned an error response", "Not Found", "Se
 """What the MCP SDK writes when an HTTP error answer carried no JSON-RPC error of its own."""
 
 
-def _clip(text: str) -> str:
+def clip(text: str) -> str:
     flat = " ".join(redact(text).split())
     return flat if len(flat) <= MAX_MESSAGE_CHARS else flat[: MAX_MESSAGE_CHARS - 1] + "…"
 
@@ -109,12 +109,12 @@ def classify(exc: BaseException, *, oauth: bool = False, http: HttpFailure | Non
     for member in chain:
         if isinstance(member, MCPError):
             return McpFailure(
-                ErrorKind.SERVER, f"the server answered with a protocol error ({_clip(member.error.message)})"
+                ErrorKind.SERVER, f"the server answered with a protocol error ({clip(member.error.message)})"
             )
     for member in chain:
         if isinstance(member, OSError | httpx2.TransportError):
-            return McpFailure(ErrorKind.SERVER, f"could not reach the server: {_clip(str(member))}")
-    return McpFailure(ErrorKind.SERVER, f"{type(exc).__name__}: {_clip(str(exc))}")
+            return McpFailure(ErrorKind.SERVER, f"could not reach the server: {clip(str(member))}")
+    return McpFailure(ErrorKind.SERVER, f"{type(exc).__name__}: {clip(str(exc))}")
 
 
 def rejecting_error(exc: BaseException) -> MCPError | None:
@@ -129,11 +129,18 @@ def rejecting_error(exc: BaseException) -> MCPError | None:
 
 
 async def call_tool(
-    client: Client[Any], name: str, arguments: dict[str, Any], *, timeout_s: float
+    client: Client[Any],
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    timeout_s: float,
+    meta: dict[str, Any] | None = None,
 ) -> mcp_types.CallToolResult:
-    """``tools/call`` on a fresh or kept-alive session: the server's own ``CallToolResult``, untouched."""
+    """``tools/call`` on a fresh or kept-alive session: the server's own ``CallToolResult``, untouched.
+
+    ``meta`` rides in the request's ``_meta`` (the call's token for ``CallTap``)."""
     async with asyncio.timeout(timeout_s), client:
-        return await client.call_tool_mcp(name, arguments)
+        return await client.call_tool_mcp(name, arguments, meta=meta)
 
 
 async def list_tools(client: Client[Any], *, timeout_s: float) -> list[mcp_types.Tool]:

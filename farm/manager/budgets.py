@@ -4,8 +4,8 @@ Supports:
 - Month-to-date spend per connection, provider, and global from usage_events + billing_events
 - Month-end spend forecasting
 - Threshold alerts (50%, 80%, 100%) exactly once per month per scope
-- Router hard-stop policy decision pure function (check_paid_call) that refuses paid calls
-  exceeding a hard stop budget.
+- Router hard-stop policy decision (check_paid_call) that refuses paid calls exceeding a hard stop budget,
+  by the same reservation-aware rule as the router (settled + held spend).
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from uuid import UUID
 import structlog
 from pydantic import BaseModel
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.manager.alerts import create_alert
 
 log = structlog.get_logger(__name__)
@@ -53,7 +53,7 @@ async def get_month_to_date_spend(
     current = now or datetime.now(UTC)
     month_start = datetime(current.year, current.month, 1, tzinfo=UTC)
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         if scope == "connection":
             if not ref:
                 raise ValueError("ref (connection_id) required for connection scope")
@@ -106,15 +106,68 @@ async def get_month_to_date_spend(
 
 
 def calculate_month_forecast(spend: Decimal | float | int, now: datetime | None = None) -> Decimal:
-    """Forecast month-end spend: spend ÷ elapsed days × total days in month."""
+    """Forecast month-end spend: spend ÷ elapsed days × days in the month.
+
+    Same formula as ``v_spend_month`` in the Console: elapsed days are fractional (seconds since the month
+    began ÷ 86400) with a floor of 1 day, so alert and dashboard show one number.
+    """
     current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
     sp = Decimal(str(spend))
     if sp <= 0:
         return Decimal(0)
 
     _, total_days = calendar.monthrange(current.year, current.month)
-    elapsed = max(1.0, current.day + (current.hour / 24.0) + (current.minute / 1440.0))
-    return (sp / Decimal(str(elapsed))) * Decimal(total_days)
+    month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elapsed = max(Decimal(1), Decimal(str((current - month_start).total_seconds())) / Decimal(86400))
+    return (sp / elapsed) * Decimal(total_days)
+
+
+def decide_hold(
+    connection_id: str, cost: Decimal, outcome: dict[str, Any]
+) -> tuple[PolicyDecision, UUID | None]:
+    """Turn the result of ``farm_budget_reserve`` into the decision and the hold it created (if any)."""
+    if outcome.get("unknown_connection"):
+        return (
+            PolicyDecision(
+                allowed=False,
+                reason=f"Unknown connection '{connection_id}'",
+                error_kind="unknown_connection",
+            ),
+            None,
+        )
+    if "blocked" in outcome:
+        scope = str(outcome["blocked"])
+        budget_usd = Decimal(str(outcome["budget"]))
+        spend = Decimal(str(outcome["spend"]))
+        held = Decimal(str(outcome.get("held", 0)))
+        log.warning(
+            "budget.hard_stop_exceeded",
+            scope=scope,
+            ref=outcome.get("ref"),
+            budget=float(budget_usd),
+            spend=float(spend),
+            held=float(held),
+            cost=float(cost),
+        )
+        extra = f" + in flight ${held}" if held > 0 else ""
+        return (
+            PolicyDecision(
+                allowed=False,
+                reason=(
+                    f"hard stop: {scope} budget of ${budget_usd} exceeded "
+                    f"(spend ${spend}{extra} + est ${cost})"
+                ),
+                scope=scope,
+                budget_usd=budget_usd,
+                current_spend_usd=spend,
+                estimated_cost_usd=cost,
+                error_kind="budget_exhausted",
+            ),
+            None,
+        )
+    return PolicyDecision(allowed=True, estimated_cost_usd=cost), UUID(str(outcome["id"]))
 
 
 async def check_paid_call(
@@ -124,100 +177,31 @@ async def check_paid_call(
     *,
     now: datetime | None = None,
 ) -> PolicyDecision:
-    """Pure policy function for router: checks whether a call crossing hard-stop budgets should be blocked.
+    """Whether a paid call fits every hard-stop budget (connection, provider, global), without keeping a hold.
 
-    Free calls (est_cost <= 0) are always allowed.
-    Paid calls (est_cost > 0) check connection, provider, and global hard-stop budgets.
+    The one rule is the router's: settled spend + spend held by in-flight calls + this call's estimate,
+    decided by ``farm_budget_reserve`` under its lock. The hold it takes is dropped in the same transaction,
+    so the answer already counts what concurrent calls have reserved. Free calls (est_cost <= 0) are always
+    allowed.
     """
     cost = Decimal(str(est_cost))
     if cost <= Decimal(0):
         return PolicyDecision(allowed=True, estimated_cost_usd=cost)
 
     current = now or datetime.now(UTC)
-
-    async with pool.connection() as conn:
-        # Get provider for connection
-        cur_c = await conn.execute(
-            "select provider_id from public.connections where id = %s",
-            (connection_id,),
+    month_start = datetime(current.year, current.month, 1, tzinfo=UTC)
+    async with tenant_connection(pool) as conn, conn.transaction():
+        cur = await conn.execute(
+            "select public.farm_budget_reserve(%s::text, %s::numeric, null::uuid, %s::timestamptz, "
+            "%s::timestamptz, 60)",
+            (connection_id, cost, current, month_start),
         )
-        c_row = await cur_c.fetchone()
-        if c_row is None:
-            return PolicyDecision(
-                allowed=False,
-                reason=f"Unknown connection '{connection_id}'",
-                error_kind="unknown_connection",
-            )
-        provider_id = c_row[0]
-
-        # Gather relevant budgets
-        # 1. Connection budget
-        cur_cb = await conn.execute(
-            "select monthly_usd, hard_stop from public.budgets "
-            "where scope = 'connection' and ref = %s",
-            (connection_id,),
-        )
-        cb_row = await cur_cb.fetchone()
-
-        # 2. Provider budget
-        cur_pb = await conn.execute(
-            "select monthly_usd, hard_stop from public.budgets "
-            "where scope = 'provider' and ref = %s",
-            (provider_id,),
-        )
-        pb_row = await cur_pb.fetchone()
-
-        # 3. Global budget
-        cur_gb = await conn.execute(
-            "select monthly_usd, hard_stop from public.budgets "
-            "where scope = 'global' and (ref is null or ref = 'global')",
-        )
-        gb_row = await cur_gb.fetchone()
-
-        global_budget_val = None
-        global_hard_stop = True
-        if gb_row is not None:
-            global_budget_val = Decimal(str(gb_row[0]))
-            global_hard_stop = gb_row[1]
-        else:
-            cur_set = await conn.execute(
-                "select global_monthly_budget_usd from public.farm_settings where id = 1"
-            )
-            set_row = await cur_set.fetchone()
-            if set_row is not None and set_row[0] is not None:
-                global_budget_val = Decimal(str(set_row[0]))
-
-    # Check budgets with hard_stop enabled
-    budgets_to_check: list[tuple[str, str | None, Decimal, bool]] = []
-    if cb_row is not None and cb_row[1]:
-        budgets_to_check.append(("connection", connection_id, Decimal(str(cb_row[0])), cb_row[1]))
-    if pb_row is not None and pb_row[1]:
-        budgets_to_check.append(("provider", provider_id, Decimal(str(pb_row[0])), pb_row[1]))
-    if global_budget_val is not None and global_hard_stop:
-        budgets_to_check.append(("global", None, global_budget_val, global_hard_stop))
-
-    for scope, ref, budget_usd, _hard_stop in budgets_to_check:
-        spend = await get_month_to_date_spend(pool, scope, ref, now=current)
-        if spend + cost > budget_usd:
-            log.warning(
-                "budget.hard_stop_exceeded",
-                scope=scope,
-                ref=ref,
-                budget=float(budget_usd),
-                spend=float(spend),
-                cost=float(cost),
-            )
-            return PolicyDecision(
-                allowed=False,
-                reason=f"hard stop: {scope} budget of ${budget_usd} exceeded (spend ${spend} + est ${cost})",
-                scope=scope,
-                budget_usd=budget_usd,
-                current_spend_usd=spend,
-                estimated_cost_usd=cost,
-                error_kind="budget_exhausted",
-            )
-
-    return PolicyDecision(allowed=True, estimated_cost_usd=cost)
+        row = await cur.fetchone()
+        outcome: dict[str, Any] = row[0] if row is not None and row[0] is not None else {}
+        decision, hold_id = decide_hold(connection_id, cost, outcome)
+        if hold_id is not None:
+            await conn.execute("delete from public.budget_reservations where id = %s", (hold_id,))
+    return decision
 
 
 async def record_policy_block(
@@ -232,7 +216,7 @@ async def record_policy_block(
     event_data = dict(data or {})
     event_data["reason"] = reason
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         # Determine next seq for run_id
         cur = await conn.execute(
             "select coalesce(max(seq), 0) + 1 from public.run_events where run_id = %s",
@@ -261,7 +245,7 @@ async def check_budget_thresholds(
     current = now or datetime.now(UTC)
     month_key = f"{current.year}-{current.month:02d}"
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         # Fetch alert thresholds from settings
         cur_set = await conn.execute(
             "select alert_thresholds, global_monthly_budget_usd from public.farm_settings where id = 1"
@@ -276,9 +260,7 @@ async def check_budget_thresholds(
                 global_setting_budget = Decimal(str(set_row[1]))
 
         # Fetch all budgets
-        cur_b = await conn.execute(
-            "select scope, ref, monthly_usd from public.budgets"
-        )
+        cur_b = await conn.execute("select scope, ref, monthly_usd from public.budgets")
         rows = await cur_b.fetchall()
 
     budget_list: list[tuple[str, str | None, Decimal]] = [
@@ -314,7 +296,7 @@ async def check_budget_thresholds(
                     severity=severity,
                     message=msg,
                     ref=ref_id,
-                    deduplicate=True,
+                    deduplicate=True,  # kind budget_threshold: once per ref (month), acknowledged or not
                 )
                 alert_ids.append(aid)
 

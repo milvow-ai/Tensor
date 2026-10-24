@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Harness Farm watchdog every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Unit=harness-farm-watchdog.service
+
+[Install]
+WantedBy=timers.target

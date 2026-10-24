@@ -22,6 +22,27 @@ SERVER/TIMEOUT/UNKNOWN failure +1,   after N consecutive failures (default 5, ov
 EMPTY / BAD_REQUEST    none          none: the provider answered correctly, the request or the data was the
                                      problem, so the account's health is neither helped nor hurt
 =====================  ============  ===================================================================
+
+Circuit state transitions (``circuit``, ``cooldown_until``). A half-open circuit is a **probe lease**: the one
+call that claimed it must end it, and a lease whose holder vanished runs out by itself. An EMPTY / BAD_REQUEST
+outcome leaves a closed circuit alone, but it still ends a half-open probe (the circuit reopens).
+
+========== ========================================== ================= =================================
+from       event                                      to                cooldown_until
+========== ========================================== ================= =================================
+closed     CIRCUIT_KINDS failure, N-th in a row       open              now + open_seconds
+closed     any other outcome                          closed            unchanged
+open       cooldown not over                          open (not tried)  unchanged
+open       ``claim_probe`` once the cooldown is over  half_open         now + lease (the probe runs)
+half_open  ``claim_probe`` while the lease runs       half_open         unchanged (not tried)
+half_open  ``claim_probe`` after the lease ran out    half_open         now + lease (a new probe)
+half_open  success                                    closed            cleared
+half_open  any failure: server, timeout, unknown,     open              now + open_seconds (doubled with
+           rate limited, limit reached, auth, login,                    backoff), never shorter than the
+           and also empty / bad_request                                 provider's own cooldown
+half_open  ``release_probe`` (cancelled, shut down,   half_open         now (the next call probes)
+           or the call was never made)
+========== ========================================== ================= =================================
 """
 
 from __future__ import annotations
@@ -34,7 +55,7 @@ from typing import Any, Final
 from psycopg import AsyncConnection
 from psycopg.rows import TupleRow
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.executors.base import ErrorKind
 from farm.resources.periods import next_period_start
 from farm.secrets import redact
@@ -45,6 +66,10 @@ CIRCUIT_MAX_OPEN_S: Final = 1800.0  # 30 minutes cap
 DEFAULT_COOLDOWN_S: Final = 60.0
 MAX_COOLDOWN_S: Final = 24 * 3600.0
 EXHAUSTED_PROBE_S: Final = 3600.0
+PROBE_LEASE_S: Final = 120.0
+"""How long a half-open probe may run before another call may take it over (a probe whose process died)."""
+RECENT_OUTCOMES: Final = 50
+"""``connection_health.recent_outcomes`` keeps this many ``S`` / ``F`` marks (failover tie-break window)."""
 MAX_ERROR_CHARS: Final = 500
 
 CIRCUIT_KINDS: Final = frozenset({ErrorKind.SERVER, ErrorKind.TIMEOUT, ErrorKind.UNKNOWN})
@@ -75,12 +100,11 @@ def get_circuit_config(meta: Mapping[str, Any] | None) -> tuple[int, float, bool
 def unavailable_reason(circuit: str, cooldown_until: datetime | None, now: datetime) -> str | None:
     """Why a connection may not be tried right now: ``circuit_open``, ``cooldown`` or ``None`` (free).
 
-    When circuit is 'half_open', a probe is already in flight, so others see 'circuit_open'.
-    When circuit is 'open' and cooldown has passed, it returns None to allow the half-open probe claim.
+    ``open`` and ``half_open`` both end at ``cooldown_until``; for ``half_open`` that is the probe lease, so a
+    probe that never reported back blocks the account only until its lease has run out. A free ``open`` /
+    ``half_open`` connection must still win ``claim_probe`` before it is called.
     """
-    if circuit == "half_open":
-        return "circuit_open"
-    if circuit == "open":
+    if circuit in ("open", "half_open"):
         if cooldown_until is not None and cooldown_until > now:
             return "circuit_open"
         return None
@@ -102,13 +126,15 @@ def block_reason(status: str, circuit: str, cooldown_until: datetime | None, now
     return unavailable_reason(circuit, cooldown_until, now)
 
 
-async def claim_probe(pool: DbPool, connection_id: str, now: datetime) -> bool:
-    """Attempt to claim the single half-open probe for an open circuit whose window has passed.
+async def claim_probe(
+    pool: DbPool, connection_id: str, now: datetime, *, lease_s: float = PROBE_LEASE_S
+) -> bool:
+    """Claim the single probe of a circuit that is open (cooldown over) or half-open (lease over).
 
-    Row-locked claim in Postgres. Exactly one probe request is allowed.
-    Returns True if claimed (circuit transitioned to half_open), False otherwise.
+    Row-locked claim in Postgres, so exactly one caller wins. The winner holds the probe for ``lease_s``; it
+    must end it with ``record_success`` / ``record_failure`` or give it back with ``release_probe``.
     """
-    async with pool.connection() as conn, conn.transaction():
+    async with tenant_connection(pool) as conn, conn.transaction():
         cur = await conn.execute(
             """
             select circuit, cooldown_until
@@ -122,23 +148,37 @@ async def claim_probe(pool: DbPool, connection_id: str, now: datetime) -> bool:
         if row is None:
             return False
         circuit, cooldown_until = row[0], row[1]
-        if circuit == "open" and (cooldown_until is None or cooldown_until <= now):
+        if circuit in ("open", "half_open") and (cooldown_until is None or cooldown_until <= now):
             await conn.execute(
                 """
                 update public.connection_health
                 set circuit = 'half_open',
-                    cooldown_until = null
+                    cooldown_until = %s
                 where connection_id = %s
                 """,
-                (connection_id,),
+                (now + timedelta(seconds=lease_s), connection_id),
             )
             return True
         return False
 
 
+async def release_probe(pool: DbPool, connection_id: str, now: datetime) -> bool:
+    """Give back a probe that reached no verdict (cancelled, shut down, never made): the next call probes.
+
+    Touches only a circuit that is still half-open, so it is safe after the probe already ended.
+    """
+    async with tenant_connection(pool) as conn:
+        cur = await conn.execute(
+            "update public.connection_health set cooldown_until = %s "
+            "where connection_id = %s and circuit = 'half_open' returning connection_id",
+            (now, connection_id),
+        )
+        return await cur.fetchone() is not None
+
+
 async def reactivate_due(pool: DbPool, now: datetime) -> int:
     """Reactivate exhausted connections whose cooldown has passed using the SQL function."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute("select public.farm_reactivate_due(%s)", (now,))
         row = await cur.fetchone()
         return int(row[0]) if row and row[0] is not None else 0
@@ -146,7 +186,7 @@ async def reactivate_due(pool: DbPool, now: datetime) -> int:
 
 async def record_success(pool: DbPool, connection_id: str, *, now: datetime) -> None:
     """Record a successful outcome: closes circuit, resets consecutive failures, clears cooldown."""
-    async with pool.connection() as conn, conn.transaction():
+    async with tenant_connection(pool) as conn, conn.transaction():
         await conn.execute(
             "insert into public.connection_health (connection_id) values (%s) on conflict do nothing",
             (connection_id,),
@@ -156,13 +196,18 @@ async def record_success(pool: DbPool, connection_id: str, *, now: datetime) -> 
             update public.connection_health set
               success_count = success_count + 1,
               last_success_at = %(now)s,
-              consecutive_failures = case when cooldown_until > %(now)s then consecutive_failures else 0 end,
-              circuit = case when cooldown_until > %(now)s then circuit else 'closed' end,
-              open_seconds = case when cooldown_until > %(now)s then open_seconds else null end,
-              cooldown_until = case when cooldown_until > %(now)s then cooldown_until else null end
+              recent_outcomes = right(recent_outcomes || 'S', %(window)s),
+              consecutive_failures = case when circuit <> 'half_open' and cooldown_until > %(now)s
+                                          then consecutive_failures else 0 end,
+              circuit = case when circuit <> 'half_open' and cooldown_until > %(now)s then circuit
+                             else 'closed' end,
+              open_seconds = case when circuit <> 'half_open' and cooldown_until > %(now)s
+                                  then open_seconds else null end,
+              cooldown_until = case when circuit <> 'half_open' and cooldown_until > %(now)s
+                                    then cooldown_until else null end
             where connection_id = %(id)s
             """,
-            {"id": connection_id, "now": now},
+            {"id": connection_id, "now": now, "window": RECENT_OUTCOMES},
         )
         await conn.execute(
             "update public.connections set status = 'active' where id = %s and status = 'exhausted'",
@@ -184,13 +229,17 @@ async def record_failure(
     open_seconds: float | None = None,
     backoff: bool | None = None,
 ) -> None:
-    """Apply the failure rules of the module table to one connection, atomically."""
-    if kind in NEUTRAL_KINDS:
-        return
+    """Apply the failure rules of the module table to one connection, atomically.
+
+    Every outcome ends a half-open probe: the circuit reopens, whatever the kind (``EMPTY`` / ``BAD_REQUEST``
+    included, which otherwise change nothing).
+    """
+    neutral = kind in NEUTRAL_KINDS
     counts_toward_circuit = kind in CIRCUIT_KINDS
     error_text = redact(message or "")[:MAX_ERROR_CHARS] or None
+    needs_login_alert = False
 
-    async with pool.connection() as conn, conn.transaction():
+    async with tenant_connection(pool) as conn, conn.transaction():
         cur_meta = await conn.execute(
             "select meta from public.connections where id = %s", (connection_id,)
         )
@@ -202,7 +251,9 @@ async def record_failure(
         should_backoff = backoff if backoff is not None else cfg_backoff
 
         cooldown: datetime | None = None
-        if kind is ErrorKind.RATE_LIMITED:
+        if neutral:
+            pass
+        elif kind is ErrorKind.RATE_LIMITED:
             if retry_after_s is not None:
                 base_s = max(0.0, retry_after_s)
                 if jitter and bool(meta.get("jitter", False)):
@@ -224,24 +275,14 @@ async def record_failure(
                 "where id = %s and status in ('active', 'exhausted')",
                 (connection_id,),
             )
-            # Create alert for needs_login
-            from farm.manager.alerts import create_alert
-
-            alert_msg = f"Account {connection_id} authentication failed. Run: farm ai login {connection_id}"
-            await create_alert(
-                pool,
-                kind="needs_login",
-                severity="critical",
-                message=alert_msg,
-                ref=f"login:{connection_id}",
-                notify_telegram=False,
-            )
+            needs_login_alert = True
 
         # Get current state from connection_health
-        await conn.execute(
-            "insert into public.connection_health (connection_id) values (%s) on conflict do nothing",
-            (connection_id,),
-        )
+        if not neutral:  # a neutral outcome leaves no trace, so it does not create the row either
+            await conn.execute(
+                "insert into public.connection_health (connection_id) values (%s) on conflict do nothing",
+                (connection_id,),
+            )
         cur_health = await conn.execute(
             "select circuit, consecutive_failures, open_seconds from public.connection_health "
             "where connection_id = %s for update",
@@ -251,29 +292,26 @@ async def record_failure(
         cur_circuit = health_row[0] if health_row else "closed"
         cur_consecutive = (health_row[1] if health_row else 0) or 0
         cur_open_s = health_row[2] if health_row else None
+        probe_ended = cur_circuit == "half_open"
+        if neutral and not probe_ended:
+            return
 
         new_circuit = cur_circuit
         new_open_s = cur_open_s
-        new_consecutive = cur_consecutive
+        new_consecutive = cur_consecutive + 1 if counts_toward_circuit else cur_consecutive
         circuit_cooldown: datetime | None = None
 
-        if counts_toward_circuit:
-            new_consecutive = cur_consecutive + 1
-            if cur_circuit == "half_open":
-                if should_backoff:
-                    prev_open = float(cur_open_s or target_open_s)
-                    doubled = min(prev_open * 2.0, CIRCUIT_MAX_OPEN_S)
-                    new_circuit = "open"
-                    new_open_s = int(doubled)
-                    circuit_cooldown = now + timedelta(seconds=doubled)
-                else:
-                    new_circuit = "open"
-                    new_open_s = int(target_open_s)
-                    circuit_cooldown = now + timedelta(seconds=target_open_s)
-            elif new_consecutive >= target_threshold:
-                new_circuit = "open"
-                new_open_s = int(target_open_s)
-                circuit_cooldown = now + timedelta(seconds=target_open_s)
+        if probe_ended:
+            open_for = target_open_s
+            if should_backoff:
+                open_for = min(float(cur_open_s or target_open_s) * 2.0, CIRCUIT_MAX_OPEN_S)
+            new_circuit = "open"
+            new_open_s = int(open_for)
+            circuit_cooldown = now + timedelta(seconds=open_for)
+        elif counts_toward_circuit and new_consecutive >= target_threshold:
+            new_circuit = "open"
+            new_open_s = int(target_open_s)
+            circuit_cooldown = now + timedelta(seconds=target_open_s)
 
         final_cooldown: datetime | None = None
         if cooldown is not None and circuit_cooldown is not None:
@@ -283,35 +321,54 @@ async def record_failure(
         elif circuit_cooldown is not None:
             final_cooldown = circuit_cooldown
 
-        # Set cooldown_until to the latest of any cooldowns, or NULL if none
-        # (None means no cooldown, not "-infinity", so we pass None explicitly and handle it in SQL)
+        # cooldown_until is the latest of any cooldowns, or unchanged when there is none. A probe that ended
+        # replaces its lease with the fresh cooldown instead (the lease must not stretch the cooldown).
         await conn.execute(
             """
             update public.connection_health set
-              failure_count = failure_count + 1,
-              last_error_kind = %(kind)s,
-              last_error = %(error)s,
-              last_error_at = %(now)s,
+              failure_count = failure_count + %(counted)s,
+              recent_outcomes = case when %(counted)s = 1
+                                     then right(recent_outcomes || 'F', %(window)s) else recent_outcomes end,
+              last_error_kind = case when %(counted)s = 1 then %(kind)s else last_error_kind end,
+              last_error = case when %(counted)s = 1 then %(error)s else last_error end,
+              last_error_at = case when %(counted)s = 1 then %(now)s else last_error_at end,
               consecutive_failures = %(consecutive)s,
               circuit = %(circuit)s,
               open_seconds = %(open_seconds)s,
-              cooldown_until = greatest(
+              cooldown_until = case when %(probe_ended)s then %(cooldown)s else greatest(
                   coalesce(cooldown_until, %(circuit_cooldown)s),
                   coalesce(%(cooldown)s, %(circuit_cooldown)s)
-              )
+              ) end
             where connection_id = %(id)s
             """,
             {
                 "id": connection_id,
+                "counted": 0 if neutral else 1,
+                "window": RECENT_OUTCOMES,
                 "kind": kind.value,
                 "error": error_text,
                 "now": now,
                 "consecutive": new_consecutive,
                 "circuit": new_circuit,
                 "open_seconds": new_open_s,
+                "probe_ended": probe_ended,
                 "cooldown": final_cooldown,
                 "circuit_cooldown": circuit_cooldown,
             },
+        )
+
+    if needs_login_alert:
+        # After the transaction: the alert takes its own pooled connection, and holding two at once would
+        # starve a small pool when many accounts fail to authenticate together.
+        from farm.manager.alerts import create_alert
+
+        await create_alert(
+            pool,
+            kind="needs_login",
+            severity="critical",
+            message=f"Account {connection_id} authentication failed. Run: farm ai login {connection_id}",
+            ref=f"login:{connection_id}",
+            notify_telegram=False,
         )
 
 

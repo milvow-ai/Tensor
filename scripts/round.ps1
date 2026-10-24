@@ -31,11 +31,15 @@ $Wt = "D:\Harness Farm\wt-$Name"
 $RunDir = Join-Path $Runs $Name
 $env:UV_CACHE_DIR = 'D:\dev-cache\uv'; $env:FARM_DATA_DIR = 'D:/farm-data'; $env:npm_config_cache = 'D:\dev-cache\npm'
 $env:PLAYWRIGHT_BROWSERS_PATH = 'D:\dev-cache\ms-playwright'
+# Temp files go to D: as well: C: has almost no free space, and pytest, Next.js and the builders write a lot of temp data.
+$env:TEMP = 'D:\dev-cache\tmp'; $env:TMP = $env:TEMP; New-Item -ItemType Directory -Force $env:TEMP | Out-Null
 
 function Write-Json($path, $obj) { [IO.File]::WriteAllText($path, ($obj | ConvertTo-Json -Depth 6)) }
 
 function Invoke-Gate($dir) {
   $out = powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'scripts\check.ps1') 2>&1 | Out-String
+  New-Item -ItemType Directory -Force $RunDir | Out-Null
+  [IO.File]::WriteAllText((Join-Path $RunDir 'gate-full.txt'), $out)
   $ok = $out -match 'RESULT: all passed'
   $tail = @($out -split "`r?`n" | Where-Object { $_ -match 'PASS|FAIL|RESULT|failed|passed|Error' } | Select-Object -Last 10)
   $consoleTouched = @(git -C $dir status --short -- console).Count + @(git -C $dir diff --name-only "$Main...HEAD" -- console).Count
@@ -91,12 +95,16 @@ if ($Action -eq 'work') {
     $m = $(if ($Model) { $Model } else { 'sonnet' })
     $env:CLAUDE_CONFIG_DIR = $ClaudeConfigDir
     $prompt = "You are a builder working in the git worktree $Wt. Execute the brief in $Brief exactly, following its rules. Touch only the files it lets you own. Never read any .env file. Never run git add, commit, push, reset, checkout or stash. Run every command in the foreground and wait for it. Finish with the reply format the brief asks for."
-    Push-Location $Wt
-    $raw = $prompt | claude -p --model $m --permission-mode bypassPermissions --output-format json 2>&1 | Out-String
-    Pop-Location
-    [IO.File]::WriteAllText("$RunDir\claude.json", $raw)
+    # Prompt in and output out through files, never through a PowerShell pipeline: a large or noisy CLI output piped into
+    # Out-String crashed the host with a StackOverflowException (round f1b, 2026-10-24).
+    [IO.File]::WriteAllText("$RunDir\prompt.txt", $prompt)
+    $claudeExe = (Get-Command claude -ErrorAction Stop).Source
+    $p = Start-Process -FilePath $claudeExe -WorkingDirectory $Wt -NoNewWindow -PassThru -Wait `
+      -ArgumentList @('-p', '--model', $m, '--permission-mode', 'bypassPermissions', '--output-format', 'json') `
+      -RedirectStandardInput "$RunDir\prompt.txt" -RedirectStandardOutput "$RunDir\claude.json" -RedirectStandardError "$RunDir\claude.err.txt"
+    $raw = [IO.File]::ReadAllText("$RunDir\claude.json")
     $b = $raw
-    $i = $raw.IndexOf('{"type"')
+    $i = $raw.IndexOf('{')  # the result object's key order varies (e.g. starts with "duration_api_ms")
     if ($i -ge 0) {
       try {
         $j = $raw.Substring($i) | ConvertFrom-Json
@@ -107,9 +115,13 @@ if ($Action -eq 'work') {
     }
   }
   else {
-    $m = $(if ($Model) { $Model } else { 'qwen.qwen3-coder-next' })
-    $prof = $(if ($m -like 'qwen.*' -or $m -like 'zai.*') { 'farm-builder-bedrock' } else { 'farm-builder' })
-    $b = powershell -NoProfile -ExecutionPolicy Bypass -File "$Repo\scripts\run-hermes.ps1" -Brief $Brief -Cwd $Wt -Model $m -Profile $prof 2>&1 | Out-String
+    # Bedrock models (zai.glm-5, qwen.*) go through the default Hermes profile and the Bedrock mantle endpoint;
+    # anything else through a Bifrost profile.
+    $m = $(if ($Model) { $Model } else { 'zai.glm-5' })
+    $bedrock = ($m -like 'zai.*' -or $m -like 'qwen.*')
+    $prof = $(if ($bedrock) { 'default' } else { 'farm-builder' })
+    $prov = $(if ($bedrock) { 'custom:bedrock-mantle' } else { '' })
+    $b = powershell -NoProfile -ExecutionPolicy Bypass -File "$Repo\scripts\run-hermes.ps1" -Brief $Brief -Cwd $Wt -Model $m -Profile $prof -Provider $prov 2>&1 | Out-String
   }
   $g = Invoke-Gate $Wt
   $files = @(git -C $Wt status --short)

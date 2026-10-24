@@ -1,7 +1,7 @@
 """Multi-account strategies (HANDOFF 4.3): how the connections of one pool are ordered for a request.
 
 Strategies implemented:
-- ``failover``: ranked order (price class -> reset date -> success rate -> priority -> id).
+- ``failover``: ranked order (price class -> reset date -> priority -> recent success rate -> id).
 - ``most_remaining``: highest remaining quota fraction first, ties broken by ranked order.
 - ``round_robin``: persistent cursor per pool in Postgres (pool_state table), skips ineligible.
 - ``pin``: exactly the connection the caller named.
@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.registry.models import STRATEGIES
 from farm.resources.ranking import Rankable, rank_candidates, score_candidate
 
@@ -106,7 +106,7 @@ async def get_and_advance_rr_cursor(pool: DbPool, provider_id: str, count: int) 
     """Get the current round-robin cursor for provider_id and advance it by 1, atomically."""
     if count <= 0:
         return 0
-    async with pool.connection() as conn, conn.transaction():
+    async with tenant_connection(pool) as conn, conn.transaction():
         await conn.execute(
             """
             insert into public.pool_state (provider_id, rr_cursor, updated_at)
