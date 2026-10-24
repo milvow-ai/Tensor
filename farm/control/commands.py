@@ -32,6 +32,7 @@ from pydantic import (
     model_validator,
 )
 
+from farm.connect.commands import CONNECT_PAYLOADS, consumed_payload, execute_connect_command
 from farm.db.pool import DbPool, system_connection, tenant_connection
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest
 from farm.registry.models import (
@@ -404,6 +405,7 @@ PAYLOAD_VALIDATORS: dict[str, type[BaseModel]] = {
     "add_provider": AddProviderPayload,
     "update_provider": UpdateProviderPayload,
     "remove_provider": RemoveProviderPayload,
+    **CONNECT_PAYLOADS,
 }
 
 
@@ -1027,6 +1029,14 @@ async def execute_command(
         reason = f"Validation failed: {exc}"
         log.warning("command.rejected", cmd_id=str(cid), reason=reason)
         return "rejected", {"error": reason}
+
+    if kind in CONNECT_PAYLOADS:
+        # Sign-in commands run in the LoginService (farm/connect), which keeps its own connections.
+        try:
+            return await execute_connect_command(pool, kind, payload, actor=actor)
+        except Exception as exc:
+            log.exception("command.execution_failed", cmd_id=str(cid), error=str(exc))
+            return "failed", {"error": f"Execution exception: {exc}"}
 
     if kind in ("add_provider", "update_provider", "remove_provider"):
         # These open their own transactions (and sync tools over the network): hold no outer connection.
@@ -1715,10 +1725,12 @@ async def _run_claimed(pool: DbPool, claimed: ClaimedCommand) -> tuple[str, dict
         )
 
         async with tenant_connection(pool) as conn:
+            stored = consumed_payload(claimed.kind, claimed.payload)  # a sealed value is used once
             cur = await conn.execute(
-                "update public.farm_commands set status = %s, result = %s, done_at = now() "
+                "update public.farm_commands set status = %s, result = %s, done_at = now(), "
+                "payload = coalesce(%s::jsonb, payload) "
                 "where id = %s and status = 'running' and claimed_by = %s returning id",
-                (status, Jsonb(result), claimed.id, _CLAIMER),
+                (status, Jsonb(result), None if stored is None else Jsonb(stored), claimed.id, _CLAIMER),
             )
             recorded = await cur.fetchone() is not None
     if not recorded:

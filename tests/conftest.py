@@ -341,6 +341,7 @@ SEEDS: dict[str, tuple[str, str]] = {
     ),
     "pool_state": ("provider_id", "%(pid)s"),
     "api_tokens": ("name, token_prefix, token_hash", "%(msg)s, 'hf_', %(sha)s"),
+    "login_sessions": ("connection_id, provider_id, method, created_by", "%(conn)s, %(pid)s, 'loopback', %(msg)s"),
 }
 """One row per tenant-owned table the isolation suite seeds. ``memberships`` is seeded separately (needs a user);
 ``farm_settings`` is a singleton with a global primary key (see the open issue in the F1B report)."""
