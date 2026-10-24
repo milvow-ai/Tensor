@@ -4,6 +4,8 @@
 # systemd already restarts a Farm that exits (Restart=always); this catches a Farm that hangs (no /health) and
 # a Bifrost that is down, restarts the unit after UNHEALTHY_THRESHOLD_SECONDS and sends the alert.
 set -euo pipefail
+# runuser and friends live in sbin; a unit's EnvironmentFile may set a PATH without it.
+PATH="${PATH:-/usr/bin:/bin}:/usr/local/sbin:/usr/sbin:/sbin"
 
 FARM_DATA_DIR="${FARM_DATA_DIR:-/var/lib/harness-farm}"
 CHECK_INTERVAL_SECONDS="${CHECK_INTERVAL_SECONDS:-60}"

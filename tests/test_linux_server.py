@@ -303,6 +303,11 @@ def test_the_settings_file_has_no_secrets_and_keeps_the_farm_on_loopback() -> No
     assert values["FARM_DATA_DIR"] == SERVER_DATA
     assert values["FARM_ENV_FILE"].startswith(SERVER_DATA + "/") and values["FARM_REGISTRY_PATH"].startswith(SERVER_DATA + "/")
     assert [name for name, value in values.items() if looks_secret(name, value)] == []
+    # EnvironmentFile's PATH replaces systemd's default for every unit: losing sbin broke the watchdog's alert
+    # (runuser: command not found, found by the WSL end-to-end run).
+    systemd_default = ["/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"]
+    assert all(part in values["PATH"].split(":") for part in systemd_default), values["PATH"]
+    assert re.search(r"^PATH=.*/usr/sbin", (LINUX / "farm-watchdog.sh").read_text(encoding="utf-8"), re.M)
 
 
 def _git(*args: str) -> str:
