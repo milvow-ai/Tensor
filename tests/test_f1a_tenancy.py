@@ -13,9 +13,8 @@ from farm.db.pool import DbPool
 from farm.tenancy import MILVOW_TENANT_ID, Role, TenantContext
 from tests.conftest import seed_connection
 
-PLATFORM_TABLES = {"alembic_version", "tenants", "users"}
-# Created at runtime by farm/control/run.py, not by a migration: it appears in the shared test database once
-# test_run has run. F1B moves it into a migration with a tenant_id.
+PLATFORM_TABLES = {"alembic_version", "tenants", "users", "farm_heartbeats"}
+# Downgrading 0019 gives back the table the pre-F1B code created at runtime (the tokens survive the downgrade).
 RUNTIME_TABLES = {"client_tokens"}
 MILVOW = str(MILVOW_TENANT_ID)
 
@@ -70,7 +69,8 @@ def test_tenant_one_is_milvow(db_url: str) -> None:
     ]
 
 
-async def test_insert_without_tenant_lands_in_milvow(pool: DbPool) -> None:
+async def test_insert_takes_the_tenant_of_the_connection(pool: DbPool) -> None:
+    """F1B: the default is the session's tenant, not a constant (the test pool starts every session as Milvow)."""
     await seed_connection(pool, "p", "c")
     async with pool.connection() as conn:
         row = await (await conn.execute("select tenant_id::text from connections where id = 'c'")).fetchone()
@@ -146,7 +146,7 @@ def test_downgrade_upgrade_round_trip_with_data(scratch_db: Callable[[], str]) -
         assert _rows(url, "select tenant_id::text, rr_cursor from public.pool_state") == [(MILVOW, 3)]
         assert _rows(url, "select tenant_id::text from public.integration_requests") == [(MILVOW,)]
         assert _rows(url, "select tenant_id::text from public.capability_requests") == [(MILVOW,)]
-        assert _tenant_tables(url) == sorted([*tables_before, "memberships", "budget_reservations"])
+        assert _tenant_tables(url) == sorted([*tables_before, "memberships", "budget_reservations", "api_tokens"])
 
         command.downgrade(cfg, "0013")
         assert _rows(url, "select to_regclass('public.tenants')::text") == [(None,)]

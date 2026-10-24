@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 import structlog
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.manager.telegram import send_telegram_alert
 
 log = structlog.get_logger(__name__)
@@ -47,7 +47,7 @@ async def create_alert(
 
     once = kind in ONCE_PER_REF_KINDS and ref is not None
     alert_id = uuid4()
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         if deduplicate and ref is not None:
             cur = await conn.execute(
                 "select id from public.alerts where ref = %s and (acked_at is null or %s) limit 1",
@@ -91,7 +91,7 @@ async def create_alert(
 async def ack_alert(pool: DbPool, alert_id: UUID | str) -> bool:
     """Acknowledge an open alert by its ID. Returns True if an unacknowledged alert was updated."""
     aid = alert_id if isinstance(alert_id, UUID) else UUID(str(alert_id))
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "update public.alerts set acked_at = now() where id = %s and acked_at is null",
             (aid,),
@@ -101,7 +101,7 @@ async def ack_alert(pool: DbPool, alert_id: UUID | str) -> bool:
 
 async def list_open_alerts(pool: DbPool, limit: int = 50) -> list[dict[str, Any]]:
     """List unacknowledged alerts ordered newest first."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select id, kind, severity, message, ref, created_at "
             "from public.alerts where acked_at is null order by created_at desc limit %s",

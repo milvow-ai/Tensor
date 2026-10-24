@@ -46,6 +46,18 @@ class Membership(BaseModel):
     created_at: datetime
 
 
+class TokenIdentity(BaseModel):
+    """What a valid API token resolves to: the tenant (and user) the request acts for."""
+
+    model_config = ConfigDict(frozen=True)
+
+    token_id: UUID
+    tenant_id: UUID
+    user_id: UUID | None
+    name: str
+    scopes: tuple[str, ...]
+
+
 class TenantContext(BaseModel):
     """Who is acting, for which tenant. Passed explicitly down every data path."""
 

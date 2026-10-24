@@ -18,8 +18,9 @@ from alembic import command
 from alembic.config import Config
 
 from farm import __version__
-from farm.db.pool import get_db_url, is_local_db, run
+from farm.db.pool import get_db_url, is_local_db, run, tenant_connection
 from farm.registry import RegistryError, export_json_schema, load_registry
+from farm.tenancy import MILVOW_TENANT_ID, use_tenant
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -162,9 +163,16 @@ def _fail(message: str, code: int = 1) -> typer.Exit:
     return typer.Exit(code=code)
 
 
+async def _as_default_tenant[T](work: Coroutine[Any, Any, T]) -> T:
+    """The CLI and stdio ``farm serve`` act for tenant #1 (Milvow); ``farm run`` clears it for HTTP."""
+    with use_tenant(MILVOW_TENANT_ID):
+        return await work
+
+
 def _run_farm[T](work: Coroutine[Any, Any, T]) -> T:
     """Run ``work`` on the selector event loop psycopg needs; failures a person can fix get one clear line."""
     configure_logging()
+    work = _as_default_tenant(work)
     try:
         try:
             asyncio.get_running_loop()
@@ -717,7 +725,7 @@ def ai_login(
     async def get_conn_info() -> dict[str, Any]:
         ctx = await _context(local)
         try:
-            async with ctx.pool.connection() as conn:
+            async with tenant_connection(ctx.pool) as conn:
                 cur = await conn.execute(
                     "select c.id, c.provider_id, c.meta from public.connections c where c.id = %s",
                     (connection,),
@@ -932,7 +940,7 @@ def mcp_login(
         try:
             executor = ctx.executors["mcp"]
             assert isinstance(executor, McpExecutor)
-            async with ctx.pool.connection() as conn:
+            async with tenant_connection(ctx.pool) as conn:
                 cur = await conn.execute(
                     "select provider_id from public.connections where id = %s", (connection,)
                 )
@@ -945,7 +953,7 @@ def mcp_login(
                 tools = await executor.login(view)
             except McpFailure as failure:
                 raise _fail(f"login failed ({failure.kind.value}): {failure.message}") from None
-            async with ctx.pool.connection() as conn:
+            async with tenant_connection(ctx.pool) as conn:
                 await conn.execute(
                     "update public.connections set status = 'active' "
                     "where id = %s and status = 'needs_login'",

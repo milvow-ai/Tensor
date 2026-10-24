@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.resources.health import block_reason
 from farm.resources.periods import next_period_start
 
@@ -54,7 +54,7 @@ async def capacity_report(pool: DbPool, now: datetime, capability: str | None = 
 
     With ``capability``: only the pools on its route, in route order (otherwise all pools by id).
     """
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         if capability is None:
             cur = await conn.execute(
                 "select id, name, kind, enabled from public.providers order by id",
@@ -126,7 +126,7 @@ async def capacity_report(pool: DbPool, now: datetime, capability: str | None = 
 
 async def list_resources(pool: DbPool) -> dict[str, Any]:
     """The inventory: capabilities with their routes, providers with their connections and units."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select c.name, c.kind, c.description, c.default_strategy, c.cache_ttl_seconds, "
             "coalesce(array_agg(r.provider_id order by r.position) "
@@ -199,7 +199,7 @@ async def list_resources(pool: DbPool) -> dict[str, Any]:
 async def usage_report(pool: DbPool, now: datetime, days: int = 30) -> dict[str, Any]:
     """What the last ``days`` days consumed and cost per connection/unit, and runs per capability/status."""
     since = now - timedelta(days=days)
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select connection_id, unit, sum(amount), sum(cost_usd), count(*) from public.usage_events "
             "where at >= %s and kind = 'actual' group by connection_id, unit order by connection_id, unit",

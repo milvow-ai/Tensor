@@ -1460,7 +1460,6 @@ async def test_a_job_fails_as_bad_request_when_the_farm_has_no_ask_ai_capability
 
 # --- the new tables follow the schema contract (CONTEXT section 3) -----------------------------------------------------------------
 
-DEFAULT_TENANT = "00000000-0000-0000-0000-000000000001"
 AI_TABLE_COLUMNS = {
     "ai_conversations": {
         "id", "ai", "account", "native_session_id", "turns", "tokens", "cost", "last_job_id", "created_at",
@@ -1492,7 +1491,7 @@ def test_the_ai_tables_have_their_columns_a_tenant_id_default_and_row_level_secu
         present = {c[1] for c in columns if c[0] == table}
         assert expected <= present, f"{table}: missing {expected - present}"
         (tenant,) = [c for c in columns if c[0] == table and c[1] == "tenant_id"]
-        assert tenant[2] == "uuid" and tenant[3] == "NO" and DEFAULT_TENANT in tenant[4]
+        assert tenant[2] == "uuid" and tenant[3] == "NO" and tenant[4] == "farm_tenant_id()"
     assert rls == {"ai_conversations": True, "ai_jobs": True}
 
 
@@ -1562,19 +1561,19 @@ async def test_updated_at_moves_when_a_job_or_a_conversation_changes(pool: DbPoo
     assert before is not None and after is not None and after[0] > before[0] and after[1] > before[1]
 
 
-def test_under_supabase_the_owner_may_read_the_ai_tables_and_nobody_else_may_touch_them(
+def test_under_supabase_a_member_may_read_the_ai_tables_and_nobody_else_may_touch_them(
     scratch_db: Callable[[], str],
 ) -> None:
     from psycopg import errors
 
-    from tests.test_db_schema import FAKE_AUTH, _as
+    from tests.test_db_schema import FAKE_AUTH, MEMBER_SUB, STRANGER_SUB, _as, seed_console_users
 
     url = scratch_db()
     with psycopg.connect(url, autocommit=True) as conn:
         conn.execute(FAKE_AUTH)
     command.upgrade(alembic_config(url), "head")
     with psycopg.connect(url, autocommit=True) as conn:
-        conn.execute("update public.farm_settings set owner_email = 'Owner@Example.com' where id = 1")
+        seed_console_users(conn)
         conv = conn.execute(
             "insert into public.ai_conversations (ai, account) values ('claude', 'claude-02') returning id"
         ).fetchone()
@@ -1583,7 +1582,7 @@ def test_under_supabase_the_owner_may_read_the_ai_tables_and_nobody_else_may_tou
             "insert into public.ai_jobs (conversation_id, turn, ai, account) values (%s, 1, 'claude', 'claude-02')",
             (conv[0],),
         )
-        _as(conn, "authenticated", "owner@example.com")
+        _as(conn, "authenticated", "member@example.com", MEMBER_SUB)
         assert conn.execute("select count(*) from public.ai_jobs").fetchone() == (1,)
         assert conn.execute("select count(*) from public.ai_conversations").fetchone() == (1,)
         for statement in (
@@ -1594,7 +1593,7 @@ def test_under_supabase_the_owner_may_read_the_ai_tables_and_nobody_else_may_tou
             with pytest.raises(errors.InsufficientPrivilege):
                 conn.execute(statement)  # type: ignore[call-overload]
         conn.execute("reset role")
-        _as(conn, "authenticated", "intruder@example.com")
+        _as(conn, "authenticated", "intruder@example.com", STRANGER_SUB)
         assert conn.execute("select count(*) from public.ai_jobs").fetchone() == (0,)
         assert conn.execute("select count(*) from public.ai_conversations").fetchone() == (0,)
         conn.execute("reset role")

@@ -146,7 +146,8 @@ async def test_ack_alert(pool: DbPool) -> None:
 
 
 @respx.mock
-def test_cli_alert_send(monkeypatch: any) -> None:
+def test_cli_alert_send(monkeypatch: any, db_url: str) -> None:
+    monkeypatch.setenv("FARM_DB_URL", db_url)  # the migrated test database, not the developer's local one
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     result = runner.invoke(

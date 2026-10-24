@@ -31,7 +31,6 @@ from farm.control.cli import app as cli_app
 from farm.control.run import (
     create_farm_app,
     create_token,
-    ensure_tokens_table,
 )
 from farm.db.pool import DbPool
 from farm.manager.alerts import list_open_alerts
@@ -52,7 +51,6 @@ async def test_concurrent_mcp_http_clients_and_caller_tracking(
 
     Run rows record the caller client name, and wrong/no token returns genuine HTTP 401.
     """
-    await ensure_tokens_table(pool)
     token_claude = await create_token(pool, "claude-code")
     token_cursor = await create_token(pool, "cursor")
     token_codex = await create_token(pool, "codex")

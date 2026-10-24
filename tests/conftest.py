@@ -4,7 +4,11 @@
   ``farm_test_<random>`` is created, migrated to head with Alembic, and dropped at the end of the session.
   The pgtest server itself is left running (other sessions may share it); the dev server in ``pg`` is untouched.
 * ``pool``    (function) - async pool on that database; every test starts with all tables empty except
-  ``alembic_version`` (kept) and ``farm_settings`` (singleton row reset to its defaults).
+  ``alembic_version`` (kept) and ``farm_settings`` (singleton row reset to its defaults). ``pool.connection()`` is the
+  plain owner checkout; its connections start as tenant #1 (``PGOPTIONS``, see ``_default_tenant``), so a test's
+  own fixture inserts land in Milvow; code under test checks out with ``tenant_connection`` and gets RLS.
+* ``_default_tenant`` (autouse) - every test acts for tenant #1 (Milvow) unless it sets another with ``use_tenant``;
+  raw owner connections (``psycopg.connect``) start as Milvow too.
 * ``registry``  (function) - ``tests/fixtures/registry.yaml`` loaded and validated.
 * ``scratch_db`` (function) - factory for extra empty databases (migration round-trip, RLS tests).
 * ``seed_connection(pool, provider_id, conn_id, units=...)`` - helper to insert a provider + connection + units.
@@ -16,6 +20,7 @@ all other async tests keep the platform default loop (Windows: Proactor, which a
 import asyncio
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -36,6 +41,7 @@ from farm.executors.api import ApiExecutor
 from farm.registry import Registry, load_registry
 from farm.registry.sync import sync_registry
 from farm.settings import data_dir
+from farm.tenancy import MILVOW_TENANT_ID, use_tenant
 
 
 def pytest_asyncio_loop_factories(
@@ -127,6 +133,19 @@ async def truncate_all(pool: DbPool) -> None:
             await conn.execute(sql.SQL("truncate table {} restart identity cascade").format(sql.SQL(row[0])))
         await conn.execute(_RESET_TENANTS)
         await conn.execute(_RESET_SETTINGS)
+
+
+@pytest.fixture(autouse=True)
+def _default_tenant(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Tests act for Milvow unless they say otherwise (production entry points do the same per request).
+
+    Raw ``psycopg.connect`` calls in tests (seeding, schema checks, child processes) are owner connections that
+    started as tenant #1 before F1B, so they start with ``app.tenant_id`` = Milvow via ``PGOPTIONS``. A test that
+    needs a connection without a tenant passes ``options=`` in its conninfo, which takes precedence.
+    """
+    monkeypatch.setenv("PGOPTIONS", f"-c app.tenant_id={MILVOW_TENANT_ID}")
+    with use_tenant(MILVOW_TENANT_ID):
+        yield
 
 
 @pytest_asyncio.fixture
@@ -281,3 +300,118 @@ async def clean_pool(pool: DbPool) -> AsyncIterator[DbPool]:
 async def farm_ctx(farm_factory: Callable[..., Awaitable[FarmContext]], registry: Registry) -> FarmContext:
     """The fixture registry synced into the test database: reoon-01, reoon-02, zerobounce-01, clay, claude."""
     return await farm_factory(registry)
+
+
+# --- F1B: two tenants with identical data shapes (isolation suite) -----------------------------------------
+
+SEEDS: dict[str, tuple[str, str]] = {
+    # table -> (columns, values); %(name)s are per-tenant parameters from ``tenant_params``. Ordered for FKs.
+    "providers": ("id, name, kind, executor", "%(pid)s, %(msg)s, 'tool', 'api'"),
+    "connections": ("id, provider_id", "%(conn)s, %(pid)s"),
+    "consumption_units": ("connection_id, unit, period", "%(conn)s, 'credits', 'day'"),
+    "quota_usage": ("connection_id, unit, period_start", "%(conn)s, 'credits', now()"),
+    "quota_reservations": (
+        "connection_id, unit, amount, period_start, expires_at",
+        "%(conn)s, 'credits', 1, now(), now() + interval '1 hour'",
+    ),
+    "usage_events": ("connection_id, unit, amount, kind", "%(conn)s, 'credits', 1, 'actual'"),
+    "balance_snapshots": ("connection_id, unit, remaining, source", "%(conn)s, 'credits', 5, 'manual'"),
+    "connection_health": ("connection_id", "%(conn)s"),
+    "billing_events": ("connection_id, kind, amount_usd", "%(conn)s, 'charge', 1"),
+    "budget_reservations": ("connection_id, amount_usd, expires_at", "%(conn)s, 1, now() + interval '1 hour'"),
+    "budgets": ("scope, monthly_usd", "'global', 10"),
+    "alerts": ("id, kind, severity, message", "%(alert)s, 'k', 'info', %(msg)s"),
+    "capabilities": ("name, kind", "%(cap)s, 'tool'"),
+    "capability_routes": ("capability, provider_id", "%(cap)s, %(pid)s"),
+    "capability_requests": ("request_hash, capability, status", "%(cap)s, %(cap)s, 'pending'"),
+    "runs": ("id, capability, caller, status", "%(rid)s, %(cap)s, 'test', 'succeeded'"),
+    "run_events": ("run_id, seq, kind", "%(rid)s, 1, 'plan'"),
+    "ai_sessions": ("session_id, connection_id, ai", "%(sid)s, %(conn)s, 'claude'"),
+    "farm_commands": ("kind", "'pause'"),
+    "audit_events": ("actor, action, target", "'test', 'seed', %(conn)s"),
+    "entities": ("id, kind, canonical_key, name", "%(eid)s, 'company', %(ckey)s, %(msg)s"),
+    "facts": ("entity_id, attribute, value", "%(eid)s, 'size', '1'::jsonb"),
+    "evidence": ("sha256, path", "%(sha)s, 'p'"),
+    "ai_conversations": ("id, ai, account", "%(cv)s, 'claude', %(conn)s"),
+    "ai_jobs": ("id, conversation_id, turn, ai, account", "%(jid)s, %(cv)s, 1, 'claude', %(conn)s"),
+    "integration_requests": ("name, kind, purpose", "%(msg)s, 'mcp', 'why'"),
+    "mcp_tools": (
+        "provider, name, input_schema, definition, schema_hash",
+        "%(pid)s, 'tool', '{}'::jsonb, '{}'::jsonb, 'h'",
+    ),
+    "pool_state": ("provider_id", "%(pid)s"),
+    "api_tokens": ("name, token_prefix, token_hash", "%(msg)s, 'hf_', %(sha)s"),
+}
+"""One row per tenant-owned table the isolation suite seeds. ``memberships`` is seeded separately (needs a user);
+``farm_settings`` is a singleton with a global primary key (see the open issue in the F1B report)."""
+
+SEEDED_ELSEWHERE = {"memberships", "farm_settings"}
+TENANT_B = uuid.UUID("00000000-0000-0000-0000-0000000000b2")
+
+
+def tenant_params(tag: str) -> dict[str, Any]:
+    """Distinct ids per tenant; ``iso-<tag>`` appears in every text value so a leak is visible in any output."""
+    return {
+        "pid": f"iso-{tag}-prov",
+        "conn": f"iso-{tag}-conn",
+        "cap": f"iso-{tag}-cap",
+        "msg": f"iso-{tag}-text",
+        "rid": uuid.uuid4(),
+        "alert": uuid.uuid4(),
+        "cv": uuid.uuid4(),
+        "jid": uuid.uuid4(),
+        "eid": uuid.uuid4(),
+        "sid": f"iso-{tag}-session",
+        "ckey": f"iso-{tag}-company",
+        "sha": uuid.uuid4().hex + uuid.uuid4().hex,
+    }
+
+
+@dataclass
+class TwoTenants:
+    a: uuid.UUID
+    b: uuid.UUID
+    params: dict[uuid.UUID, dict[str, Any]]
+
+
+async def seed_tenant(pool: DbPool, tenant: uuid.UUID, tag: str) -> dict[str, Any]:
+    """Insert one row of every seeded table for ``tenant`` as the platform role (explicit ``tenant_id``)."""
+    from farm.db.pool import system_connection
+
+    params = tenant_params(tag)
+    async with system_connection(pool) as conn:
+        for table, (columns, values) in SEEDS.items():
+            await conn.execute(
+                f"insert into public.{table} (tenant_id, {columns}) values (%(tenant)s, {values})",  # type: ignore[call-overload]  # test-only SQL built from constants above
+                {**params, "tenant": tenant},
+            )
+        user = await (
+            await conn.execute(
+                "insert into public.users (email) values (%s) returning id", (f"iso-{tag}@example.com",)
+            )
+        ).fetchone()
+        assert user is not None
+        await conn.execute(
+            "insert into public.memberships (tenant_id, user_id, role) values (%s, %s, 'owner')",
+            (tenant, user[0]),
+        )
+    return params
+
+
+@pytest_asyncio.fixture
+async def two_tenants(pool: DbPool) -> TwoTenants:
+    """Tenant A (Milvow) and tenant B, each holding one row of every tenant table with identical shapes."""
+    from farm.db.pool import system_connection
+
+    async with system_connection(pool) as conn:
+        await conn.execute(
+            "insert into public.tenants (id, slug, name) values (%s, 'iso-b', 'Isolation B')", (TENANT_B,)
+        )
+    return TwoTenants(
+        a=MILVOW_TENANT_ID,
+        b=TENANT_B,
+        params={
+            MILVOW_TENANT_ID: await seed_tenant(pool, MILVOW_TENANT_ID, "a"),
+            TENANT_B: await seed_tenant(pool, TENANT_B, "b"),
+        },
+    )

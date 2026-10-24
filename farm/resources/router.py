@@ -59,7 +59,7 @@ from pydantic import BaseModel, ValidationError
 from farm.capabilities.policy import falls_back_on_empty
 from farm.capabilities.schemas import CAPABILITY_MODELS
 from farm.context import FarmContext
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult, Executor
 from farm.resources import flight, health, ledger
 from farm.resources.gate import GateSaturated, get_gate
@@ -255,7 +255,7 @@ type Budgets = Mapping[tuple[str, str | None], Budget]
 
 
 async def _load_capability(pool: DbPool, name: str) -> CapabilityInfo | None:
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select default_strategy, cache_ttl_seconds from public.capabilities where name = %s", (name,)
         )
@@ -264,7 +264,7 @@ async def _load_capability(pool: DbPool, name: str) -> CapabilityInfo | None:
 
 
 async def _load_routes(pool: DbPool, capability: str) -> list[ProviderPool]:
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select p.id, p.name, p.executor, p.enabled, p.default_strategy, p.config "
             "from public.capability_routes r join public.providers p on p.id = r.provider_id "
@@ -291,7 +291,7 @@ async def _load_candidates(pool: DbPool, provider_id: str, now: datetime | None 
     With ``now``, a ``next_reset_at`` that has passed is dropped: the window reset, so it must not rank the
     unit as the "soonest reset" for ever.
     """
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select cn.id, cn.provider_id, cn.auth_ref, cn.scope, cn.priority, cn.status, cn.meta, "
             "cn.concurrency, cn.rate_per_min, coalesce(h.circuit, 'closed'), h.cooldown_until, "
@@ -338,14 +338,14 @@ async def _load_candidates(pool: DbPool, provider_id: str, now: datetime | None 
 
 
 async def _load_budgets(pool: DbPool) -> Budgets:
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute("select scope, ref, monthly_usd, hard_stop from public.budgets")
         rows = await cur.fetchall()
     return {(r[0], r[1]): Budget(r[2], r[3]) for r in rows}
 
 
 async def _provider_of(pool: DbPool, connection_id: str) -> str | None:
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute("select provider_id from public.connections where id = %s", (connection_id,))
         row = await cur.fetchone()
     return None if row is None else str(row[0])
@@ -1020,7 +1020,7 @@ class _Chain:
             sess_id = str(result.data["session_id"])
             ai_name = str(result.data.get("ai") or provider_pool.id)
             model_name = result.data.get("model") or call.params.get("model")
-            async with ctx.pool.connection() as conn:
+            async with tenant_connection(ctx.pool) as conn:
                 await conn.execute(
                     """
                     insert into public.ai_sessions (
@@ -1070,7 +1070,7 @@ class _Chain:
             "health.failure",
         )
         if kind is ErrorKind.LIMIT_REACHED and result.reset_at is not None:
-            async with ctx.pool.connection() as conn:
+            async with tenant_connection(ctx.pool) as conn:
                 await conn.execute(
                     "update public.consumption_units set next_reset_at = %s where connection_id = %s",
                     (result.reset_at, candidate.id),
@@ -1220,7 +1220,7 @@ class _Chain:
         return spent
 
     async def _usage_event(self, candidate: Candidate, unit: str, actual: Decimal, cost: Decimal) -> None:
-        async with self.ctx.pool.connection() as conn:
+        async with tenant_connection(self.ctx.pool) as conn:
             await conn.execute(
                 "insert into public.usage_events "
                 "(connection_id, unit, amount, kind, cost_usd, request_id, run_id, at) "
@@ -1364,7 +1364,7 @@ async def _route(
     session_pinned = False
     session_id = normalised.get("session_id")
     if session_id:
-        async with ctx.pool.connection() as conn:
+        async with tenant_connection(ctx.pool) as conn:
             cur = await conn.execute(
                 "select connection_id, ai, model from public.ai_sessions where session_id = %s",
                 (str(session_id),),

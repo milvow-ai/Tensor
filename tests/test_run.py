@@ -14,6 +14,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
+import pytest
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from typer.testing import CliRunner
@@ -23,7 +24,6 @@ from farm.control.cli import app
 from farm.control.run import (
     create_farm_app,
     create_token,
-    ensure_tokens_table,
     hash_token,
     list_tokens,
     revoke_token,
@@ -31,6 +31,7 @@ from farm.control.run import (
 )
 from farm.db.pool import DbPool
 from farm.registry import Registry
+from farm.tenancy import MILVOW_TENANT_ID
 from tests.farm_helpers import EMAIL, ScriptedExecutor, ok_result
 
 type Make = Callable[..., Awaitable[FarmContext]]
@@ -38,34 +39,36 @@ type Make = Callable[..., Awaitable[FarmContext]]
 
 async def test_token_lifecycle_and_verification(pool: DbPool) -> None:
     """Token creation, verification, last_used update, and revocation."""
-    await ensure_tokens_table(pool)
-
     # 1. Create token
     raw_token = await create_token(pool, "test-agent")
-    assert raw_token.startswith("farm_")
+    assert raw_token.startswith("hf_")
     assert len(raw_token) > 20
 
     # Token hash in DB, raw token not in DB
     expected_hash = hash_token(raw_token)
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "select token_hash, client_name, last_used from public.client_tokens where client_name = %s",
+            "select token_hash, name, last_used_at, tenant_id, token_prefix from public.api_tokens where name = %s",
             ("test-agent",),
         )
         row = await cur.fetchone()
         assert row is not None
         assert row[0] == expected_hash
         assert row[1] == "test-agent"
-        assert row[2] is None  # last_used initially None
+        assert row[2] is None  # last_used_at initially None
+        assert row[3] == MILVOW_TENANT_ID
+        assert row[4] == raw_token[:8]  # the prefix is all that is kept in clear
+        assert raw_token not in {str(v) for v in row}
 
-    # 2. Verify token
-    client = await verify_token(pool, raw_token)
-    assert client == "test-agent"
+    # 2. Verify token: it resolves to the tenant it was created for
+    identity = await verify_token(pool, raw_token)
+    assert identity is not None
+    assert (identity.name, identity.tenant_id, identity.user_id) == ("test-agent", MILVOW_TENANT_ID, None)
 
-    # last_used is updated
+    # last_used_at is updated
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "select last_used from public.client_tokens where client_name = %s",
+            "select last_used_at from public.api_tokens where name = %s",
             ("test-agent",),
         )
         row = await cur.fetchone()
@@ -92,17 +95,18 @@ async def test_token_lifecycle_and_verification(pool: DbPool) -> None:
     assert not any(x["client_name"] == "test-agent" for x in tokens_after)
 
 
-def test_cli_token_commands(db_url: str) -> None:
-    """CLI token create, list, and revoke commands."""
+def test_cli_token_commands(db_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI token create, list, and revoke commands (as tenant #1)."""
+    monkeypatch.setenv("FARM_DB_URL", db_url)  # the migrated test database, not the developer's local one
     runner = CliRunner()
 
     # 1. Create token via CLI
     res_create = runner.invoke(app, ["token", "create", "cli-agent"], env={"DATABASE_URL": db_url})
     assert res_create.exit_code == 0
     assert "Created token for 'cli-agent':" in res_create.stdout
-    assert "farm_" in res_create.stdout
+    assert "hf_" in res_create.stdout
     lines = res_create.stdout.splitlines()
-    raw_token = next(line.strip() for line in lines if line.strip().startswith("farm_"))
+    raw_token = next(line.strip() for line in lines if line.strip().startswith("hf_"))
 
     # 2. List tokens
     res_list = runner.invoke(app, ["token", "list"], env={"DATABASE_URL": db_url})
@@ -143,7 +147,6 @@ async def test_mcp_endpoint_auth_rejection(
     pool: DbPool, farm_factory: Make, registry: Registry
 ) -> None:
     """Requests to /mcp without a valid Bearer token return HTTP 401."""
-    await ensure_tokens_table(pool)
     raw_token = await create_token(pool, "valid-client")
 
     ctx = await farm_factory(registry)
@@ -176,7 +179,6 @@ async def test_mcp_auth_success_sets_runs_caller(
     pool: DbPool, farm_factory: Make, registry: Registry
 ) -> None:
     """Authenticated MCP requests map the bearer token to the client name in runs.caller."""
-    await ensure_tokens_table(pool)
     token_claude = await create_token(pool, "claude-code")
 
     executor = ScriptedExecutor(lambda req: ok_result())
