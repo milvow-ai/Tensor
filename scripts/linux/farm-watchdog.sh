@@ -42,7 +42,10 @@ send_alert() {
     if [[ $EUID -eq 0 ]] && id "$FARM_USER" >/dev/null 2>&1; then
         cmd=(runuser -u "$FARM_USER" -- "${cmd[@]}")
     fi
-    "${cmd[@]}" >/dev/null 2>&1 || log "Failed to dispatch alert via farm alert send"
+    local out
+    if ! out=$("${cmd[@]}" 2>&1); then
+        log "Failed to dispatch alert via farm alert send: $(printf '%s' "$out" | tail -n 3 | tr '\n' ' ' | cut -c1-400)"
+    fi
 }
 
 farm_unhealthy=0
