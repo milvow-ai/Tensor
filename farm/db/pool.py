@@ -25,7 +25,7 @@ from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
 
 from farm.settings import load_env
-from farm.tenancy.context import current_tenant, require_tenant
+from farm.tenancy.context import require_tenant
 
 log = structlog.get_logger(__name__)
 
@@ -43,25 +43,11 @@ _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 type Conn = AsyncConnection[TupleRow]
 
 
-class FarmPool(AsyncConnectionPool[Conn]):
-    """The Farm's pool. ``connection()`` is the *owner* checkout (migrations, fixtures, legacy call sites).
-
-    It bypasses row level security, but while a tenant is set it carries it in ``app.tenant_id``, so a row it
-    inserts lands in that tenant (with none set the insert fails NOT NULL, it never lands anywhere).
-    Request-scoped code uses ``tenant_connection`` and cross-tenant maintenance ``system_connection``.
-    """
-
-    @asynccontextmanager
-    async def connection(self, timeout: float | None = None) -> AsyncIterator[Conn]:
-        async with AsyncConnectionPool.connection(self, timeout) as conn:
-            tenant = current_tenant.get()
-            if tenant is not None:
-                await conn.execute("select set_config('app.tenant_id', %s, false)", (str(tenant),))
-            yield conn
-
-
 type DbPool = AsyncConnectionPool[Conn]
-"""The pool type used across the Farm (annotate ``pool: DbPool``); ``open_pool`` returns a ``FarmPool``."""
+"""The pool type used across the Farm (annotate ``pool: DbPool``).
+
+``pool.connection()`` is the plain owner checkout (migrations, test fixtures): no role switch, no tenant.
+Request-scoped code uses ``tenant_connection`` and cross-tenant maintenance ``system_connection``."""
 
 _global_pool: DbPool | None = None
 
@@ -134,7 +120,7 @@ async def tenant_connection(pool: DbPool) -> AsyncIterator[Conn]:
     every ``tenant_id`` column; both are reset when the block ends.
     """
     tenant = require_tenant()
-    async with AsyncConnectionPool.connection(pool) as conn:  # not pool.connection(): owner
+    async with pool.connection() as conn:
         await conn.execute(f"set role {RUNTIME_ROLE}")
         await conn.execute("select set_config('app.tenant_id', %s, false)", (str(tenant),))
         try:
@@ -150,7 +136,7 @@ async def system_connection(pool: DbPool) -> AsyncIterator[Conn]:
     Only for code that deliberately spans tenants (claiming queued work, sweeps, token lookup before the
     tenant is known). Rows it inserts must name their ``tenant_id``: the column has no default here.
     """
-    async with AsyncConnectionPool.connection(pool) as conn:
+    async with pool.connection() as conn:
         await conn.execute(f"set role {SYSTEM_ROLE}")
         try:
             yield conn
@@ -168,7 +154,7 @@ async def open_pool(db_url: str | None = None) -> DbPool:
     if db_url is None and _global_pool is not None and not _global_pool.closed:
         return _global_pool
     url = db_url or get_db_url()
-    pool: DbPool = FarmPool(
+    pool: DbPool = AsyncConnectionPool(
         conninfo=url,
         min_size=1,
         max_size=10,

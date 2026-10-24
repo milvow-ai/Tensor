@@ -15,7 +15,7 @@ import structlog
 from psycopg import AsyncConnection
 from psycopg.rows import TupleRow
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, system_connection, tenant_connection
 from farm.resources.periods import next_period_start
 
 ROLLING_WINDOW = timedelta(hours=5)
@@ -42,7 +42,7 @@ async def reserve(
     Returns the reservation id, or ``None`` when ``used + reserved + amount`` would exceed the limit.
     Raises (``psycopg.errors.NoData``) when the connection has no such unit.
     """
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select public.farm_reserve(%s::text, %s::text, %s::numeric, %s::uuid, %s::int)",
             (conn_id, unit, _num(amount), request_id, ttl_s),
@@ -64,7 +64,7 @@ async def commit(pool: DbPool, res_id: UUID | str, actual: Amount | None = None)
     A reservation that expired before its call finished is still charged (a *late commit*: the call really
     ran), and a warning says so; returns ``True`` in that case.
     """
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         await conn.execute(
             "select public.farm_commit(%s::uuid, %s::numeric)",
             (res_id, None if actual is None else _num(actual)),
@@ -168,13 +168,13 @@ async def _rolling_free_at(
 
 async def release(pool: DbPool, res_id: UUID | str) -> None:
     """Give a reservation back without charging. Idempotent."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         await conn.execute("select public.farm_release(%s::uuid)", (res_id,))
 
 
 async def expire(pool: DbPool) -> int:
     """Release every reservation past its ``expires_at``; returns how many were expired."""
-    async with pool.connection() as conn:
+    async with system_connection(pool) as conn:  # sweeps every tenant
         cur = await conn.execute("select public.farm_expire_reservations()")
         row = await cur.fetchone()
     return int(row[0]) if row is not None and row[0] is not None else 0

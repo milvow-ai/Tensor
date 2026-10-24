@@ -5,8 +5,8 @@
   The pgtest server itself is left running (other sessions may share it); the dev server in ``pg`` is untouched.
 * ``pool``    (function) - async pool on that database; every test starts with all tables empty except
   ``alembic_version`` (kept) and ``farm_settings`` (singleton row reset to its defaults). ``pool.connection()`` is the
-  owner checkout: while a tenant is set it carries it as ``app.tenant_id``, so a test's own fixture inserts land in
-  that tenant (Milvow by default); code under test checks out with ``tenant_connection`` and gets RLS.
+  plain owner checkout; its connections start as tenant #1 (``PGOPTIONS``, see ``_default_tenant``), so a test's
+  own fixture inserts land in Milvow; code under test checks out with ``tenant_connection`` and gets RLS.
 * ``_default_tenant`` (autouse) - every test acts for tenant #1 (Milvow) unless it sets another with ``use_tenant``;
   raw owner connections (``psycopg.connect``) start as Milvow too.
 * ``registry``  (function) - ``tests/fixtures/registry.yaml`` loaded and validated.

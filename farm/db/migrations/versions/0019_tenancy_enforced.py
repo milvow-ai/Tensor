@@ -14,10 +14,10 @@
   schema instead of being created at runtime.
 
 Revision ID: 0019
-Revises: 0017
+Revises: 0018
 Create Date: 2026-10-24 00:00:00.000000
 
-``down_revision`` is 0017 because 0018 (Q0G) was not on the branch when this was written; the lead re-chains it.
+``down_revision`` is 0018 (Q0G follow-ups), which recreates v_connection_status (already security_invoker) and farm_reactivate_due.
 """
 
 from collections.abc import Sequence
@@ -25,7 +25,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "0019"
-down_revision: str | None = "0017"
+down_revision: str | None = "0018"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

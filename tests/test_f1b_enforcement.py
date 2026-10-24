@@ -22,9 +22,8 @@ from tests.conftest import TwoTenants
 
 FARM = Path(__file__).resolve().parent.parent / "farm"
 
-# Raw ``pool.connection()`` (the owner checkout) is allowed only here. ledger.py and budgets.py belong to Q0G's
-# round (they could not be edited by F1B): they must move to tenant_connection / system_connection once it merges.
-OWNER_CHECKOUT_ALLOWED = {"db/pool.py", "resources/ledger.py", "manager/budgets.py"}
+# Raw ``pool.connection()`` (the owner checkout) is allowed only in the pool module that defines the checkouts.
+OWNER_CHECKOUT_ALLOWED = {"db/pool.py"}
 
 
 def test_no_request_scoped_code_uses_the_owner_checkout() -> None:

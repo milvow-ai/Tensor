@@ -19,7 +19,7 @@ from uuid import UUID
 import structlog
 from pydantic import BaseModel
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.manager.alerts import create_alert
 
 log = structlog.get_logger(__name__)
@@ -53,7 +53,7 @@ async def get_month_to_date_spend(
     current = now or datetime.now(UTC)
     month_start = datetime(current.year, current.month, 1, tzinfo=UTC)
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         if scope == "connection":
             if not ref:
                 raise ValueError("ref (connection_id) required for connection scope")
@@ -190,7 +190,7 @@ async def check_paid_call(
 
     current = now or datetime.now(UTC)
     month_start = datetime(current.year, current.month, 1, tzinfo=UTC)
-    async with pool.connection() as conn, conn.transaction():
+    async with tenant_connection(pool) as conn, conn.transaction():
         cur = await conn.execute(
             "select public.farm_budget_reserve(%s::text, %s::numeric, null::uuid, %s::timestamptz, "
             "%s::timestamptz, 60)",
@@ -216,7 +216,7 @@ async def record_policy_block(
     event_data = dict(data or {})
     event_data["reason"] = reason
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         # Determine next seq for run_id
         cur = await conn.execute(
             "select coalesce(max(seq), 0) + 1 from public.run_events where run_id = %s",
@@ -245,7 +245,7 @@ async def check_budget_thresholds(
     current = now or datetime.now(UTC)
     month_key = f"{current.year}-{current.month:02d}"
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         # Fetch alert thresholds from settings
         cur_set = await conn.execute(
             "select alert_thresholds, global_monthly_budget_usd from public.farm_settings where id = 1"
