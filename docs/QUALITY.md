@@ -18,6 +18,7 @@ gates — not patching symptoms one at a time.
 | D8 | Lint (ruff E501) failed on the base branch: `farm/executors/cli_agent/agy.py:92` | Gate of round f1a, 2026-10-24 | Gate hygiene | Fixed 2026-10-24 (comment wrapped) |
 | D34 | `public.client_tokens` (MCP client tokens) is created at runtime by `farm/control/run.py`, outside any migration: no `tenant_id`, no RLS, no migration history | Found by F1A, 2026-10-24 | Schema hygiene / tenancy | F1B: move it into a migration with `tenant_id`, hashed tokens, RLS; remove the runtime `create table` |
 | D35 | The secret scan in the Linux `check.sh` could pass with nothing scanned when `git ls-files` failed (`|| true`), and its self-test key literal tripped the repo scan | Lead verification of F3P, 2026-10-24 | Silent-pass checks | Fixed 2026-10-24: loud failure without git; key built at runtime; proven (626 files scanned on a real clone) |
+| D36 | Tool risk labels come only from the MCP server's hints: `clay__search-contacts-by-name` is labelled read-only but enriches contacts and can spend credits | Live `search_tools`, 2026-10-24 | Approval safety | A2: Farm-side risk overrides per tool (default \"may-spend\" for enrichment / write-like tools), editable in the dashboard |
 | D9–D33 | 25 findings of the read-only audit Q0C (1 critical, 10 major, 14 minor; 17 confirmed with reproductions) | `docs/audits/Q0-audit.md`; reproductions in `D:/dev-cache/runs/q0c/repro/` | Several | Fix rounds Q0D+ |
 
 ## 2. The fix for the state-classification class (D1, D4)

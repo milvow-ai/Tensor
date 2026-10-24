@@ -5,6 +5,37 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
 
 ---
 
+## 2026-10-24 (later) — Quality baseline: first merges, verified live
+
+**Merged into `effort2/stage1-saas` (each behind the full gate: ruff, mypy, all tests, secret scan):**
+- **Q0C** (`0b37430`) — read-only defect audit: 25 findings (1 critical, 10 major, 14 minor; 17 confirmed with reproductions)
+  in `docs/audits/Q0-audit.md`. Docs only.
+- **Q0B** (`df46565`) — one account-state classifier for all five AI CLIs: structured result first, error channels only, exact
+  signatures from real recorded outputs. The old code scanned the AI's own answer for words like "403" or "capacity" and
+  falsely flagged accounts. Proof: the old code fails 3 of 6 real-output replay tests; generated tests cover all five CLIs.
+- **F3P** (`merge f3p`) — Linux operations scripts and systemd units by Hermes GLM-5, revised after review (7 defects), then two
+  more secret-scan defects fixed by the lead (fake key literal; silent pass when git cannot list files). Proven: loud failure
+  without git; 626 files scanned on a real clone.
+- **Q0A** (`eebf230`) — "Unknown tool" root cause: FastMCP's catalog filter hid tools marked UI-only
+  (`_meta.ui.visibility` without "model"); loose names that matched several tools now error instead of picking one; compact
+  `search_tools` (≈2.8k characters for 10 hits instead of 161k for 25) + `describe_tool`.
+
+**Gate:** `tests/quarantine.txt` holds four registered baseline test failures (D7). They still run and print, but do not block;
+owners Q0D / Q0E. Base lint error (agy.py) fixed.
+
+**Verified on the live Farm (restarted on the new code, PID 476392):**
+- agy-01 (Gemini Pro) had a stale false "needs login" status from the old code; resumed through an audited `resume` command;
+  `farm ai test agy-01` → PONG.
+- `call_tool("clay__get-credits-available")` → answers (`hasWorkspaceCredits: true`).
+
+**New register entries:** D34 `client_tokens` created outside migrations (→ F1B); D35 silent-pass secret scan (fixed); D36 tool
+risk labels trust server hints — `clay__search-contacts-by-name` shows read-only but can spend credits (→ A2 overrides).
+
+**Waiting:** UI kit (A3A) Round 0 — owner's review of the gallery screenshots. F1A (tenancy schema) merge next, then a backed-up
+live database migration.
+
+---
+
 ## 2026-10-24 — Effort 2 starts: SaaS foundation → Stage A → Tensor
 
 **Branch:** `effort2/stage1-saas`, created from `claude/awesome-archimedes-vb1t7y` (3db3d81, which still had 8 unpushed commits).
