@@ -34,7 +34,7 @@ async function untilTheFarmShows(page: Page, check: () => Promise<void>) {
 const SCREENS = [
   { name: "overview", path: "/overview", empty: "Welcome to your Farm" },
   { name: "integrations", path: "/integrations", empty: "No integrations registered yet" },
-  { name: "tool pools", path: "/pools/tools", empty: "No tool pools are registered yet." },
+  { name: "tool pools", path: "/pools/tools", empty: "No tool pools yet" },
   { name: "AI pools", path: "/pools/ai", empty: "No AI pools are registered yet." },
   { name: "runs", path: "/runs", empty: "No runs yet" },
   { name: "billing", path: "/billing", empty: "No billing activity yet" },

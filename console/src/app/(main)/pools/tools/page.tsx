@@ -27,7 +27,7 @@ export default async function ToolPoolsPage() {
       <PageHeader title="Tools" subtitle="Tool pools, accounts, limits and health." />
       {pools.length === 0 ? (
         <EmptyState title="No tool pools yet" description="Add an MCP server or OpenAPI provider to see its tool pool here.">
-          <Button asChild><Link href="/integrations">Add an integration</Link></Button>
+          <Button asChild><Link href="/integrations">Add your first MCP server</Link></Button>
         </EmptyState>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

@@ -25,7 +25,7 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
 
     // 1. KPI row & forecast flag
     // In fixtures, spend is $7,500 against $7,000 global budget; forecast is $7,750 > budget.
-    await expect(page.getByText("Month-to-date spend")).toBeVisible();
+    await expect(page.getByText("Month-to-date spend").first()).toBeVisible();
     await expect(page.getByText("$7,500", { exact: true })).toBeVisible();
     await expect(page.getByText("of $7,000 budget")).toBeVisible();
 
@@ -107,7 +107,7 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
     const problems = watchProblems(page, baseURL ?? "");
     await page.goto("/runs");
 
-    await expect(page.getByRole("heading", { level: 1, name: "Runs", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Activity", exact: true })).toBeVisible();
 
     // In initial state, multiple runs are shown, including Succeeded
     const table = page.locator("table");

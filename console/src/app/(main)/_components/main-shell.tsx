@@ -193,6 +193,7 @@ export function MainShell({
         </header>
 
         {/* Page content */}
+        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable (axe scrollable-region-focusable) */}
         <main tabIndex={0} aria-label="Page content" className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 md:p-6">
           {children}
         </main>
