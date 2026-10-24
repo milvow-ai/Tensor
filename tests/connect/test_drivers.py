@@ -12,6 +12,7 @@ from uuid import UUID
 import pytest
 
 from farm.connect import sessions
+from farm.connect.drivers.agy import AgyCheckDriver
 from farm.connect.drivers.claude import ClaudePasteDriver
 from farm.connect.drivers.codex import CodexDeviceDriver
 from farm.connect.drivers.registry import driver_for
@@ -184,7 +185,42 @@ async def test_a_refused_claude_code_fails_and_keeps_the_account(pool: DbPool, t
 def test_driver_for_picks_by_cli() -> None:
     assert isinstance(driver_for("claude", "claude-05", {"cli": "claude"}), ClaudePasteDriver)
     assert isinstance(driver_for("codex", "codex-05", {"cli": "codex"}), CodexDeviceDriver)
+    assert isinstance(driver_for("gemini", "agy-08", {"cli": "agy"}), AgyCheckDriver)
     with pytest.raises(NotImplementedError):
-        driver_for("gemini", "agy-08", {"cli": "agy"})
+        driver_for("hermes", "hermes-02", {"cli": "hermes"})
     with pytest.raises(NotImplementedError, match="WSL"):
         driver_for("codex", "codex-01", {"cli": "codex", "cli_prefix": ["wsl.exe"]})
+
+
+@pytest.mark.parametrize(
+    ("output", "state"),
+    [
+        ("PONG", "done"),
+        ("error: Eligibility check failed: Your current account is not eligible for Antigravity.\n"
+         "Please verify your account in your browser to continue:\nhttps://accounts.google.com/v3/signin/continue?plt=x",
+         "needs_verification"),
+        ("error: Individual quota reached. Resets in 8h5m59s.", "failed"),
+    ],
+    ids=["ready", "verify", "quota"],
+)
+async def test_agy_check_shows_the_accounts_real_state(
+    pool: DbPool, tmp_path: Path, output: str, state: str
+) -> None:
+    script = tmp_path / "fake_agy.py"
+    code = 0 if output == "PONG" else 1
+    script.write_text(f"import sys\nprint({output!r})\nsys.exit({code})\n", encoding="utf-8")
+    await seed_connection(
+        pool, "gemini", "agy-05", kind="ai", executor="cli_agent", status="paused", auth_ref="cli:agy-05",
+        meta={"cli": "agy", "home": str(tmp_path / "ai" / "agy-05"),
+              "cli_prefix": ["wsl.exe", "-d", "Ubuntu-24.04", "-u", "agy5", "-e", "env"]},
+    )
+    svc = _service(pool, tmp_path, lambda p, c, m: AgyCheckDriver(c, m, command=[sys.executable, str(script)]))
+    await svc.start()
+    try:
+        row = await _wait(pool, await svc.start_login(MILVOW_TENANT_ID, "agy-05", "owner"), state)
+    finally:
+        await svc.stop()
+    if state == "needs_verification":
+        assert row["auth_url"].startswith("https://accounts.google.com/")
+    if state == "done":
+        assert row["identity"]["account_hash"]
