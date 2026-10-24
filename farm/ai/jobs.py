@@ -1285,8 +1285,14 @@ class JobManager:
             work.cancel_reason = "shutdown"
             await self._conclude_interrupted(work)
             self._live.pop(work.job_id, None)
-        for work in list(self._live.values()):
+        running = list(self._live.values())
+        for work in running:
             work.cancel_reason = "shutdown"
+        # Record the verdict before the workers are killed: ending a process tree takes time, and whoever
+        # stopped this process (an MCP client waits 2 s after closing stdin, then kills it) must not catch it
+        # mid-kill with the rows still 'running'. The runners' own conclusion below finds the job ended.
+        await asyncio.gather(*[self._conclude_interrupted(work) for work in running])
+        for work in running:
             if work.handle is not None:
                 work.handle.cancel()
                 handles.append(work.handle)
