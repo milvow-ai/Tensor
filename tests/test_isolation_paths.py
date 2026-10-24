@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -45,6 +46,12 @@ async def snapshot(pool: DbPool, tenant: UUID) -> dict[str, str]:
 # --- command kinds -----------------------------------------------------------------------------------------
 
 
+# A well-formed envelope (sealed for the test key, so it opens nowhere else).
+_SEALED = json.loads((Path(__file__).parent / "connect" / "fixtures" / "sealed_vectors.json").read_text())[
+    "vectors"
+][0]["envelope"]
+
+
 def command_payloads(b: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Every command kind, aimed at tenant B's ids (``b`` = B's seed parameters)."""
     conn, prov, cap = b["conn"], b["pid"], b["cap"]
@@ -67,6 +74,12 @@ def command_payloads(b: dict[str, Any]) -> dict[str, dict[str, Any]]:
         "add_provider": {"provider_id": prov, "name": "hijacked", "executor": "api", "kind": "tool"},
         "update_provider": {"provider_id": prov, "name": "hijacked", "enabled": False},
         "remove_provider": {"provider_id": prov, "force": True},
+        # Sign-in commands (farm/connect): B's account or pool seen from A must not exist.
+        "start_login": {"connection_id": conn},
+        "cancel_login": {"session_id": str(UUID(int=7))},
+        "submit_login_input": {"session_id": str(UUID(int=7)), "sealed": _SEALED},
+        "add_accounts": {"provider_id": prov, "count": 1},
+        "save_secret": {"name": "ISO_KEY", "sealed": _SEALED, "connection_id": conn},
     }
 
 

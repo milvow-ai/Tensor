@@ -1,0 +1,72 @@
+{
+  "comment": "TEST-ONLY test vectors for Harness Farm connect sealed envelope encryption. Never use in production.",
+  "private_key_pem": "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgHXygnxpKL+gVmdAP\nAOgkTUdtQJZP9VzBFZF/MlvDLyahRANCAARxfGDFXjG85sCEQRtVTrJTTgU3kFuB\nKcqqeqYrNZU5zADjhljsZYejMl1jTLzZDTl7eVkNtcDmm4VdYkJOv7iW\n-----END PRIVATE KEY-----\n",
+  "public_jwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "cXxgxV4xvObAhEEbVU6yU04FN5BbgSnKqnqmKzWVOcw",
+    "y": "AOOGWOxlh6MyXWNMvNkNOXt5WQ21wOabhV1iQk6_uJY"
+  },
+  "vectors": [
+    {
+      "description": "login_input device/paste code",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "subject": "session-001",
+      "purpose": "login_input",
+      "aad": "00000000-0000-0000-0000-000000000001|session-001|login_input",
+      "plaintext": "oauth-code-xyz-12345",
+      "envelope": {
+        "v": 1,
+        "alg": "ECDH-ES+HKDF-SHA256+A256GCM",
+        "epk": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "sdZwmNW7PdCUdNcfS_Z0QVQOoz1kjKeXCfp8zSl0UiI",
+          "y": "91x57AnrwI9q1t1CBX8pDwNZj1er7quE967Vm-Fu8ig"
+        },
+        "iv": "p2E2_VNNXhKZenZT",
+        "ct": "uXdkoFGv0zCd6KFmMnSaoDDFf-tuVPsdYtmCUMV8hvVRUP9n"
+      }
+    },
+    {
+      "description": "save_secret API key",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "subject": "OPENAI_API_KEY",
+      "purpose": "secret",
+      "aad": "00000000-0000-0000-0000-000000000001|OPENAI_API_KEY|secret",
+      "plaintext": "sk-proj-testkey9999999999",
+      "envelope": {
+        "v": 1,
+        "alg": "ECDH-ES+HKDF-SHA256+A256GCM",
+        "epk": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "vg2PzOpSASi5ZQ7dloPH-1EleaZDo8eNQhyhUWQshs0",
+          "y": "sNpBKgLWD2LIA6P1BBxidzVOdaC_AwR8g0sKnTPT9JE"
+        },
+        "iv": "QgER70awFVd9hNUh",
+        "ct": "UyC_uQ184pB_cZEBDcLMGrxv2DYBEFgPtfPOycBLw8mS2dCQHrmSRXk"
+      }
+    },
+    {
+      "description": "add_api_keys bulk input",
+      "tenant_id": "00000000-0000-0000-0000-000000000001",
+      "subject": "bulk-keys-import",
+      "purpose": "api_keys",
+      "aad": "00000000-0000-0000-0000-000000000001|bulk-keys-import|api_keys",
+      "plaintext": "sk-11111\nsk-22222\nsk-33333",
+      "envelope": {
+        "v": 1,
+        "alg": "ECDH-ES+HKDF-SHA256+A256GCM",
+        "epk": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "o7zm_FwhdvCrlVU9f5YW5eiasJhXPTMKaHCz2KKnkTs",
+          "y": "b8pJhrQW0EsHs9-a-Ikx4QC1KL3Af4iwk_Fb78XChc8"
+        },
+        "iv": "77p3nXRFvgIayeNJ",
+        "ct": "6Du9RDLC6OBRGPovOqwwzXb78K6FvGI2Us4_2mgIi7LgrWZzEUyvf9Ma"
+      }
+    }
+  ]
+}
