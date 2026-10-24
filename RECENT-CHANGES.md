@@ -20,7 +20,12 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
   product: run the Farm without a console (D47). Until then heavy jobs run one at a time.
 - **Drive C: is full** (0.2 GB free of 280 GB; D: has 52 GB free). With no room on C: Windows cannot grow the page file,
   which is why memory ran out. `scripts/round.ps1` now puts temp files on D: (`D:\dev-cache\tmp`) and saves the full gate
-  output to `D:\dev-cache\runs\<name>\gate-full.txt`. Dev caches still on C: are being moved to D: (owner: "move to D drive").
+  output to `D:\dev-cache\runs\<name>\gate-full.txt`. Owner: "move to D drive". Moved, nothing deleted: the stale npm cache
+  (6.7 GB) and uv cache (1.6 GB) to `D:\dev-cache\from-c\` (npm, uv and Playwright already read from D: through user
+  variables), and the Playwright browsers that existed only on C: into `D:\dev-cache\ms-playwright` (duplicates to
+  `from-c`). C: free 0.5 → 9.1 GB. `D:\dev-cache\from-c` is safe to delete later. Still on C: for the owner to decide: 107
+  temporary browser profiles `Temp\cdp-*` (7.6 GB, 21–23 Oct), Downloads 18.6 GB, Chrome data 9.5 GB, page file 34 GB
+  (inflated by the handle leak; a restart shrinks it). Google Play Games claims 512 GB but its disk image is sparse (0.2 GB real).
 - **F1B gate, first try: 118 failed / 2,330 passed** in 29 min, while A3A and S0 ran in parallel and C: was full. A failed
   test passes alone, so the gate was re-run on its own with temp files on D:.
 - **S0 merged** (`6bb45ea`, docs only + `spikes/acp_client.py`): Claude Code takes a per-run Farm MCP with a tool allow-list
