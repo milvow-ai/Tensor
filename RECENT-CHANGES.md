@@ -21,6 +21,10 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
   as root but alerts as `farm`; daily encrypted state backup (age to the owner's public key; manifest; restore drill;
   damaged archives refused); `install-server.sh`, `/usr/local/bin/farm` wrapper, `update.sh` (backup → ff → sync →
   `farm db backup` → migrate → restart → health, rollback); `check.sh` honours `tests/quarantine.txt` like `check.ps1`.
+- **End-to-end run of the real kit in WSL** (local Postgres, no secrets, port 18787, removed afterwards): install,
+  units as `farm`, MCP over HTTP with the tailnet Host header, watchdog restart of a hung Farm with its alert, encrypted
+  backup + restore drill, `update.sh` — all pass. It caught two bugs, now fixed: `update.sh` health-checked the calling
+  shell's port, and `farm.env`'s `PATH` dropped `sbin` (`runuser: command not found` killed the watchdog's alert).
 - **Farm changes for a server:** `farm registry for-server` (PC registry → server registry: no Windows path or WSL
   prefix, one login home per AI account, figma-bridge disabled; `config/registry.server.yaml` generated from the live
   registry, git-ignored, 34 changes); `FARM_ENV_FILE`; `farm connect --url` / `FARM_PUBLIC_URL`; headless logins (OAuth

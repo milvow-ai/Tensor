@@ -295,6 +295,14 @@ Tailscale.
   6 Linux-only failures it showed are fixed, each with a regression test), plus `tests/test_linux_server.py`: the
   watchdog restarts a Farm that stopped answering and alerts once, leaves a healthy one alone; a state backup
   restores byte for byte, leaves caches out, and a damaged archive is refused.
+- **End to end in WSL** (the real kit; embedded local Postgres, no secrets, port 18787; everything removed after):
+  `install-server.sh` → user, settings, units, executable scripts → the wrapper migrates, syncs the converted live
+  registry and creates a token as `farm` → `harness-farm.service` runs as `farm` on 127.0.0.1 only → MCP over HTTP
+  with the tailnet Host header (21 tools, `get_capacity`), no token refused → watchdog: a hung Farm (SIGSTOP, stale
+  heartbeat) restarted after three failed checks, alert sent as `farm`, healthy again → the backup unit wrote an
+  encrypted archive, the restore drill passed → `update.sh` ran its whole procedure and the Farm came back healthy.
+  It found two bugs, both fixed: `update.sh` checked the port of the calling shell, and the units' `PATH` from
+  `farm.env` dropped `sbin` (the watchdog's alert failed: `runuser: command not found`).
 - **Windows (this PC):** the same tests where they apply (the Linux script tests skip).
 - **Not tested yet:** a real server; Tailscale Serve end to end; Claude Code, Codex and agy logins as user `farm`
   under the hardened unit; Bifrost on Linux; Codex's sandbox under Ubuntu 24.04's AppArmor rules for unprivileged
