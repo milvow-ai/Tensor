@@ -1,0 +1,19 @@
+[Unit]
+Description=Harness Farm watchdog health check
+After=network-online.target harness-farm.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/harness-farm
+EnvironmentFile=/etc/harness-farm/farm.env
+ExecStart=/opt/harness-farm/scripts/linux/farm-watchdog.sh
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/harness-farm
+
+[Install]
+WantedBy=multi-user.target

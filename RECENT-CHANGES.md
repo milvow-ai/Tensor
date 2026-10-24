@@ -34,11 +34,13 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
 
 **Findings:**
 - Builder check: Claude account 2 on Sonnet 5.5 works; Antigravity (Gemini Pro account) works even though the Farm lists it as
-  "needs login" — confirms defect D1; Hermes with GLM-5 on Bedrock fails because the AWS security token has expired (owner to
-  refresh); Hermes through Bifrost (DeepSeek V4 Flash) is available.
+  "needs login" — confirms defect D1. Hermes GLM-5 works through the **default profile with `--provider custom:bedrock-mantle`**
+  (owner's correction); only the old `farm-builder-bedrock` profile had an expired token. `scripts/run-hermes.ps1` and
+  `scripts/round.ps1` now use that route for GLM-5 by default.
 - D1 root cause (in code): the CLI drivers scan the AI's own answer for error words before checking structured success.
 
 **Wave 1 (running):** Q0A tool lookup and compact search · Q0B account-state classifier · Q0C read-only defect audit · F1A
-tenancy schema — all Claude account 2 (Sonnet); A3A dashboard UI kit — Antigravity (Gemini 3.8).
+tenancy schema — all Claude account 2 (Sonnet); A3A dashboard UI kit — Antigravity (Gemini 3.8); F3P Linux operations
+scripts and systemd units — Hermes GLM-5.
 
 **Not done yet:** everything after wave 1 (see the plan); the live database has not been migrated; no deploy.
