@@ -369,8 +369,13 @@ class LoginService:
             )
             return
         models = list(await run.driver.models(run.staging))
-        check = await self._test_job(run.connection_id, run.staging)
-        evidence: dict[str, Any] = {"test_run_id": check.run_id, "models": models}
+        # A driver that knows how to test its CLI does it itself (a one-shot prompt with the staging login).
+        own_test = getattr(run.driver, "test_login", None)
+        if own_test is not None:
+            check = await own_test(run.staging)
+        else:
+            check = await self._test_job(run.connection_id, run.staging)
+        evidence: dict[str, Any] = {"test_run_id": check.run_id, "models": models, "test_ok": check.ok}
         if not check.ok:
             await self._finish(
                 run,
@@ -381,7 +386,14 @@ class LoginService:
                 error_excerpt=_excerpt(check.detail or "The test job with this login did not succeed."),
             )
             return
-        await asyncio.to_thread(promote, run.staging, run.home)
+        # A driver may swap only its login files into an existing home (keeping settings and history); without
+        # one the whole staging home replaces the account's home.
+        own_promote = getattr(run.driver, "promote", None)
+        if own_promote is not None:
+            await asyncio.to_thread(own_promote, run.staging, run.home)
+            await asyncio.to_thread(discard, run.staging)  # gone already after a whole-home swap
+        else:
+            await asyncio.to_thread(promote, run.staging, run.home)
         run.staging = None  # promoted: nothing left to discard
         await self._activate(run, shown, models)
         await self._finish(run, "done", identity=shown, evidence=evidence)

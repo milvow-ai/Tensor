@@ -152,7 +152,7 @@ async def test_device_code_login_promotes_the_new_home_and_activates_the_account
         row = await _wait(pool, sid, "done")
     finally:
         await svc.stop()
-    assert row["evidence"] == {"test_run_id": "run-ok-1", "models": ["opus", "sonnet"]}
+    assert row["evidence"] == {"test_run_id": "run-ok-1", "models": ["opus", "sonnet"], "test_ok": True}
     assert row["identity"]["email_masked"].startswith("j") and row["identity"]["plan"] == "pro"
     assert row["finished_at"] is not None
     status, meta = await _connection(pool, "claude-05")

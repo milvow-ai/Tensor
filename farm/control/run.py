@@ -21,7 +21,7 @@ import hmac
 import secrets
 import signal
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -38,7 +38,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from farm.ai.jobs import JobManager
-from farm.connect.drivers.base import LoginDriver
+from farm.connect.drivers.registry import driver_for
 from farm.connect.service import CheckResult, LoginService, set_login_service
 from farm.context import FarmContext, build_context
 from farm.control.commands import CommandConsumer
@@ -321,13 +321,9 @@ async def create_farm_app(
 
 
 
-def _no_login_drivers(provider_id: str, connection_id: str, meta: Mapping[str, Any]) -> LoginDriver:
-    """Until the CLI drivers land (L1B) a dashboard sign-in ends at once as ``not_implemented``."""
-    raise NotImplementedError("CLI drivers arrive in L1B")
-
-
 async def _no_login_test(connection_id: str, home: Path) -> CheckResult:
-    raise NotImplementedError("the sign-in test job arrives in L1B")
+    # Every driver tests its own login (a one-shot prompt); a driver without one cannot finish a sign-in.
+    raise NotImplementedError("this sign-in driver has no test of its own")
 
 
 async def run_farm(
@@ -370,7 +366,7 @@ async def run_farm(
     # Start background components
     await heartbeat_writer.start()
     await command_consumer.start()
-    login_service = LoginService(ctx.pool, driver_factory=_no_login_drivers, test_job=_no_login_test)
+    login_service = LoginService(ctx.pool, driver_factory=driver_for, test_job=_no_login_test)
     set_login_service(login_service)
     await login_service.start()
     await scheduler.start()
