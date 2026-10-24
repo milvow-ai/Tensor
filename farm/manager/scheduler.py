@@ -29,20 +29,25 @@ async def reactivate_due_connections(
 ) -> list[str]:
     """Auto-resume exhausted connections whose reset time has arrived.
 
-    Checks connections with status='exhausted'. If next_reset_at <= now, or the quota period
-    has rolled over and new period capacity is available, resumes to status='active'.
+    An account is never resumed while its ``cooldown_until`` (what the provider said, or the next period
+    start) is in the future. Past that, it resumes when a unit's ``next_reset_at`` has come, or its quota
+    period has rolled over since the unit was last full. A resumed connection loses the ``next_reset_at``
+    values that came due: the window has reset, and a stale date must not undo the next exhaustion.
     """
     current = now or datetime.now(UTC)
     reactivated: list[str] = []
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "select id, plan from public.connections where status = 'exhausted'"
+            "select c.id, h.cooldown_until from public.connections c "
+            "left join public.connection_health h on h.connection_id = c.id "
+            "where c.status = 'exhausted'"
         )
         exhausted = await cur.fetchall()
 
-    for row in exhausted:
-        conn_id = row[0]
+    for conn_id, cooldown_until in exhausted:
+        if cooldown_until is not None and cooldown_until > current:
+            continue
         should_resume = False
 
         async with pool.connection() as conn:
@@ -83,10 +88,18 @@ async def reactivate_due_connections(
         if should_resume:
             from psycopg.types.json import Jsonb
 
-            async with pool.connection() as conn:
-                await conn.execute(
-                    "update public.connections set status = 'active' where id = %s and status = 'exhausted'",
+            async with pool.connection() as conn, conn.transaction():
+                cur_up = await conn.execute(
+                    "update public.connections set status = 'active' where id = %s and status = 'exhausted' "
+                    "returning id",
                     (conn_id,),
+                )
+                if await cur_up.fetchone() is None:
+                    continue
+                await conn.execute(
+                    "update public.consumption_units set next_reset_at = null "
+                    "where connection_id = %s and next_reset_at is not null and next_reset_at <= %s",
+                    (conn_id, current),
                 )
                 await conn.execute(
                     "insert into public.audit_events (actor, action, target, before, after) "

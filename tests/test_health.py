@@ -67,9 +67,11 @@ async def test_half_open_probe_claim_is_exclusive(pool: DbPool) -> None:
 
     h = await health_row(pool, "c")
     assert h["circuit"] == "half_open"
-    assert h["cooldown_until"] is None
-    # While half-open, other requests see circuit_open
-    assert health.unavailable_reason("half_open", None, probe_time) == "circuit_open"
+    # The probe is a lease: while it runs other requests see circuit_open, once it ran out the probe is up again
+    lease_until = probe_time + timedelta(seconds=health.PROBE_LEASE_S)
+    assert h["cooldown_until"] == lease_until
+    assert health.unavailable_reason("half_open", lease_until, probe_time) == "circuit_open"
+    assert health.unavailable_reason("half_open", lease_until, lease_until) is None
 
 
 async def test_half_open_probe_success_closes_circuit(pool: DbPool) -> None:

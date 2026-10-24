@@ -1,7 +1,7 @@
 """Multi-account strategies (HANDOFF 4.3): how the connections of one pool are ordered for a request.
 
 Strategies implemented:
-- ``failover``: ranked order (price class -> reset date -> success rate -> priority -> id).
+- ``failover``: ranked order (price class -> reset date -> priority -> recent success rate -> id).
 - ``most_remaining``: highest remaining quota fraction first, ties broken by ranked order.
 - ``round_robin``: persistent cursor per pool in Postgres (pool_state table), skips ineligible.
 - ``pin``: exactly the connection the caller named.
