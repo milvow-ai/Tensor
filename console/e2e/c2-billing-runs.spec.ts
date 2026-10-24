@@ -133,7 +133,9 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
 
     // Test capability filter
     const capSelect = page.getByRole("combobox", { name: "Filter by capability" });
-    await capSelect.selectOption("verify_email");
+    // The filter is the kit's FilterSelect (a Radix select): open it and pick the option.
+    await capSelect.click();
+    await page.getByRole("option", { name: "verify_email" }).press("Enter");
     await expect(page).toHaveURL(/capability=verify_email/);
     await expect(page.getByRole("cell", { name: "verify_email" }).first()).toBeVisible();
     await expect(page.getByRole("cell", { name: "enrich_company" })).toHaveCount(0);
