@@ -5,6 +5,28 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
 
 ---
 
+## 2026-10-24 (midday) — F1B merged; live database at 0019; start-up hotfix (D50)
+
+- **F1B merged** (`330612c`): tenant isolation is now enforced in the database — roles `farm_app` (row level security
+  applies) and `farm_system` (maintenance), every tenant table guarded by RLS, fail-closed tenant / system checkouts,
+  `security_invoker` views, hashed `api_tokens` replacing `client_tokens`. Gate: 2,447 passed, 1 failed only under load
+  (`test_mcp_passthrough … stopped_on_close`, passes 3/3 alone, F1B does not touch it) → quarantined as D48.
+- **Live database migrated 0018 → 0019** after a logical backup (`D:\farm-data\backups\logical-20261024T060027Z`): 35
+  tables and 2,325 rows unchanged, RLS on all 35 tables, the one access token moved to `api_tokens`.
+- **The Farm then would not start (D50), down ≈ 13 min.** `farm run` clears the ambient tenant for HTTP, but building its
+  tool surface reads tenant #1's MCP providers through a tenant checkout, so start-up raised `TenantContextMissing`; the
+  never-closed pool then made Python wait forever, so nothing reached the log. Found with a stack-dump watchdog; fixed in
+  `farm/control/run.py` (surface built for tenant #1 until the per-tenant catalogue, D51) and `farm/db/pool.py` (`run`
+  closes the pool it opened, also on failure). `tests/test_d50_farm_run_startup.py`: both tests fail on the old code and
+  pass on the new; 161 start-up / CLI / MCP / F1B / DB tests pass.
+- **Live checks after restart:** Claude Code's token is accepted (21 tools), `get_capacity` reads under RLS, the Clay
+  pass-through answers, `ask_ai` → PONG from claude-02 in 6.5 s.
+- New register entries: D48 (quarantined flaky exit wait), D49 (tests reach for real Telegram, blocked), D50 (fixed), D51
+  (one tool surface per process — fix before a second tenant).
+- Pushed `effort2/stage1-saas` to origin.
+
+---
+
 ## 2026-10-24 (later) — UI kit approved; second session loss; PC memory leak found
 
 - **Owner approved the dashboard look (Round 0)**: "Apply your 6 polish fixes and merge the UI kit." Gemini applied the six
