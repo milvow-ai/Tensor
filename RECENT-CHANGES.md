@@ -23,9 +23,11 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
   output to `D:\dev-cache\runs\<name>\gate-full.txt`. Owner: "move to D drive". Moved, nothing deleted: the stale npm cache
   (6.7 GB) and uv cache (1.6 GB) to `D:\dev-cache\from-c\` (npm, uv and Playwright already read from D: through user
   variables), and the Playwright browsers that existed only on C: into `D:\dev-cache\ms-playwright` (duplicates to
-  `from-c`). C: free 0.5 → 9.1 GB. `D:\dev-cache\from-c` is safe to delete later. Still on C: for the owner to decide: 107
-  temporary browser profiles `Temp\cdp-*` (7.6 GB, 21–23 Oct), Downloads 18.6 GB, Chrome data 9.5 GB, page file 34 GB
-  (inflated by the handle leak; a restart shrinks it). Google Play Games claims 512 GB but its disk image is sparse (0.2 GB real).
+  `from-c`), then 107 unused temporary browser profiles `Temp\cdp-*` (7.6 GB, 21–23 Oct) to
+  `D:\dev-cache\from-c\temp-browser-profiles`. **C: free 0.5 → 16.9 GB; D: free 34.7 GB.** `D:\dev-cache\from-c`
+  (≈ 17 GB) is safe to delete later. Still on C: for the owner to decide: Downloads 18.6 GB, Chrome data 9.5 GB, old temp
+  folders `DiagOutputDir` (2.8 GB) and `p0q1fb44` (2.1 GB), page file 34 GB (inflated by the handle leak; a restart shrinks
+  it). Google Play Games claims 512 GB but its disk image is sparse (0.2 GB real).
 - **F1B gate, first try: 118 failed / 2,330 passed** in 29 min, while A3A and S0 ran in parallel and C: was full. A failed
   test passes alone, so the gate was re-run on its own with temp files on D:.
 - **S0 merged** (`6bb45ea`, docs only + `spikes/acp_client.py`): Claude Code takes a per-run Farm MCP with a tool allow-list
