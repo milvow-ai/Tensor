@@ -1,0 +1,25 @@
+[Unit]
+Description=Harness Farm MCP gateway and execution engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/harness-farm
+EnvironmentFile=/etc/harness-farm/farm.env
+Environment=FARM_DATA_DIR=/var/lib/harness-farm
+ExecStart=/opt/harness-farm/.venv/bin/farm run
+Restart=on-failure
+RestartSec=5
+StateDirectory=harness-farm
+LimitNOFILE=65536
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/harness-farm
+
+[Install]
+WantedBy=multi-user.target

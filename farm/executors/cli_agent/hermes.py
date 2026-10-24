@@ -1,7 +1,6 @@
 """Hermes CLI agent executor."""
 
 import json
-import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -12,9 +11,9 @@ from farm.executors.cli_agent.base import (
     BaseCliAgentExecutor,
     clean_cli_text,
     parse_json_or_none,
-    parse_reset_at,
     run_cli_process,
 )
+from farm.executors.cli_agent.classify import classify_hermes
 
 
 class HermesCliExecutor(BaseCliAgentExecutor):
@@ -144,68 +143,10 @@ class HermesCliExecutor(BaseCliAgentExecutor):
                 error=out.stderr or f"Hermes CLI timed out after {timeout_s}s",
             )
 
-        combined_text = f"{out.stdout} {out.stderr}".strip()
-
-        # Check for auth errors
-        auth_patterns = [
-            r"not logged in",
-            r"please log in",
-            r"authentication required",
-            r"unauthorized",
-            r"invalid api key",
-            r"token expired",
-            r"\b401\b",
-            r"\b403\b",
-        ]
-        if any(re.search(pat, combined_text, re.IGNORECASE) for pat in auth_patterns):
-            return self.build_exec_result(
-                ok=False,
-                ai="hermes",
-                model=str(model) if model else None,
-                connection=req.connection,
-                raw_data=usage_data,
-                duration_s=out.duration_s,
-                error_kind=ErrorKind.NEEDS_LOGIN,
-                error=clean_cli_text(
-                    out.stderr or out.stdout or "Hermes authentication required; please log in"
-                ),
-            )
-
-        # Check for usage limits / credit balance errors
-        limit_patterns = [
-            r"usage limit",
-            r"rate limit",
-            r"quota exceeded",
-            r"exceeded your current quota",
-            r"insufficient balance",
-            r"insufficient funds",
-            r"overloaded",
-            r"resets?\s+at",
-            r"resets?\s+in",
-            r"\b429\b",
-        ]
-        if any(re.search(pat, combined_text, re.IGNORECASE) for pat in limit_patterns):
-            reset_at = parse_reset_at(combined_text, usage_data)
-            return self.build_exec_result(
-                ok=False,
-                ai="hermes",
-                model=str(model) if model else None,
-                connection=req.connection,
-                raw_data=usage_data,
-                duration_s=out.duration_s,
-                error_kind=ErrorKind.LIMIT_REACHED,
-                error=clean_cli_text(out.stderr or out.stdout or "Hermes quota / rate limit reached"),
-                reset_at=reset_at,
-            )
-
-        failed = bool(usage_data.get("failed", False))
-        interrupted = bool(usage_data.get("interrupted", False))
-        is_error = failed or interrupted or out.exit_code != 0
-
+        verdict = classify_hermes(out.stdout, out.stderr, out.exit_code, usage_data)
         sess_id = usage_data.get("session_id") or session_id
-        text_response = clean_cli_text(out.stdout)
 
-        if is_error and not text_response:
+        if not verdict.ok:
             return self.build_exec_result(
                 ok=False,
                 ai="hermes",
@@ -213,10 +154,13 @@ class HermesCliExecutor(BaseCliAgentExecutor):
                 connection=req.connection,
                 raw_data=usage_data,
                 duration_s=out.duration_s,
-                error_kind=ErrorKind.SERVER,
-                error=clean_cli_text(out.stderr or out.stdout or "Hermes execution failed"),
+                error_kind=verdict.kind,
+                error=verdict.message or "Hermes execution failed",
+                reset_at=verdict.reset_at,
                 session_id=str(sess_id) if sess_id else None,
             )
+
+        text_response = clean_cli_text(out.stdout)
 
         parsed_json: Any = None
         if json_schema or (text_response.startswith("{") or text_response.startswith("[")):
