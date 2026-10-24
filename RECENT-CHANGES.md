@@ -24,6 +24,12 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
 - New register entries: D48 (quarantined flaky exit wait), D49 (tests reach for real Telegram, blocked), D50 (fixed), D51
   (one tool surface per process — fix before a second tenant).
 - Pushed `effort2/stage1-saas` to origin.
+- **A3A merged** (`6d3986c`): the dashboard UI kit in the owner-approved look plus the six polish fixes, and lead fixes
+  found in review — the gallery screenshot test was never run by Playwright (no project matched `kit.spec.ts`; now a
+  `kit` project with reduced motion), charts honour `prefers-reduced-motion` (a screenshot had caught the chart
+  mid-animation), "Last 07 Days" → "Last 7 days", sample connect snippets now show `farm connect claude-code` and the
+  Farm's real address, task-count badge in the number font. Full gate green: Python suite (also covering F1B and D50),
+  secret scan, console check, vitest, 91 e2e.
 
 ---
 
