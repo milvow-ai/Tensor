@@ -5,6 +5,35 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
 
 ---
 
+## 2026-10-24 (later) — Quality baseline complete: all 25 audit findings fixed; live database at 0017
+
+**Merged (each behind the full gate: ruff, mypy, all tests, secret scan):**
+- **Q0D** (`d8cc04b`) — routing core: the critical stuck half-open account (Q0-01) now ends every probe in a defined state;
+  spend is reserved before paid calls (five concurrent $0.50 calls against $1.00 → 2 pass, 3 blocked); failover follows
+  priority; `most_remaining` uses real quota; true rolling 5-hour window; late commits recorded; reservation leak closed; cache
+  only for `found = true`; scheduler honours cooldowns; no pool deadlock on login failures. Migration 0015.
+- **Q0E** (`17fd09a`) — owner control: commands claimed exactly once (old code: 372 executions for 200 commands); rejected
+  commands change nothing; stuck commands and runs are swept; alerts once per reference; one month-end forecast formula; correct
+  renewal dates. **The "always failing" shutdown test was a product bug**: the Farm killed AI workers before marking their jobs
+  interrupted — fixed. Migration 0016.
+- **Q0F** (`42c049d`) — a tool's own error never changes account health (transport signals only); HTTP status recorded per
+  call; OAuth refresh locked across processes (Windows and Linux) and a lost race reuses the winner's token; dashboard counts
+  exclude cache hits. Migration 0017.
+
+**Live database migrated 0014 → 0017:** logical backup first (`D:\farm-data\backups\logical-20261024T031003Z`, 34 tables,
+2,304 rows) → stop → `farm db migrate` → start (PID 611428). Verified: revision 0017, `budget_reservations` present, no rows
+lost, no runs stuck in `running`; `farm ai test agy-01` and `claude-04` → PONG.
+
+**Quarantine:** one test left — `test_accept_aip2 … kills_the_worker` (D38, ~1 in 20 under load after the product fix; owner F2).
+
+**Registered follow-ups:** D37 Windows pipe-reader crash (check the CLI runner), D39–D42 (Q0G), D43 watch.
+
+**Started:** Q0G (follow-ups D39–D42, migration 0018) and F1B (enforced tenant isolation: `farm_app` / `farm_system` roles,
+fail-closed tenant checkout, session-default `tenant_id`, RLS policies, `security_invoker` views, `api_tokens` replacing
+`client_tokens`, dynamic isolation suite; migration 0019).
+
+---
+
 ## 2026-10-24 (later) — Tenancy schema merged and the live database migrated
 
 - **F1A merged** (`b442e94`, full gate green): `tenants`, `users`, `memberships`; `workspace_id` renamed to `tenant_id` on every
