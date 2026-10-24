@@ -121,7 +121,7 @@ def test_example_registry_loads_and_matches_the_brief() -> None:
 
     agy = reg.providers["gemini"].connections[0]
     assert (agy.id, agy.status) == ("agy-01", "active")
-    assert agy.meta == {"cli": "agy", "models": ["gemini-3.8-flash-high", "gemini-3.1-pro-high"]}
+    assert agy.meta == {"cli": "agy", "models": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium"]}
     assert reg.providers["codex"].connections[0].status == "needs_login"
     hermes = reg.providers["hermes"].connections[0]
     assert (hermes.id, hermes.status) == ("hermes-01", "active")

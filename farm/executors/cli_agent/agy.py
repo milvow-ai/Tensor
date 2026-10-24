@@ -7,15 +7,19 @@ resolved from the user's home directory. A connection with `meta.home` therefore
 (`farm ai login <connection>` starts `agy` the same way). Without `meta.home` the global login is used,
 as before. Not verified live: whether a login made under a redirected home stays there depends on where
 `agy` stores its token, so verify the first extra account with `farm ai test <connection>`.
+
+Models: `agy models` lists the model ids this agy accepts, one `<id>` TAB `<display name>` line each.
+`list_models` runs it the same way as a task, so `farm ai test` can check an account's configured models
+against it. An agy update can drop a model (gemini-3.1-pro-high, 2026-10).
 """
 
 import json
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from farm.executors.base import ErrorKind, ExecRequest, ExecResult
+from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult
 from farm.executors.cli_agent.base import (
     BaseCliAgentExecutor,
     clean_cli_text,
@@ -24,12 +28,60 @@ from farm.executors.cli_agent.base import (
 )
 from farm.executors.cli_agent.classify import Classification, classify_agy
 
+MODELS_TIMEOUT_S = 90.0
+
+
+def parse_models_list(stdout: str) -> list[str]:
+    """Model ids from `agy models` output (`<id>` TAB `<display name>` per line; other lines are skipped)."""
+    ids: list[str] = []
+    for line in clean_cli_text(stdout).splitlines():
+        model_id, tab, _name = line.partition("\t")
+        model_id = model_id.strip()
+        if tab and BaseCliAgentExecutor._SAFE_MODEL_PATTERN.match(model_id):
+            ids.append(model_id)
+    return ids
+
+
+def _with_prefix(meta: Mapping[str, Any], argv: list[str]) -> list[str]:
+    # meta.cli_prefix runs the CLI through a launcher, e.g. WSL as a separate Linux user so each account
+    # has its own file-based login:
+    # [wsl.exe, -d, Ubuntu-24.04, -u, agy2, -e, env, -u, DBUS_SESSION_BUS_ADDRESS]
+    prefix = meta.get("cli_prefix")
+    if isinstance(prefix, list) and prefix:
+        return [str(p) for p in prefix] + argv
+    return argv
+
+
+def _launch_env(meta: Mapping[str, Any]) -> dict[str, str]:
+    """``USERPROFILE`` / ``HOME`` from ``meta.home`` (the caller checks it is absolute) and ``meta.env``."""
+    env: dict[str, str] = {}
+    home = meta.get("home")
+    if home:
+        env["USERPROFILE"] = str(home)
+        env["HOME"] = str(home)
+    if "env" in meta and isinstance(meta["env"], dict):
+        for k, v in meta["env"].items():
+            env[str(k)] = str(v)
+    return env
+
 
 class AgyCliExecutor(BaseCliAgentExecutor):
     """Executes tasks via the Google Antigravity CLI (`agy`)."""
 
     default_bin = "agy"
     classify: Callable[[str, str, int], Classification] = staticmethod(classify_agy)
+
+    async def list_models(self, connection: ConnectionView) -> list[str] | None:
+        """The model ids this account's agy accepts, or ``None`` when agy could not list them."""
+        meta = connection.meta or {}
+        home = meta.get("home")
+        if home and not Path(str(home)).is_absolute():
+            return None
+        argv = _with_prefix(meta, [str(meta.get("cli_path", self.default_bin)), "models"])
+        out = await run_cli_process(argv, cwd=None, env=_launch_env(meta), timeout_s=MODELS_TIMEOUT_S)
+        if out.timed_out or out.exit_code != 0:
+            return None
+        return parse_models_list(out.stdout) or None
 
     def build_argv(
         self,
@@ -89,12 +141,7 @@ class AgyCliExecutor(BaseCliAgentExecutor):
             )
 
         argv = self.build_argv(str(cli_bin), str(task), model, session_id, mode, json_schema)
-        # meta.cli_prefix runs the CLI through a launcher, e.g. WSL as a separate Linux user so each account
-        # has its own file-based login:
-        # [wsl.exe, -d, Ubuntu-24.04, -u, agy2, -e, env, -u, DBUS_SESSION_BUS_ADDRESS]
-        prefix = meta.get("cli_prefix")
-        if isinstance(prefix, list) and prefix:
-            argv = [str(p) for p in prefix] + argv
+        argv = _with_prefix(meta, argv)
 
         cmdline_len = len(subprocess.list2cmdline(argv))
         if cmdline_len > 32000:
@@ -110,28 +157,21 @@ class AgyCliExecutor(BaseCliAgentExecutor):
                 ),
             )
 
-        env: dict[str, str] = {}
         home = meta.get("home")
-        if home:
-            if not Path(str(home)).is_absolute():
-                return self.build_exec_result(
-                    ok=False,
-                    ai="gemini",
-                    model=str(model) if model else None,
-                    connection=req.connection,
-                    error_kind=ErrorKind.BAD_REQUEST,
-                    error=f"meta.home must be an absolute path, got {home!r}",
-                )
-            env["USERPROFILE"] = str(home)
-            env["HOME"] = str(home)
-        if "env" in meta and isinstance(meta["env"], dict):
-            for k, v in meta["env"].items():
-                env[str(k)] = str(v)
+        if home and not Path(str(home)).is_absolute():
+            return self.build_exec_result(
+                ok=False,
+                ai="gemini",
+                model=str(model) if model else None,
+                connection=req.connection,
+                error_kind=ErrorKind.BAD_REQUEST,
+                error=f"meta.home must be an absolute path, got {home!r}",
+            )
 
         out = await run_cli_process(
             argv,
             cwd=resolved_cwd or cwd,
-            env=env,
+            env=_launch_env(meta),
             timeout_s=timeout_s,
         )
 

@@ -12,7 +12,7 @@ Generates a compact Markdown guide (<= ~1,500 tokens) live from the database:
 from __future__ import annotations
 
 import fnmatch
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from farm.ai.accounts import AccountInfo, load_accounts
@@ -276,12 +276,14 @@ async def format_ai_section(pool: DbPool, now: datetime) -> str:
 
         max_parallel = max((a.max_parallel for a in acc_list), default=1)
 
-        # Check reset or cooldown
-        resets: list[str] = []
-        for a in acc_list:
-            r = a.next_reset_at or a.cooldown_until
-            if r and r > now:
-                resets.append(r.strftime("%H:%M:%S"))
+        # Check reset or cooldown: date and time in UTC (a reset can be days away)
+        resets = sorted(
+            {
+                r.astimezone(UTC).strftime("%Y-%m-%d %H:%MZ")
+                for a in acc_list
+                if (r := a.next_reset_at or a.cooldown_until) and r > now
+            }
+        )
         reset_str = f"; next reset at {', '.join(resets)}" if resets else ""
 
         lines.append(f"### {ai_id.capitalize()} (`{ai_id}`)")

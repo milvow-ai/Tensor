@@ -25,6 +25,7 @@ from farm.tenancy import MILVOW_TENANT_ID, use_tenant
 if TYPE_CHECKING:
     from uuid import UUID
 
+    from farm.ai.accounts import ModelCheck
     from farm.ai.jobs import JobRecord
     from farm.context import FarmContext
     from farm.resources.reports import PoolCapacity
@@ -457,29 +458,30 @@ def commands_schema(
 
 
 def format_ai_list(data: dict[str, Any]) -> str:
+    """The ``farm ai list`` table from the ``list_ais`` report: one row per account, grouped by AI."""
     rows: list[list[str]] = [["AI", "ACCOUNT", "STATUS", "MODELS", "RESET / COOLDOWN", "CALLS TODAY", "JOBS"]]
     ais = data.get("ais", [])
     if not ais:
         return "no AI pools found: run `farm registry sync`"
+    by_ai: dict[str, list[dict[str, Any]]] = {}
+    for acc in data.get("accounts", []):
+        by_ai.setdefault(str(acc.get("ai", "")), []).append(acc)
     for ai in ais:
         ai_name = ai.get("id", "")
-        accounts = ai.get("accounts", [])
+        accounts = by_ai.get(ai_name, [])
         if not accounts:
             rows.append([ai_name, "-", "-", "-", "-", "-", "-"])
             continue
         first = True
         for acc in accounts:
-            status = acc.get("status", "")
-            reset_time = acc.get("reset_at") or acc.get("cooldown_until")
+            reset_time = acc.get("back_at") or acc.get("reset_at")
             reset_str = "-" if not reset_time else str(reset_time)[:16].replace("T", " ") + "Z"
-            if status == "exhausted" and reset_time:
-                status_str = f"exhausted [resets {reset_str}]"
-            elif acc.get("circuit") == "open":
-                status_str = f"circuit_open [{reset_str}]"
-            elif status == "needs_login":
-                status_str = "needs_login"
+            if acc.get("usable", True):
+                status_str = str(acc.get("status", ""))
+            elif acc.get("back_at"):
+                status_str = f"{acc.get('unusable')} [until {reset_str}]"
             else:
-                status_str = status
+                status_str = str(acc.get("unusable") or acc.get("status", ""))
             models = ", ".join(acc.get("models", [])) or "-"
             calls = str(acc.get("todays_calls", 0))
             queued = int(acc.get("queued_jobs", 0))
@@ -521,7 +523,7 @@ def ai_test(
     connection: Annotated[str, typer.Argument(help="Connection ID to test, e.g. agy-01, hermes-01.")],
     local: LocalOption = False,
 ) -> None:
-    """Run a tiny test call on an AI connection."""
+    """Run a tiny test call on an AI connection, then check its models against the ones its CLI accepts."""
     from farm.resources.router import route
 
     async def main() -> bool:
@@ -534,6 +536,7 @@ def ai_test(
                 pin=connection,
                 caller="cli",
             )
+            models = await _models_check(ctx, connection)
         finally:
             await ctx.aclose()
 
@@ -541,14 +544,33 @@ def ai_test(
             text = str(outcome.result.get("text", "")).strip()
             cost = outcome.cost.usd if outcome.cost else 0.0
             typer.echo(f"OK: {connection} answered: {text} (cost: ${cost:.6f})")
-            return True
         else:
             err = outcome.error.message if outcome.error else "unknown error"
             typer.echo(f"FAIL: {connection}: {err}", err=True)
-            return False
+        if models is not None:
+            typer.echo(models.describe(), err=bool(models.rejected))
+        return bool(outcome.ok and outcome.result) and not (models and models.rejected)
 
     if not _run_farm(main()):
         raise typer.Exit(code=1)
+
+
+async def _models_check(ctx: "FarmContext", connection: str) -> "ModelCheck | None":
+    """``connection``'s configured models against the ones its CLI lists (``None``: not an AI account)."""
+    from farm.ai.accounts import load_accounts
+    from farm.executors.base import ConnectionView
+
+    accounts = await load_accounts(ctx.pool, ids=[connection])
+    async with tenant_connection(ctx.pool) as conn:
+        cur = await conn.execute(
+            "select provider_id, auth_ref, meta from public.connections where id = %s", (connection,)
+        )
+        row = await cur.fetchone()
+    if not accounts or row is None:
+        return None
+    view = ConnectionView(id=connection, provider_id=row[0], auth_ref=row[1], meta=row[2] or {})
+    lister = getattr(ctx.executors.get("cli_agent"), "list_models", None)
+    return accounts[0].models_check(None if lister is None else await lister(view))
 
 
 def _stamp(at: datetime | None) -> str:
