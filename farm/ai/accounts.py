@@ -24,7 +24,7 @@ from datetime import datetime
 from typing import Any, NamedTuple
 
 from farm.ai.failures import AiRequestError
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.resources import health
 
 ASK_AI = "ask_ai"
@@ -132,7 +132,7 @@ def _pool_cap(config: Mapping[str, Any] | None) -> int | None:
 
 async def load_accounts(pool: DbPool, *, ids: Sequence[str] | None = None) -> list[AccountInfo]:
     """AI accounts with their live state and job load, in pick order (route position, provider, priority)."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             _ACCOUNTS_SQL,
             {"cap": ASK_AI, "unrouted": UNROUTED_RANK, "ids": None if ids is None else list(ids)},
@@ -350,7 +350,7 @@ async def list_ai_accounts(pool: DbPool, now: datetime) -> dict[str, Any]:
     """All AI pools and their accounts: status, login, models, reset times, today's calls, job load."""
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     accounts = await load_accounts(pool)
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select id, name, enabled, default_strategy, config from public.providers "
             "where kind = 'ai' order by id"

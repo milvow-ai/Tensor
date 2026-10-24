@@ -32,7 +32,7 @@ from pydantic import (
     model_validator,
 )
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, system_connection, tenant_connection
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest
 from farm.registry.models import (
     ExecutorKind,
@@ -46,6 +46,7 @@ from farm.registry.models import (
 from farm.resources.trajectory import fail_orphaned_runs
 from farm.secrets import AuthRefError, redact, resolve_auth, resolve_token_store
 from farm.settings import data_dir
+from farm.tenancy import use_tenant
 
 log = structlog.get_logger(__name__)
 
@@ -431,7 +432,7 @@ async def _transaction(
     When ``outcome.rollback`` is set by the time the block ends, the transaction is rolled back instead.
     """
     try:
-        async with pool.connection() as conn, conn.transaction():
+        async with tenant_connection(pool) as conn, conn.transaction():
             yield conn
             if outcome is not None and outcome.rollback:
                 raise _Rollback
@@ -494,7 +495,7 @@ async def execute_provider_command(
             and not is_openapi
         )
 
-        async with pool.connection() as conn:
+        async with tenant_connection(pool) as conn:
             cur = await conn.execute(
                 "select id, kind, executor, config from public.providers where id = %s",
                 (provider_id,),
@@ -507,7 +508,7 @@ async def execute_provider_command(
             label = cmd.label or account_id
 
             # Verify connection does not already exist
-            async with pool.connection() as conn:
+            async with tenant_connection(pool) as conn:
                 cur_c = await conn.execute(
                     "select id from public.connections where id = %s",
                     (account_id,),
@@ -1438,7 +1439,7 @@ async def execute_command(
                     from farm.registry.writer import write_registry_file
 
                     # One idempotent statement on its own connection: the registry file written next sees it.
-                    async with pool.connection() as flip_conn:
+                    async with tenant_connection(pool) as flip_conn:
                         await flip_conn.execute(
                             "update public.connections set status = 'active' where id = %s",
                             (payload.connection_id,),
@@ -1672,6 +1673,7 @@ _CLAIMER = f"pid{os.getpid()}-{uuid4().hex[:8]}"
 
 class ClaimedCommand(BaseModel):
     id: UUID
+    tenant_id: UUID
     kind: str
     payload: dict[str, Any]
     created_by: str
@@ -1684,35 +1686,41 @@ async def claim_command(pool: DbPool, command_id: UUID | None = None) -> Claimed
     ``status = 'queued'``. With ``command_id`` it claims that command; without, the oldest queued one
     (``skip locked`` so concurrent consumers take different rows instead of waiting on each other).
     Returns None when there is nothing to claim: no queued command, or somebody else already holds it.
+
+    The consumer's poll (no ``command_id``) spans tenants, so it claims as the system role and the caller runs
+    the command for ``tenant_id``. Claiming a given command is tenant work: current tenant's rows only.
     """
-    async with pool.connection() as conn:
+    checkout = system_connection if command_id is None else tenant_connection
+    async with checkout(pool) as conn:
         cur = await conn.execute(
             "update public.farm_commands set status = 'running', claimed_by = %(by)s, claimed_at = now() "
             "where id = (select id from public.farm_commands where status = 'queued' "
             "            and (%(id)s::uuid is null or id = %(id)s::uuid) "
             "            order by created_at, id limit 1 for update skip locked) "
             "and status = 'queued' "
-            "returning id, kind, payload, coalesce(created_by, 'system')",
+            "returning id, tenant_id, kind, payload, coalesce(created_by, 'system')",
             {"by": _CLAIMER, "id": command_id},
         )
         row = await cur.fetchone()
     if row is None:
         return None
-    return ClaimedCommand(id=row[0], kind=row[1], payload=row[2] or {}, created_by=row[3])
+    return ClaimedCommand(id=row[0], tenant_id=row[1], kind=row[2], payload=row[3] or {}, created_by=row[4])
 
 
 async def _run_claimed(pool: DbPool, claimed: ClaimedCommand) -> tuple[str, dict[str, Any]]:
-    status, result = await execute_command(
-        pool, claimed.id, claimed.kind, claimed.payload, actor=claimed.created_by
-    )
-
-    async with pool.connection() as conn:
-        cur = await conn.execute(
-            "update public.farm_commands set status = %s, result = %s, done_at = now() "
-            "where id = %s and status = 'running' and claimed_by = %s returning id",
-            (status, Jsonb(result), claimed.id, _CLAIMER),
+    # The command runs, and its result is recorded, for the tenant that queued it.
+    with use_tenant(claimed.tenant_id):
+        status, result = await execute_command(
+            pool, claimed.id, claimed.kind, claimed.payload, actor=claimed.created_by
         )
-        recorded = await cur.fetchone() is not None
+
+        async with tenant_connection(pool) as conn:
+            cur = await conn.execute(
+                "update public.farm_commands set status = %s, result = %s, done_at = now() "
+                "where id = %s and status = 'running' and claimed_by = %s returning id",
+                (status, Jsonb(result), claimed.id, _CLAIMER),
+            )
+            recorded = await cur.fetchone() is not None
     if not recorded:
         # The lease sweep already failed this command (it ran longer than the lease): that verdict stands.
         log.warning("command.result_dropped", cmd_id=str(claimed.id), kind=claimed.kind, status=status)
@@ -1732,7 +1740,7 @@ async def process_command(pool: DbPool, command_id: UUID | str) -> tuple[str, di
     cid = command_id if isinstance(command_id, UUID) else UUID(str(command_id))
     claimed = await claim_command(pool, cid)
     if claimed is None:
-        async with pool.connection() as conn:
+        async with tenant_connection(pool) as conn:
             cur = await conn.execute("select status from public.farm_commands where id = %s", (cid,))
             row = await cur.fetchone()
         if row is None:
@@ -1764,7 +1772,7 @@ async def fail_expired_command_claims(
     queue it again if needed. Returns the number of commands failed.
     """
     current = now or datetime.now(UTC)
-    async with pool.connection() as conn:
+    async with system_connection(pool) as conn:  # a sweep over every tenant's commands
         cur = await conn.execute(
             "update public.farm_commands set status = 'failed', done_at = %(now)s, "
             "result = jsonb_build_object('error', 'command lease expired: it was running for more than ' "

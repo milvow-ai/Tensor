@@ -17,7 +17,7 @@ from uuid import UUID
 
 import structlog
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.manager.budgets import (
     PolicyDecision,
     check_budget_thresholds,
@@ -98,7 +98,7 @@ async def reserve(
         return BudgetHold(PolicyDecision(allowed=True, estimated_cost_usd=cost))
 
     month_start = datetime(current.year, current.month, 1, tzinfo=UTC)
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select public.farm_budget_reserve(%s::text, %s::numeric, %s::uuid, %s::timestamptz, "
             "%s::timestamptz, %s::int)",
@@ -154,5 +154,5 @@ async def reserve(
 
 async def release(pool: DbPool, hold_id: UUID) -> None:
     """Drop a hold once its call settled (the spend itself is in ``usage_events`` by then). Idempotent."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         await conn.execute("delete from public.budget_reservations where id = %s", (hold_id,))

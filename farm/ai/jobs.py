@@ -84,9 +84,10 @@ from farm.capabilities.schemas import (
     AiStarted,
 )
 from farm.context import FarmContext
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, system_connection, tenant_connection
 from farm.resources.router import UnknownCapability, route
 from farm.secrets import redact
+from farm.tenancy import require_tenant, use_tenant
 
 log = structlog.get_logger(__name__)
 
@@ -212,7 +213,7 @@ class JobStore:
         """
         job_id = uuid4()
         try:
-            async with self._pool.connection() as conn, conn.transaction():
+            async with tenant_connection(self._pool) as conn, conn.transaction():
                 resume: str | None = None
                 if conversation is None:
                     conversation_id = await insert_conversation(conn, ai=ai, account=account)
@@ -279,14 +280,20 @@ class JobStore:
 
     async def get_many(self, job_ids: Sequence[UUID]) -> list[JobRecord]:
         """The jobs that exist, in the order asked for."""
-        async with self._pool.connection() as conn, conn.cursor(row_factory=class_row(JobRecord)) as cur:
+        async with (
+            tenant_connection(self._pool) as conn,
+            conn.cursor(row_factory=class_row(JobRecord)) as cur,
+        ):
             await cur.execute(_JOB_SELECT + "where id = any(%s)", (list(job_ids),))
             by_id = {r.id: r for r in await cur.fetchall()}
         return [by_id[i] for i in job_ids if i in by_id]
 
     async def recent(self, *, since: datetime, limit: int) -> list[JobRecord]:
         """Queued and running jobs plus the ones that finished since ``since``, newest first."""
-        async with self._pool.connection() as conn, conn.cursor(row_factory=class_row(JobRecord)) as cur:
+        async with (
+            tenant_connection(self._pool) as conn,
+            conn.cursor(row_factory=class_row(JobRecord)) as cur,
+        ):
             await cur.execute(
                 _JOB_SELECT + "where state in ('queued', 'running') or finished_at >= %s "
                 "order by created_at desc, id limit %s",
@@ -296,7 +303,10 @@ class JobStore:
 
     async def newest(self, *, state: str | None, limit: int) -> list[JobRecord]:
         """The newest jobs, optionally only those in ``state`` (``farm ai jobs``)."""
-        async with self._pool.connection() as conn, conn.cursor(row_factory=class_row(JobRecord)) as cur:
+        async with (
+            tenant_connection(self._pool) as conn,
+            conn.cursor(row_factory=class_row(JobRecord)) as cur,
+        ):
             await cur.execute(
                 _JOB_SELECT + "where (%(state)s::text is null or state = %(state)s) "
                 "order by created_at desc, id limit %(limit)s",
@@ -306,7 +316,10 @@ class JobStore:
 
     async def mark_running(self, job_id: UUID, owner_id: UUID, now: datetime) -> JobRecord | None:
         """``queued`` -> ``running`` for the owner; ``None`` when the job is no longer queued."""
-        async with self._pool.connection() as conn, conn.cursor(row_factory=class_row(JobRecord)) as cur:
+        async with (
+            tenant_connection(self._pool) as conn,
+            conn.cursor(row_factory=class_row(JobRecord)) as cur,
+        ):
             await cur.execute(
                 """
                 update public.ai_jobs set state = 'running', started_at = coalesce(started_at, %(now)s),
@@ -322,7 +335,7 @@ class JobStore:
         self, job: JobRecord, owner_id: UUID, *, account: str, attempts: list[dict[str, Any]], now: datetime
     ) -> bool:
         """``running`` -> ``queued`` on ``account`` (a busy account, or the next account of a retry)."""
-        async with self._pool.connection() as conn, conn.transaction():
+        async with tenant_connection(self._pool) as conn, conn.transaction():
             cur = await conn.execute(
                 "update public.ai_jobs set state = 'queued', account = %s, attempts = %s, heartbeat_at = %s "
                 "where id = %s and owner_id = %s and state = 'running' returning id",
@@ -337,7 +350,7 @@ class JobStore:
         """The final UPDATE of a job and its conversation, atomically; ``False``: it had already ended."""
         failure = fin.failure
         stored = fin.stored
-        async with self._pool.connection() as conn, conn.transaction():
+        async with tenant_connection(self._pool) as conn, conn.transaction():
             cur = await conn.execute(
                 """
                 update public.ai_jobs set
@@ -394,7 +407,10 @@ class JobStore:
 
     async def request_cancel(self, job_id: UUID, now: datetime) -> JobRecord | None:
         """Ask the owner of a queued or running job to stop it (the owner acts on its next tick)."""
-        async with self._pool.connection() as conn, conn.cursor(row_factory=class_row(JobRecord)) as cur:
+        async with (
+            tenant_connection(self._pool) as conn,
+            conn.cursor(row_factory=class_row(JobRecord)) as cur,
+        ):
             await cur.execute(
                 "update public.ai_jobs set cancel_requested_at = coalesce(cancel_requested_at, %s) "
                 "where id = %s and state in ('queued', 'running')" + _JOB_RETURNING,
@@ -403,7 +419,8 @@ class JobStore:
             return await cur.fetchone()
 
     async def cancel_requests(self, owner_id: UUID) -> list[UUID]:
-        async with self._pool.connection() as conn:
+        """Cancel requests for this process's jobs, whichever tenant they belong to (the ticker has none)."""
+        async with system_connection(self._pool) as conn:
             cur = await conn.execute(
                 "select id from public.ai_jobs where owner_id = %s and cancel_requested_at is not null "
                 "and state in ('queued', 'running')",
@@ -412,7 +429,8 @@ class JobStore:
             return [UUID(str(r[0])) for r in await cur.fetchall()]
 
     async def heartbeat(self, owner_id: UUID, now: datetime) -> int:
-        async with self._pool.connection() as conn:
+        """Renew the lease on every job this process owns, across tenants."""
+        async with system_connection(self._pool) as conn:
             cur = await conn.execute(
                 "update public.ai_jobs set heartbeat_at = %s "
                 "where owner_id = %s and state in ('queued', 'running')",
@@ -421,8 +439,14 @@ class JobStore:
             return cur.rowcount
 
     async def sweep_orphans(self, owner_id: UUID, now: datetime, lease_s: float) -> list[JobRecord]:
-        """Fail the jobs of other Farm processes whose heartbeat is older than the lease: ``farm_restart``."""
-        async with self._pool.connection() as conn, conn.cursor(row_factory=class_row(JobRecord)) as cur:
+        """Fail the jobs of other Farm processes whose heartbeat is older than the lease: ``farm_restart``.
+
+        A platform sweep over every tenant's jobs.
+        """
+        async with (
+            system_connection(self._pool) as conn,
+            conn.cursor(row_factory=class_row(JobRecord)) as cur,
+        ):
             await cur.execute(
                 """
                 update public.ai_jobs set state = 'failed', error_kind = 'farm_restart',
@@ -550,6 +574,8 @@ class _Work:
     account: str
     limit: int
     pool_limit: int | None
+    tenant_id: UUID
+    """The tenant that queued the job: the runner, ticker and shutdown act for it, in any task."""
     attempts: list[dict[str, Any]] = field(default_factory=list)
     tried: list[str] = field(default_factory=list)
     cost: Decimal = Decimal(0)
@@ -833,6 +859,7 @@ class JobManager:
             account=account.id,
             limit=account.max_parallel,
             pool_limit=account.pool_max_parallel,
+            tenant_id=require_tenant(),
         )
         self._live[record.id] = work
         ahead = self._jobs_ahead(work)
@@ -919,6 +946,10 @@ class JobManager:
     # --- running one job ----------------------------------------------------------------------------------
 
     async def _run(self, work: _Work) -> None:
+        with use_tenant(work.tenant_id):
+            await self._run_for_tenant(work)
+
+    async def _run_for_tenant(self, work: _Work) -> None:
         requeued = False
         try:
             record = await self.store.mark_running(work.job_id, self.instance_id, self.clock())
@@ -1086,6 +1117,10 @@ class JobManager:
             )
 
     async def _conclude_interrupted(self, work: _Work) -> None:
+        with use_tenant(work.tenant_id):
+            await self._conclude_interrupted_for_tenant(work)
+
+    async def _conclude_interrupted_for_tenant(self, work: _Work) -> None:
         """The runner was cancelled: by ``ai_cancel`` (cancelled) or because the Farm stops (farm_restart)."""
         by_caller = work.cancel_reason == "user"
         failure = (
@@ -1240,10 +1275,14 @@ class JobManager:
                 for job_id in await self.store.cancel_requests(self.instance_id):
                     work = self._live.get(job_id)
                     if work is not None and work.cancel_reason is None:
-                        self._spawn(self.cancel(job_id))
+                        self._spawn(self._cancel_for_tenant(work))
                 await self._maybe_sweep()
             except Exception as exc:  # a failed tick must not end the heartbeat: the jobs would look orphaned
                 log.error("ai.tick_failed", error=f"{type(exc).__name__}: {redact(str(exc))}")
+
+    async def _cancel_for_tenant(self, work: _Work) -> None:
+        with use_tenant(work.tenant_id):
+            await self.cancel(work.job_id)
 
     def _spawn(self, work: Coroutine[Any, Any, Any]) -> None:
         task = asyncio.ensure_future(work)

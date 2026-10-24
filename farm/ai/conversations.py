@@ -22,7 +22,7 @@ from psycopg.rows import class_row
 from pydantic import BaseModel
 
 from farm.capabilities.schemas import AiConversationView
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 
 
 class ConversationRecord(BaseModel):
@@ -104,7 +104,7 @@ class ConversationStore:
 
     async def get(self, conversation_id: UUID) -> ConversationRecord | None:
         async with (
-            self._pool.connection() as conn,
+            tenant_connection(self._pool) as conn,
             conn.cursor(row_factory=class_row(ConversationRecord)) as cur,
         ):
             await cur.execute(
@@ -119,7 +119,7 @@ class ConversationStore:
         self, *, ai: str | None = None, account: str | None = None, only_active: bool = False, limit: int = 50
     ) -> list[AiConversationView]:
         """The open threads, most recently used first, with the state of the last job and the running one."""
-        async with self._pool.connection() as conn:
+        async with tenant_connection(self._pool) as conn:
             cur = await conn.execute(
                 """
                 select c.id, c.ai, c.account, c.native_session_id, c.turns, c.tokens, c.cost, c.last_job_id,

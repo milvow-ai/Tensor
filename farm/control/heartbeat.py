@@ -22,7 +22,7 @@ from farm.settings import data_dir as get_data_dir
 
 if TYPE_CHECKING:
     from farm.control.doctor import CheckResult
-    from farm.db.pool import DbPool
+    from farm.db.pool import DbPool, system_connection
 
 log = structlog.get_logger(__name__)
 
@@ -105,15 +105,11 @@ async def record_heartbeat_db(
     component: str = "command_consumer",
     extra: dict[str, Any] | None = None,
 ) -> None:
-    """Optionally record heartbeat to database if table exists."""
+    """Record the process heartbeat in ``farm_heartbeats`` (a platform table, written as the system role)."""
     now = datetime.now(UTC)
     pid = os.getpid()
     try:
-        async with pool.connection() as conn:
-            await conn.execute(
-                "create table if not exists public.farm_heartbeats ("
-                "component text primary key, last_heartbeat timestamptz not null, pid int, extra jsonb)",
-            )
+        async with system_connection(pool) as conn:
             from psycopg.types.json import Jsonb
 
             await conn.execute(

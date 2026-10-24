@@ -18,7 +18,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from farm.control.alerts import send_alert
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.registry.models import looks_like_secret
 
 log = structlog.get_logger(__name__)
@@ -106,7 +106,7 @@ async def request_integration(
 
     current_time = now or datetime.now(UTC)
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         # Check for existing open request with same name + kind
         cur = await conn.execute(
             f"""
@@ -247,7 +247,7 @@ async def list_integration_requests(
     query += " order by created_at desc limit %s"
     params.append(limit)
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(query, tuple(params))
         rows = await cur.fetchall()
 
@@ -276,7 +276,7 @@ async def get_integration_request(
 ) -> IntegrationRequest | None:
     """Fetch an integration request by ID."""
     rid = request_id if isinstance(request_id, UUID) else UUID(str(request_id))
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             f"""
             select {_COLUMNS}
@@ -320,7 +320,7 @@ async def resolve_integration_request(
     current_time = now or datetime.now(UTC)
     resolved_at = current_time if clean_status in ("done", "declined") else None
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             f"""
             update public.integration_requests

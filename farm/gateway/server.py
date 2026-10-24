@@ -35,6 +35,7 @@ from farm.control.integration_requests import (
 from farm.control.integration_requests import (
     request_integration as ir_request,
 )
+from farm.db.pool import system_connection
 from farm.gateway.ai_tools import register_ai_tools
 from farm.gateway.guide import Section, generate_guide
 from farm.gateway.mcp_tools import register_mcp_tools
@@ -252,8 +253,11 @@ async def build_server(
     server.add_middleware(PolicyMiddleware(policy))
     server.add_middleware(TrajectoryMiddleware())
 
-    async with ctx.pool.connection() as conn:
-        cur = await conn.execute("select name, description from public.capabilities order by name")
+    # The tool surface is the platform's capability list, fixed at server start: no tenant is known yet.
+    async with system_connection(ctx.pool) as conn:
+        cur = await conn.execute(
+            "select distinct on (name) name, description from public.capabilities order by name"
+        )
         capabilities = await cur.fetchall()
 
     for name, description in capabilities:

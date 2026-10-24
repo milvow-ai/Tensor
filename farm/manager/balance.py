@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 import structlog
 
 from farm.adapters import ADAPTERS, ApiAdapter
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.executors.base import ConnectionView
 from farm.manager.alerts import create_alert
 
@@ -28,7 +28,7 @@ DRIFT_THRESHOLD = Decimal("0.10")  # 10% drift
 
 async def compute_ledger_remaining(pool: DbPool, connection_id: str, unit: str) -> Decimal | None:
     """Compute the estimated remaining balance for a connection unit according to the quota ledger."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         # Check if consumption_units defines a limit_value and period
         cur = await conn.execute(
             "select limit_value, period, reset_anchor from public.consumption_units "
@@ -118,7 +118,7 @@ async def record_balance_snapshot(
                 await create_alert(pool, kind="balance_drift", severity="warn", message=msg, ref=ref)
 
     snapshot_id = uuid4()
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         if at is not None:
             await conn.execute(
                 "insert into public.balance_snapshots (id, connection_id, unit, remaining, source, at) "
@@ -150,7 +150,7 @@ async def sync_connection_balance(
     check_drift: bool = True,
 ) -> list[dict[str, Any]]:
     """Fetch live balance using the connection's provider adapter and record snapshots."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select id, provider_id, auth_ref, meta, concurrency, rate_per_min "
             "from public.connections where id = %s",
@@ -209,7 +209,7 @@ async def sync_connection_balance(
 
 async def sync_all_balances(pool: DbPool, *, check_drift: bool = True) -> dict[str, list[dict[str, Any]]]:
     """Sync balances for all active connections whose providers have adapters."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select id, provider_id from public.connections where status = 'active'"
         )

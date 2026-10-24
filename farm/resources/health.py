@@ -55,7 +55,7 @@ from typing import Any, Final
 from psycopg import AsyncConnection
 from psycopg.rows import TupleRow
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.executors.base import ErrorKind
 from farm.resources.periods import next_period_start
 from farm.secrets import redact
@@ -134,7 +134,7 @@ async def claim_probe(
     Row-locked claim in Postgres, so exactly one caller wins. The winner holds the probe for ``lease_s``; it
     must end it with ``record_success`` / ``record_failure`` or give it back with ``release_probe``.
     """
-    async with pool.connection() as conn, conn.transaction():
+    async with tenant_connection(pool) as conn, conn.transaction():
         cur = await conn.execute(
             """
             select circuit, cooldown_until
@@ -167,7 +167,7 @@ async def release_probe(pool: DbPool, connection_id: str, now: datetime) -> bool
 
     Touches only a circuit that is still half-open, so it is safe after the probe already ended.
     """
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "update public.connection_health set cooldown_until = %s "
             "where connection_id = %s and circuit = 'half_open' returning connection_id",
@@ -178,7 +178,7 @@ async def release_probe(pool: DbPool, connection_id: str, now: datetime) -> bool
 
 async def reactivate_due(pool: DbPool, now: datetime) -> int:
     """Reactivate exhausted connections whose cooldown has passed using the SQL function."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute("select public.farm_reactivate_due(%s)", (now,))
         row = await cur.fetchone()
         return int(row[0]) if row and row[0] is not None else 0
@@ -186,7 +186,7 @@ async def reactivate_due(pool: DbPool, now: datetime) -> int:
 
 async def record_success(pool: DbPool, connection_id: str, *, now: datetime) -> None:
     """Record a successful outcome: closes circuit, resets consecutive failures, clears cooldown."""
-    async with pool.connection() as conn, conn.transaction():
+    async with tenant_connection(pool) as conn, conn.transaction():
         await conn.execute(
             "insert into public.connection_health (connection_id) values (%s) on conflict do nothing",
             (connection_id,),
@@ -239,7 +239,7 @@ async def record_failure(
     error_text = redact(message or "")[:MAX_ERROR_CHARS] or None
     needs_login_alert = False
 
-    async with pool.connection() as conn, conn.transaction():
+    async with tenant_connection(pool) as conn, conn.transaction():
         cur_meta = await conn.execute(
             "select meta from public.connections where id = %s", (connection_id,)
         )

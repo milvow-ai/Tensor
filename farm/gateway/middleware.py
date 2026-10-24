@@ -9,6 +9,14 @@ there too; the policy hook below is the gate in front of it for *who may call wh
 * ``AuthMiddleware``: stdio is local trust (the client is a child process of whoever started the Farm). Over
   HTTP every request must carry ``Authorization: Bearer <token>`` equal to the Farm's token (constant-time
   comparison); with no token configured an HTTP request is refused, never served openly.
+  A static token may be bound to a tenant (``tenant_id``); without one the work runs for the tenant the
+  process already carries (stdio: tenant #1 set by the CLI).
+* ``TenantMiddleware``: the Farm's own HTTP runner authenticates API tokens in front of the MCP app
+  (``farm.control.run``) and leaves the resolved ``TokenIdentity`` on the request scope. This middleware
+  reads it *per MCP request* and sets the tenant for the tool that runs. A ContextVar set in front of the app
+  is not enough: a stateful MCP session runs its handlers in a task started by its first request, so a later
+  request on the same session would otherwise inherit that first request's tenant. No identity over HTTP =
+  refused.
 * ``PolicyMiddleware``: asks a ``PolicyCheck`` whether this caller may call this tool; the default allows
   every farm tool. A refusal is an MCP error (``policy: <reason>``) and the tool never runs.
 * ``TrajectoryMiddleware``: identifies the caller from the client's declared name (``claude-code`` ->
@@ -24,6 +32,7 @@ import time
 from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any
+from uuid import UUID
 
 import mcp_types as mt
 import structlog
@@ -32,6 +41,8 @@ from fastmcp.server.dependencies import get_http_headers, get_http_request
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.middleware.middleware import CallNext
 from fastmcp.tools import ToolResult
+
+from farm.tenancy import TokenIdentity, use_tenant
 
 log = structlog.get_logger(__name__)
 
@@ -65,9 +76,14 @@ def _client_name(context: MiddlewareContext[Any]) -> str | None:
     return None if params is None else params.client_info.name
 
 
+IDENTITY_SCOPE_KEY = "farm_identity"
+"""ASGI scope key under which the Farm's HTTP runner leaves the request's ``TokenIdentity``."""
+
+
 class AuthMiddleware(Middleware):
-    def __init__(self, token: str | None = None) -> None:
+    def __init__(self, token: str | None = None, tenant_id: UUID | None = None) -> None:
         self._token = token
+        self._tenant_id = tenant_id
 
     async def on_request(
         self, context: MiddlewareContext[mt.Request[Any, Any]], call_next: CallNext[mt.Request[Any, Any], Any]
@@ -85,7 +101,28 @@ class AuthMiddleware(Middleware):
         ):
             log.warning("gateway.auth_refused", configured=self._token is not None)
             raise McpError(code=UNAUTHORIZED, message="unauthorized: a valid bearer token is required")
-        return await call_next(context)
+        if self._tenant_id is None:
+            return await call_next(context)
+        with use_tenant(self._tenant_id):
+            return await call_next(context)
+
+
+class TenantMiddleware(Middleware):
+    """Sets the tenant of every MCP request from the identity the HTTP runner resolved (module docstring)."""
+
+    async def on_request(
+        self, context: MiddlewareContext[mt.Request[Any, Any]], call_next: CallNext[mt.Request[Any, Any], Any]
+    ) -> Any:
+        try:
+            request = get_http_request()
+        except RuntimeError:
+            return await call_next(context)  # stdio: the process carries its tenant
+        identity = request.scope.get(IDENTITY_SCOPE_KEY)
+        if not isinstance(identity, TokenIdentity):
+            log.warning("gateway.tenant_unresolved")
+            raise McpError(code=UNAUTHORIZED, message="unauthorized: the request has no tenant")
+        with use_tenant(identity.tenant_id, identity.user_id):
+            return await call_next(context)
 
 
 class PolicyMiddleware(Middleware):

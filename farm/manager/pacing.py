@@ -15,7 +15,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 
 
 class PacingStatus(BaseModel):
@@ -129,7 +129,7 @@ async def get_connection_pacing(
     """Query database to compute current pacing metrics for a connection and unit."""
     current = now or datetime.now(UTC)
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         # 1. Get consumption unit details
         cur = await conn.execute(
             "select limit_value, period, reset_anchor, next_reset_at from public.consumption_units "

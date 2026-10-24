@@ -179,17 +179,24 @@ def test_every_table_exists_with_key_columns(db_url: str) -> None:
 
 
 def test_every_table_has_tenant_id_default(db_url: str) -> None:
+    """F1B: the default is the session's tenant (``farm_tenant_id()``), never a constant."""
     rows = _rows(
         db_url,
         "select table_name, data_type, is_nullable, column_default from information_schema.columns "
         "where table_schema = 'public' and column_name = 'tenant_id'",
     )
-    # tables added after the M1a contract also carry it; memberships has no default (its tenant is always explicit)
-    assert {r[0] for r in rows} == set(KEY_COLUMNS) | {"pool_state", "integration_requests", "memberships", "budget_reservations"}
+    # tables added after the M1a contract also carry it
+    assert {r[0] for r in rows} == set(KEY_COLUMNS) | {
+        "pool_state",
+        "integration_requests",
+        "memberships",
+        "budget_reservations",
+        "api_tokens",
+    }
     for table, data_type, nullable, default in rows:
         assert data_type == "uuid" and nullable == "NO", table
-        if table != "memberships":
-            assert DEFAULT_TENANT in default, table
+        assert default == "farm_tenant_id()", table
+        assert DEFAULT_TENANT not in default, table
 
 
 def test_ledger_functions_exist(db_url: str) -> None:
@@ -353,7 +360,8 @@ def test_migration_round_trip(scratch_db: Callable[[], str]) -> None:
 
     command.downgrade(cfg, "base")
     left = {r[0] for r in _rows(url, "select tablename from pg_tables where schemaname = 'public'")}
-    assert left <= {"alembic_version"}
+    # the pre-F1B runtime table client_tokens is given back by the downgrade of 0019
+    assert left <= {"alembic_version", "client_tokens"}
     funcs = _rows(
         url,
         "select proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'",
@@ -375,55 +383,97 @@ end $$;
 create schema auth;
 create function auth.jwt() returns jsonb language sql stable
   as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
+create function auth.uid() returns uuid language sql stable
+  as $$ select nullif(auth.jwt() ->> 'sub', '')::uuid $$;
 grant usage on schema auth to authenticated, anon;
-grant execute on function auth.jwt() to authenticated, anon;
+grant execute on function auth.jwt(), auth.uid() to authenticated, anon;
 grant usage on schema public to anon;
 """
 
 
-def _as(conn: psycopg.Connection[Any], role: str, email: str | None) -> None:
+def _as(conn: psycopg.Connection[Any], role: str, email: str | None, sub: str | None = None) -> None:
     conn.execute(f"set role {role}")  # role names come from this file only
-    claims = {"role": role, **({"email": email} if email else {})}
+    claims = {"role": role, **({"email": email} if email else {}), **({"sub": sub} if sub else {})}
     conn.execute("select set_config('request.jwt.claims', %s, false)", (json.dumps(claims),))
 
 
+MEMBER_SUB = "11111111-1111-1111-1111-111111111111"
+TWO_TENANTS_SUB = "22222222-2222-2222-2222-222222222222"
+STRANGER_SUB = "33333333-3333-3333-3333-333333333333"
+OTHER_TENANT = "00000000-0000-0000-0000-000000000002"
+
+
+def seed_console_users(conn: psycopg.Connection[Any]) -> None:
+    """Tenants Milvow and Other; one user in Milvow, one in both (a stranger has no row at all)."""
+    conn.execute("insert into public.tenants (id, slug, name) values (%s, 'other', 'Other')", (OTHER_TENANT,))
+    conn.execute(
+        "insert into public.users (id, email, auth_subject) values "
+        "(gen_random_uuid(), 'member@example.com', %s), (gen_random_uuid(), 'both@example.com', %s)",
+        (MEMBER_SUB, TWO_TENANTS_SUB),
+    )
+    conn.execute(
+        "insert into public.memberships (tenant_id, user_id, role) "
+        "select %s, id, 'member' from public.users where auth_subject = %s",
+        (DEFAULT_TENANT, MEMBER_SUB),
+    )
+    conn.execute(
+        "insert into public.memberships (tenant_id, user_id, role) "
+        "select t, u.id, 'member' from public.users u, unnest(%s::uuid[]) t where u.auth_subject = %s",
+        ([DEFAULT_TENANT, OTHER_TENANT], TWO_TENANTS_SUB),
+    )
+
+
 def test_rls_policies_when_supabase_auth_schema_exists(scratch_db: Callable[[], str]) -> None:
+    """Console users reach exactly the rows of the tenants they belong to (membership, not the owner e-mail)."""
     url = scratch_db()
     with psycopg.connect(url, autocommit=True) as conn:
         conn.execute(FAKE_AUTH)
     command.upgrade(alembic_config(url), "head")
 
     with psycopg.connect(url, autocommit=True) as conn:
-        conn.execute("update public.farm_settings set owner_email = 'Owner@Example.com' where id = 1")
+        seed_console_users(conn)
+        conn.execute("insert into public.providers (id, name, kind, executor) values ('p', 'P', 'tool', 'api')")
         conn.execute(
-            "insert into public.providers (id, name, kind, executor) values ('p', 'P', 'tool', 'api')"
+            "insert into public.providers (id, name, kind, executor, tenant_id) values ('q', 'Q', 'tool', 'api', %s)",
+            (OTHER_TENANT,),
         )
 
-        # owner (case-insensitive email): reads every table, inserts queued commands only
-        _as(conn, "authenticated", "owner@example.com")
-        assert conn.execute("select count(*) from public.providers").fetchone() == (1,)
-        assert conn.execute("select owner_email from public.farm_settings").fetchone() == (
-            "Owner@Example.com",
-        )
+        # Console sessions never carry app.tenant_id (the test environment's PGOPTIONS default would hide the trigger)
+        conn.execute("select set_config('app.tenant_id', '', false)")
+
+        # a member of Milvow: reads Milvow's rows only, queues commands (tenant filled in), nothing else
+        _as(conn, "authenticated", "member@example.com", MEMBER_SUB)
+        assert conn.execute("select id from public.providers").fetchall() == [("p",)]
         conn.execute("insert into public.farm_commands (kind, created_by) values ('pause', 'console')")
+        assert conn.execute("select tenant_id::text from public.farm_commands").fetchall() == [(DEFAULT_TENANT,)]
         with pytest.raises(errors.InsufficientPrivilege):
             conn.execute("insert into public.farm_commands (kind, status) values ('pause', 'done')")
+        with pytest.raises(errors.InsufficientPrivilege):  # another tenant's id in the insert
+            conn.execute("insert into public.farm_commands (kind, tenant_id) values ('pause', %s)", (OTHER_TENANT,))
         with pytest.raises(errors.InsufficientPrivilege):
-            conn.execute(
-                "insert into public.providers (id, name, kind, executor) values ('q', 'Q', 'tool', 'api')"
-            )
+            conn.execute("insert into public.providers (id, name, kind, executor) values ('r', 'R', 'tool', 'api')")
         with pytest.raises(errors.InsufficientPrivilege):
             conn.execute("update public.providers set name = 'X'")
         with pytest.raises(errors.InsufficientPrivilege):
             conn.execute("delete from public.farm_commands")
+        with pytest.raises(errors.InsufficientPrivilege):  # token hashes never reach the Data API
+            conn.execute("select * from public.api_tokens")
         # quota functions are not callable through the Data API roles
         with pytest.raises(errors.InsufficientPrivilege):
             conn.execute("select public.farm_expire_reservations()")
         conn.execute("reset role")
 
-        # another signed-in user, a user without email and the anon role see nothing and write nothing
-        for role, email in (("authenticated", "intruder@example.com"), ("authenticated", None)):
-            _as(conn, role, email)
+        # a member of two tenants sees both, but must say which tenant a command is for
+        _as(conn, "authenticated", "both@example.com", TWO_TENANTS_SUB)
+        assert sorted(r[0] for r in conn.execute("select id from public.providers").fetchall()) == ["p", "q"]
+        with pytest.raises(errors.InsufficientPrivilege):
+            conn.execute("insert into public.farm_commands (kind) values ('pause')")
+        conn.execute("insert into public.farm_commands (kind, tenant_id) values ('pause', %s)", (OTHER_TENANT,))
+        conn.execute("reset role")
+
+        # a stranger, a token without subject and the anon role see nothing and write nothing
+        for role, sub in (("authenticated", STRANGER_SUB), ("authenticated", None)):
+            _as(conn, role, "intruder@example.com", sub)
             assert conn.execute("select count(*) from public.providers").fetchone() == (0,)
             assert conn.execute("select count(*) from public.farm_settings").fetchone() == (0,)
             assert conn.execute("select count(*) from public.farm_commands").fetchone() == (0,)
@@ -436,16 +486,9 @@ def test_rls_policies_when_supabase_auth_schema_exists(scratch_db: Callable[[], 
         conn.execute("reset role")
 
         # the owner (superuser here, postgres on Supabase) is not subject to the policies
-        assert conn.execute("select count(*) from public.farm_commands").fetchone() == (1,)
+        assert conn.execute("select count(*) from public.farm_commands").fetchone() == (2,)
 
-    # a null owner_email matches nobody, not even a token without email
-    with psycopg.connect(url, autocommit=True) as conn:
-        conn.execute("update public.farm_settings set owner_email = null where id = 1")
-        _as(conn, "authenticated", None)
-        assert conn.execute("select count(*) from public.providers").fetchone() == (0,)
-        conn.execute("reset role")
-
-    # downgrade removes the policies and helper cleanly
+    # downgrade removes the policies and helpers cleanly
     command.downgrade(alembic_config(url), "base")
     assert _rows(url, "select count(*) from pg_policies where schemaname = 'public'") == [(0,)]
 

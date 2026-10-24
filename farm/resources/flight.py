@@ -34,7 +34,7 @@ from uuid import UUID
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.resources.trajectory import to_jsonable
 
 JOIN_GRACE_S: Final = 30.0
@@ -82,7 +82,7 @@ type Claim = Leader | Hit | Joined
 
 
 async def lookup_cache(pool: DbPool, request_hash: str, now: datetime) -> Hit | None:
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select result, expires_at, run_id from public.capability_requests "
             "where request_hash = %s and status = 'succeeded' and expires_at > %s",
@@ -110,7 +110,7 @@ async def claim(
     while True:
         now = clock()
         lease_until = now + timedelta(seconds=lease_s)
-        async with pool.connection() as conn:
+        async with tenant_connection(pool) as conn:
             cur = await conn.execute(
                 "insert into public.capability_requests "
                 "(request_hash, capability, params, status, run_id, expires_at) "
@@ -147,7 +147,7 @@ async def claim(
             return Joined(stored=None, error=(result or {}).get("error"), run_id=row_run_id)
 
         # failed earlier, expired, or a leader that died (lease over): take the row over, exactly one winner.
-        async with pool.connection() as conn:
+        async with tenant_connection(pool) as conn:
             cur = await conn.execute(
                 "update public.capability_requests set status = 'running', run_id = %s, params = %s, "
                 "result = null, expires_at = %s "
@@ -164,7 +164,7 @@ async def finish_success(
     pool: DbPool, request_id: UUID, run_id: UUID, stored: StoredResult, expires_at: datetime
 ) -> bool:
     """Publish the answer. False when the lease was lost to another process (nothing is overwritten)."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "update public.capability_requests set status = 'succeeded', result = %s, expires_at = %s "
             "where id = %s and run_id = %s and status = 'running' returning id",
@@ -177,7 +177,7 @@ async def finish_failure(
     pool: DbPool, request_id: UUID, run_id: UUID, error: dict[str, Any], now: datetime
 ) -> bool:
     """Record the failure (never cached: ``expires_at`` is already over) so waiters stop waiting."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "update public.capability_requests set status = 'failed', result = %s, expires_at = %s "
             "where id = %s and run_id = %s and status = 'running' returning id",

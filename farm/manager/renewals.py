@@ -16,7 +16,7 @@ from uuid import UUID
 
 import structlog
 
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.manager.alerts import create_alert
 
 log = structlog.get_logger(__name__)
@@ -72,7 +72,7 @@ async def get_connection_usage_pct(
     """Get the highest usage percentage across all consumption units for this connection."""
     current = now or datetime.now(UTC)
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select unit, limit_value, period, reset_anchor from public.consumption_units "
             "where connection_id = %s",
@@ -88,7 +88,7 @@ async def get_connection_usage_pct(
         if limit_val is None or limit_val <= 0:
             continue
 
-        async with pool.connection() as conn:
+        async with tenant_connection(pool) as conn:
             cur_p = await conn.execute(
                 "select public.farm_period_start(%s, %s, %s)",
                 (period, anchor, current),
@@ -122,7 +122,7 @@ async def check_renewal_reminders(
     current = now or datetime.now(UTC)
     current_date = current.date()
 
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select c.id, c.provider_id, c.label, c.plan, p.config "
             "from public.connections c join public.providers p on c.provider_id = p.id "
@@ -144,7 +144,7 @@ async def check_renewal_reminders(
             ref_id = f"renewal:{conn_id}:{renewal_date.isoformat()}"
 
             # Check if alert already exists for this renewal
-            async with pool.connection() as conn:
+            async with tenant_connection(pool) as conn:
                 cur_exist = await conn.execute(
                     "select id from public.alerts where ref = %s",
                     (ref_id,),
@@ -189,7 +189,7 @@ async def request_human_task(
     billing_url: str | None = None,
 ) -> UUID:
     """Create a human_task alert for manual upgrade or cancellation. Never automates payments."""
-    async with pool.connection() as conn:
+    async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             "select c.meta, c.plan, p.config, p.id from public.connections c "
             "join public.providers p on c.provider_id = p.id where c.id = %s",
