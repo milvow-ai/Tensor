@@ -245,10 +245,12 @@ async def test_accept_open1_discovery_mode_finds_a_tool_with_its_schema_and_call
 
         found = await client.call_tool("search_tools", {"query": "echo"})
         matches = [t for t in found.structured_content["result"] if t["name"] == "fake__echo"]  # type: ignore[index]
+        assert matches and "inputSchema" not in matches[0]  # search_tools returns compact hits
         original = {t.name: t for t in await direct.list_tools()}["echo"]
+        described = (await client.call_tool("describe_tool", {"name": "fake__echo"})).structured_content
         assert (
-            matches and matches[0]["inputSchema"] == original.input_schema
-        )  # the schema comes with the match
+            described is not None and described["inputSchema"] == original.input_schema
+        )  # describe_tool brings the schema
 
         via_farm = await client.call_tool_mcp(
             "call_tool", {"name": "fake__rich_echo", "arguments": {"message": "x"}}
