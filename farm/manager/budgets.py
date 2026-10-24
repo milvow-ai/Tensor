@@ -106,15 +106,22 @@ async def get_month_to_date_spend(
 
 
 def calculate_month_forecast(spend: Decimal | float | int, now: datetime | None = None) -> Decimal:
-    """Forecast month-end spend: spend ÷ elapsed days × total days in month."""
+    """Forecast month-end spend: spend ÷ elapsed days × days in the month.
+
+    Same formula as ``v_spend_month`` in the Console: elapsed days are fractional (seconds since the month
+    began ÷ 86400) with a floor of 1 day, so alert and dashboard show one number.
+    """
     current = now or datetime.now(UTC)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=UTC)
     sp = Decimal(str(spend))
     if sp <= 0:
         return Decimal(0)
 
     _, total_days = calendar.monthrange(current.year, current.month)
-    elapsed = max(1.0, current.day + (current.hour / 24.0) + (current.minute / 1440.0))
-    return (sp / Decimal(str(elapsed))) * Decimal(total_days)
+    month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elapsed = max(Decimal(1), Decimal(str((current - month_start).total_seconds())) / Decimal(86400))
+    return (sp / elapsed) * Decimal(total_days)
 
 
 async def check_paid_call(
@@ -314,7 +321,7 @@ async def check_budget_thresholds(
                     severity=severity,
                     message=msg,
                     ref=ref_id,
-                    deduplicate=True,
+                    deduplicate=True,  # kind budget_threshold: once per ref (month), acknowledged or not
                 )
                 alert_ids.append(aid)
 

@@ -51,10 +51,10 @@ async def test_month_to_date_spend_combines_usage_and_billing(pool: DbPool) -> N
 
 
 def test_calculate_month_forecast() -> None:
-    now = datetime(2026, 10, 15, 0, 0, tzinfo=UTC)  # 15 days elapsed in a 31-day month
-    # Spent $150 in 15 days -> forecast is $310
+    now = datetime(2026, 10, 15, 0, 0, tzinfo=UTC)  # 14 full days have elapsed in a 31-day month (Q0-15)
+    # Spent $150 in 14 days -> forecast is 150 / 14 * 31
     forecast = calculate_month_forecast(Decimal("150"), now=now)
-    assert round(forecast, 2) == Decimal("310.00")
+    assert round(forecast, 2) == Decimal("332.14")
 
 
 async def test_budget_hard_stop_blocks_paid_and_allows_free(pool: DbPool) -> None:

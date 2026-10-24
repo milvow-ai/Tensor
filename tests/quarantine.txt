@@ -1,5 +1,4 @@
-# Quarantined tests (docs/QUALITY.md D7). One pytest node id per line; text after '#' is a comment.
+# Quarantined tests (docs/QUALITY.md D7, D38). One pytest node id per line; text after '#' is a comment.
 # scripts/check.ps1 runs these separately and prints the result, but they do not block the gate.
 # Every entry has an owner round; that round makes the test deterministic and deletes its line here.
-tests/test_accept_aip2.py::test_stopping_farm_serve_while_a_job_runs_fails_it_as_farm_restart_and_kills_the_worker  # fails every run, even alone (2026-10-24) — owner Q0E
-tests/test_accept_run1.py::test_watchdog_restart_and_alert_on_failure  # fails under parallel load — owner Q0E
+tests/test_accept_aip2.py::test_stopping_farm_serve_while_a_job_runs_fails_it_as_farm_restart_and_kills_the_worker  # D38: shutdown-order product bug fixed in Q0E; still ~1 in 20 under load (Farm closes during MCP start-up, cause unknown) — owner F2
