@@ -27,6 +27,8 @@ gates — not patching symptoms one at a time.
 | D42 | `quota_usage.used` for `rolling_5h` stays a lifetime counter for display, so the Console meter never decays; a past `next_reset_at` is ignored only at candidate load | Q0D report | Dashboard truth | Q0G: display from the rolling sum |
 | D43 | `test_accept_open1 … never_a_row_a_log_or_the_registry` failed once with "Unknown tool" from stdio sync in a full run; passes alone | Q0D report | Test reliability | Watch; quarantine if it repeats |
 | D44 | `console/sql/views.sql` still holds pre-0018 view text; the migrations are the source of truth | Q0G report, 2026-10-24 | Doc drift | A3: generate the reference file from the database, or delete it |
+| D45 | Text primary keys are global, not per tenant: `providers.id`, `connections.id`, `capabilities.name`, `farm_settings` — two tenants cannot both have an account named `claude-01` | Found by F1B, 2026-10-24 | Multi-tenant schema | **Must fix before a second tenant is onboarded.** F1C: composite keys `(tenant_id, id)` with tenant-scoped foreign keys (also blocks cross-tenant references) — contract step after F1B |
+| D46 | Processes started from a Claude Code session (the live Farm, builders) die when that session ends | 2026-10-24: the Farm and two builders stopped with the session | Operations | Farm now starts detached via WMI + `D:\farm-data\bin\start-farm.cmd`; the auto-start service (D5) still needs the owner's OK |
 | D9–D33 | 25 findings of the read-only audit Q0C (1 critical, 10 major, 14 minor; 17 confirmed with reproductions) | `docs/audits/Q0-audit.md`; reproductions in `D:/dev-cache/runs/q0c/repro/` | Several | Fix rounds Q0D+ |
 
 ## 2. The fix for the state-classification class (D1, D4)
