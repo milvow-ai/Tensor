@@ -153,12 +153,26 @@ def _is_tool_credit_spending(provider_id: str, tool_name: str, annotations: Any)
     return False
 
 
-def _tool_hint(provider_id: str, tool: store.StoredTool) -> str:
+Risk = Literal["read-only", "changes-data", "may-spend"]
+
+_HINTS: dict[Risk, str] = {
+    "read-only": "read-only",
+    "changes-data": "changes data",
+    "may-spend": "may spend credits",
+}
+
+
+def tool_risk(provider_id: str, tool: store.StoredTool) -> Risk:
+    """What calling a stored tool can do, from its annotations and the Farm's credit-spending rules."""
     if _is_tool_read_only(tool):
         return "read-only"
     if _is_tool_credit_spending(provider_id, tool.name, tool.definition.annotations):
-        return "may spend credits"
-    return "changes data"
+        return "may-spend"
+    return "changes-data"
+
+
+def _tool_hint(provider_id: str, tool: store.StoredTool) -> str:
+    return _HINTS[tool_risk(provider_id, tool)]
 
 
 def _tool_sort_key(tool: store.StoredTool) -> tuple[int, int, str]:
@@ -190,7 +204,9 @@ async def format_mcp_section(pool: DbPool, now: datetime) -> str:
     lines: list[str] = [
         "## MCP Servers",
         "Tools are exposed as `<server>__<tool>`. "
-        "Unlisted tools can be discovered with `search_tools` and called with `call_tool`.",
+        "Unlisted tools can be discovered with `search_tools(query, limit=10)` (per hit: name, server, "
+        "one-line description, risk, score; no schemas), read in full with `describe_tool(name)` and called "
+        "with `call_tool`.",
         "To pin an account: pass `_farm: {\"account\": \"<connection_id>\"}` in arguments.",
         "To view all tools for a server: call `list_server_tools(server=\"<server>\")`.",
         "",
@@ -308,8 +324,10 @@ __all__ = [
     "NEED_SOMETHING_ELSE_TEXT",
     "RECIPES_TEXT",
     "RULES_TEXT",
+    "Risk",
     "Section",
     "format_ai_section",
     "format_mcp_section",
     "generate_guide",
+    "tool_risk",
 ]
