@@ -5,6 +5,27 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
 
 ---
 
+## 2026-10-24 (later) — Session ended mid-build: recovered; live database at 0018
+
+- The previous Claude Code session ended; the live Farm and two builders (S0, F1B) were child processes and stopped with it.
+  No work was lost: F1B's changes were on disk and its conversation was resumed by session id.
+- **Live Farm restarted detached** from any session (WMI-created process running `D:\farm-data\bin\start-farm.cmd`), health OK.
+- **Live database migrated 0017 → 0018** (Q0G) while the Farm was down: logical backup first
+  (`D:\farm-data\backups\logical-20261024T043513Z`, 35 tables, 2,325 rows).
+- **Live role check for F1B:** the Supabase `postgres` role is not a superuser but has `BYPASSRLS` and `CREATEROLE`, so the
+  `farm_system` maintenance role can be created there.
+- **Q0G merged** (`369537e`) — probing/open circuits never shown as active, one budget rule, overruns recorded and blocking,
+  rolling 5-hour meters.
+- **F1B status:** built (roles, RLS, fail-closed tenant checkouts, `api_tokens`, isolation suite with 105 tests over 30 tables,
+  17 tools, 18 command kinds, 13 views). Finishing: re-chain its migration after 0018 and move the ledger and budget checks onto
+  tenant / system connections.
+- **New register entries:** D45 global text primary keys block a second tenant (F1C, must precede onboarding); D46 session-bound
+  processes.
+- `scripts/round.ps1`: the Claude builder's input/output now go through files (a PowerShell pipeline crashed with a
+  StackOverflowException in round f1b).
+
+---
+
 ## 2026-10-24 (later) — Quality baseline complete: all 25 audit findings fixed; live database at 0017
 
 **Merged (each behind the full gate: ruff, mypy, all tests, secret scan):**
