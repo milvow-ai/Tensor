@@ -10,7 +10,11 @@ from __future__ import annotations
 from decimal import Decimal
 from uuid import UUID
 
+import structlog
+
 from farm.db.pool import DbPool
+
+log = structlog.get_logger(__name__)
 
 type Amount = Decimal | float | int
 
@@ -44,14 +48,34 @@ async def reserve(
     return value if isinstance(value, UUID) else UUID(str(value))
 
 
-async def commit(pool: DbPool, res_id: UUID | str, actual: Amount | None = None) -> None:
+async def commit(pool: DbPool, res_id: UUID | str, actual: Amount | None = None) -> bool:
     """Settle a reservation: its amount leaves ``reserved``, ``actual`` (default: the reserved amount) is
-    added to ``used``. Pass ``0`` when the call failed and the unit is charged on success. Idempotent."""
+    added to ``used``. Pass ``0`` when the call failed and the unit is charged on success. Idempotent.
+
+    A reservation that expired before its call finished is still charged (a *late commit*: the call really
+    ran), and a warning says so; returns ``True`` in that case.
+    """
     async with pool.connection() as conn:
         await conn.execute(
             "select public.farm_commit(%s::uuid, %s::numeric)",
             (res_id, None if actual is None else _num(actual)),
         )
+        cur = await conn.execute(
+            "select connection_id, unit, actual from public.quota_reservations where id = %s and late",
+            (res_id,),
+        )
+        late = await cur.fetchone()
+    if late is None:
+        return False
+    log.warning(
+        "ledger.late_commit",
+        reservation_id=str(res_id),
+        connection_id=late[0],
+        unit=late[1],
+        actual=str(late[2]),
+        reason="the reservation had expired before the call finished; the usage was recorded anyway",
+    )
+    return True
 
 
 async def release(pool: DbPool, res_id: UUID | str) -> None:

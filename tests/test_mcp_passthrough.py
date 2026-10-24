@@ -224,7 +224,9 @@ async def test_a_failed_account_is_remembered_by_the_router_so_the_next_call_ski
         world.ctx.pool,
         "select last_error_kind, failure_count from connection_health where connection_id = 'fake-01'",
     )
-    assert health == [("server", 1)]  # tried once, failed once; the second call went straight to fake-02
+    # failover follows priority (Q0-08): fake-01 is tried first again and fails again; only an open circuit
+    # (5 failures in a row) takes it out of the order, a lower success rate does not
+    assert health == [("server", 2)]
     assert len(servers["fake-02"].state.calls) == 2  # type: ignore[attr-defined]
 
 

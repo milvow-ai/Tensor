@@ -44,7 +44,7 @@ import hashlib
 import json
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -216,6 +216,8 @@ class UnitConfig:
     unit_cost_usd: Decimal
     estimate: Decimal
     next_reset_at: datetime | None = None
+    consumed: Decimal = Decimal(0)
+    """``used + reserved`` in the unit's current period (the last 5 hours for ``rolling_5h``)."""
 
 
 @dataclass(frozen=True)
@@ -235,9 +237,12 @@ class Candidate:
     cooldown_until: datetime | None
     units: tuple[UnitConfig, ...]
     success_count: int = 0
+    """Successes among the last 50 outcomes (``connection_health.recent_outcomes``): the failover tiebreak."""
     failure_count: int = 0
+    """Failures among the last 50 outcomes."""
     open_seconds: int | None = None
     remaining_fraction: float = 1.0
+    """The smallest share left of any limited unit (1.0 when nothing is limited), for ``most_remaining``."""
 
 
 @dataclass(frozen=True)
@@ -270,12 +275,27 @@ async def _load_routes(pool: DbPool, capability: str) -> list[ProviderPool]:
     return [ProviderPool(*row) for row in rows]
 
 
-async def _load_candidates(pool: DbPool, provider_id: str) -> list[Candidate]:
+def remaining_fraction(units: Sequence[UnitConfig]) -> float:
+    """The smallest share of its limit that any limited unit still has (1.0 when no unit has a limit)."""
+    fractions = [
+        max(0.0, float((u.limit - u.consumed) / u.limit))
+        for u in units
+        if u.limit is not None and u.limit > 0
+    ]
+    return min(fractions, default=1.0)
+
+
+async def _load_candidates(pool: DbPool, provider_id: str, now: datetime | None = None) -> list[Candidate]:
+    """The connections of a pool with their health, units and how much quota each has left.
+
+    With ``now``, a ``next_reset_at`` that has passed is dropped: the window reset, so it must not rank the
+    unit as the "soonest reset" for ever.
+    """
     async with pool.connection() as conn:
         cur = await conn.execute(
             "select cn.id, cn.provider_id, cn.auth_ref, cn.scope, cn.priority, cn.status, cn.meta, "
             "cn.concurrency, cn.rate_per_min, coalesce(h.circuit, 'closed'), h.cooldown_until, "
-            "coalesce(h.success_count, 0), coalesce(h.failure_count, 0), h.open_seconds "
+            "coalesce(h.recent_outcomes, ''), h.open_seconds "
             "from public.connections cn left join public.connection_health h on h.connection_id = cn.id "
             "where cn.provider_id = %s order by cn.priority, cn.id",
             (provider_id,),
@@ -283,14 +303,17 @@ async def _load_candidates(pool: DbPool, provider_id: str) -> list[Candidate]:
         connections = await cur.fetchall()
         cur = await conn.execute(
             "select connection_id, unit, limit_value, period, charged_on, unit_cost_usd, "
-            "estimate_per_call, next_reset_at "
+            "estimate_per_call, next_reset_at, public.farm_quota_consumed(connection_id, unit, now()) "
             "from public.consumption_units where connection_id = any(%s) order by connection_id, unit",
             ([c[0] for c in connections],),
         )
         unit_rows = await cur.fetchall()
     units: dict[str, list[UnitConfig]] = {}
     for u in unit_rows:
-        units.setdefault(u[0], []).append(UnitConfig(*u[1:]))
+        config = UnitConfig(*u[1:])
+        if now is not None and config.next_reset_at is not None and config.next_reset_at <= now:
+            config = replace(config, next_reset_at=None)
+        units.setdefault(u[0], []).append(config)
     return [
         Candidate(
             id=c[0],
@@ -305,9 +328,10 @@ async def _load_candidates(pool: DbPool, provider_id: str) -> list[Candidate]:
             circuit=c[9],
             cooldown_until=c[10],
             units=tuple(units.get(c[0], ())),
-            success_count=c[11],
-            failure_count=c[12],
-            open_seconds=c[13],
+            success_count=c[11].count("S"),
+            failure_count=c[11].count("F"),
+            open_seconds=c[12],
+            remaining_fraction=remaining_fraction(units.get(c[0], ())),
         )
         for c in connections
     ]
@@ -624,13 +648,13 @@ class _Chain:
             await self._skip(provider_pool, None, "no_executor", executor=provider_pool.executor)
             return None
 
-        candidates = await _load_candidates(ctx.pool, provider_pool.id)
+        now = ctx.clock()
+        candidates = await _load_candidates(ctx.pool, provider_pool.id, now)
         if call.pin is not None:
             candidates = [c for c in candidates if c.id == call.pin]
         if not candidates:
             await self._skip(provider_pool, None, "no_connections")
             return None
-        now = ctx.clock()
         await health.reactivate_due(ctx.pool, now)
 
         requested_model = call.params.get("model")
@@ -702,24 +726,19 @@ class _Chain:
         candidate_order = free_candidates + busy_candidates
 
         for candidate in candidate_order:
-            # 1. Half-open circuit probe check: exactly one probe request allowed
-            if candidate.circuit == "open":
-                claimed = await health.claim_probe(ctx.pool, candidate.id, now)
-                if not claimed:
-                    await self._skip(provider_pool, candidate, "circuit_open")
-                    continue
-
-            # 4. Bulkhead gate per connection: Semaphore(concurrency) + AsyncLimiter(rate_per_min)
+            # Bulkhead gate per connection: Semaphore(concurrency) + AsyncLimiter(rate_per_min). It is taken
+            # before the probe is claimed, so a saturated gate never strands a half-open probe.
             gate = get_gate(candidate.id, candidate.concurrency, candidate.rate_per_min)
             max_wait_s = float(candidate.meta.get("max_queue_wait_s", 2.0))
             try:
                 async with gate.acquire(max_wait_s=max_wait_s):
-                    settled = await self._try_connection(
+                    settled = await self._try_probed(
                         provider_pool,
                         candidate,
                         executor,
                         resolved,
                         budgets,
+                        now,
                         ranking_reason=ranking_reasons.get(candidate.id),
                     )
                     if settled is not None:
@@ -728,6 +747,41 @@ class _Chain:
                 await self._skip(provider_pool, candidate, "saturated")
                 continue
         return None
+
+    async def _try_probed(
+        self,
+        provider_pool: ProviderPool,
+        candidate: Candidate,
+        executor: Executor,
+        resolved: ResolvedStrategy,
+        budgets: Budgets,
+        now: datetime,
+        ranking_reason: str | None = None,
+    ) -> _Settled | None:
+        """Try one connection; one that is open or half-open first has to win the single probe.
+
+        The probe ends with the call's success or failure (``health``). Whatever else ends this attempt (a
+        cancellation, a shutdown, a budget or quota refusal before the call) gives the probe back, so the
+        next call probes instead of the account staying half-open.
+        """
+        if candidate.circuit == "closed":
+            return await self._try_connection(
+                provider_pool, candidate, executor, resolved, budgets, ranking_reason=ranking_reason
+            )
+        lease_s = _timeout_for(candidate, provider_pool, self.ctx.default_timeout_s) + RESERVATION_MARGIN_S
+        if not await health.claim_probe(self.ctx.pool, candidate.id, now, lease_s=lease_s):
+            await self._skip(provider_pool, candidate, "circuit_open")
+            return None
+        try:
+            return await self._try_connection(
+                provider_pool, candidate, executor, resolved, budgets, ranking_reason=ranking_reason
+            )
+        finally:
+            await asyncio.shield(
+                _best_effort(
+                    health.release_probe(self.ctx.pool, candidate.id, self.ctx.clock()), "health.probe"
+                )
+            )
 
     async def _skip(
         self, provider_pool: ProviderPool, candidate: Candidate | None, reason: str, **detail: Any
@@ -753,7 +807,7 @@ class _Chain:
         budgets: Budgets,
         ranking_reason: str | None = None,
     ) -> _Settled | None:
-        ctx, call, traj = self.ctx, self.call, self.traj
+        ctx, traj = self.ctx, self.traj
         if self.failed_from is not None:
             await traj.event(
                 "fallback", self.failed_from, to_connection=candidate.id, reason=self.fallback_reason
@@ -790,10 +844,20 @@ class _Chain:
             if u.unit_cost_usd > 0 and u.estimate > 0:
                 est_cost += u.estimate * u.unit_cost_usd
 
+        budget_hold: UUID | None = None
+        hold_s = _timeout_for(candidate, provider_pool, ctx.default_timeout_s) + RESERVATION_MARGIN_S
         if est_cost > 0:
             from farm.resources import budget
 
-            decision = await budget.check(ctx.pool, candidate.id, est_cost, now=ctx.clock())
+            hold = await budget.reserve(
+                ctx.pool,
+                candidate.id,
+                est_cost,
+                request_id=self.request_id,
+                ttl_s=int(hold_s),
+                now=ctx.clock(),
+            )
+            decision = hold.decision
             if not decision.allowed:
                 self.policy_blocks += 1
                 reason = decision.reason or "budget_exhausted"
@@ -808,43 +872,63 @@ class _Chain:
                     )
                 )
                 return None
+            budget_hold = hold.hold_id
 
+        try:
+            return await self._attempt(provider_pool, candidate, executor)
+        finally:
+            # After the books are settled (the spend is in usage_events by now): drop the hold, even when the
+            # attempt was cancelled.
+            if budget_hold is not None:
+                from farm.resources import budget as budget_resource
+
+                await asyncio.shield(
+                    _best_effort(budget_resource.release(ctx.pool, budget_hold), "budget.release")
+                )
+
+    async def _attempt(
+        self, provider_pool: ProviderPool, candidate: Candidate, executor: Executor
+    ) -> _Settled | None:
+        """Reserve the units of ``candidate``, make the call and settle: every exit leaves nothing held."""
+        ctx, call, traj = self.ctx, self.call, self.traj
         held = await self._reserve(provider_pool, candidate)
         if held is None:
             return None
 
-        timeout_s = _timeout_for(candidate, provider_pool, ctx.default_timeout_s)
-        request = ExecRequest(
-            request_id=self.request_id,
-            capability=call.capability,
-            params=call.params,
-            connection=ConnectionView(
-                id=candidate.id,
-                provider_id=candidate.provider_id,
-                auth_ref=candidate.auth_ref,
-                meta=dict(candidate.meta),
-                concurrency=candidate.concurrency,
-                rate_per_min=candidate.rate_per_min,
-            ),
-            timeout_s=timeout_s,
-        )
-        await traj.event("execute", candidate.id, provider=provider_pool.id, timeout_s=timeout_s)
-        self.last_provider, self.last_connection = provider_pool.id, candidate.id
-
-        is_idempotent = getattr(call.cap, "idempotent", None)
-        if is_idempotent is None:
-            if "idempotent" in candidate.meta:
-                is_idempotent = bool(candidate.meta["idempotent"])
-            else:
-                is_idempotent = _is_read_capability(call.capability)
-        base_retry_s = float(candidate.meta.get("retry_base_s", 0.5))
-        cap_retry_s = float(candidate.meta.get("retry_cap_s", 4.0))
-
-        async def _call_exec() -> ExecResult:
-            return await self._execute(executor, request, timeout_s)
-
+        call_started = False
         result: ExecResult
         try:
+            timeout_s = _timeout_for(candidate, provider_pool, ctx.default_timeout_s)
+            request = ExecRequest(
+                request_id=self.request_id,
+                capability=call.capability,
+                params=call.params,
+                connection=ConnectionView(
+                    id=candidate.id,
+                    provider_id=candidate.provider_id,
+                    auth_ref=candidate.auth_ref,
+                    meta=dict(candidate.meta),
+                    concurrency=candidate.concurrency,
+                    rate_per_min=candidate.rate_per_min,
+                ),
+                timeout_s=timeout_s,
+            )
+            await traj.event("execute", candidate.id, provider=provider_pool.id, timeout_s=timeout_s)
+            self.last_provider, self.last_connection = provider_pool.id, candidate.id
+
+            is_idempotent = getattr(call.cap, "idempotent", None)
+            if is_idempotent is None:
+                if "idempotent" in candidate.meta:
+                    is_idempotent = bool(candidate.meta["idempotent"])
+                else:
+                    is_idempotent = _is_read_capability(call.capability)
+            base_retry_s = float(candidate.meta.get("retry_base_s", 0.5))
+            cap_retry_s = float(candidate.meta.get("retry_cap_s", 4.0))
+
+            async def _call_exec() -> ExecResult:
+                return await self._execute(executor, request, timeout_s)
+
+            call_started = True
             if is_idempotent:
 
                 def _retry_fallback(state: tenacity.RetryCallState) -> ExecResult:
@@ -864,9 +948,12 @@ class _Chain:
             else:
                 result = await _call_exec()
         except BaseException:
-            # Cancelled (deadline, shutdown): the provider may or may not have been reached, so settle like a
-            # failed attempt before letting the cancellation go.
-            await asyncio.shield(self._settle(candidate, held, _failed(ErrorKind.UNKNOWN, "interrupted")))
+            # Cancelled (deadline, shutdown) or a bug after the reservation. Once the call may have reached
+            # the provider, settle like a failed attempt; before that nothing was used, so release.
+            if call_started:
+                await asyncio.shield(self._settle(candidate, held, _failed(ErrorKind.UNKNOWN, "interrupted")))
+            else:
+                await asyncio.shield(self._release(candidate, held, "interrupted before the call started"))
             raise
 
         if result.ok:
@@ -899,6 +986,12 @@ class _Chain:
         if not empty:
             await _best_effort(
                 health.record_success(ctx.pool, candidate.id, now=ctx.clock()), "health.success"
+            )
+        elif candidate.circuit != "closed":
+            # An empty answer changes nothing for a healthy account, but it still ends a half-open probe.
+            await _best_effort(
+                health.record_failure(ctx.pool, candidate.id, ErrorKind.EMPTY, result.error, now=ctx.clock()),
+                "health.probe_empty",
             )
         await self.traj.event(
             "success",
@@ -976,22 +1069,6 @@ class _Chain:
             ),
             "health.failure",
         )
-        if kind in (ErrorKind.AUTH, ErrorKind.NEEDS_LOGIN):
-            login_cmd = f"farm ai login {candidate.id}"
-            alert_msg = f"Account {candidate.id} authentication failed. Run: {login_cmd}"
-            from farm.manager.alerts import create_alert
-
-            await _best_effort(
-                create_alert(
-                    ctx.pool,
-                    kind="needs_login",
-                    severity="critical",
-                    message=alert_msg,
-                    ref=f"login:{candidate.id}",
-                    notify_telegram=False,
-                ),
-                "alert.needs_login",
-            )
         if kind is ErrorKind.LIMIT_REACHED and result.reset_at is not None:
             async with ctx.pool.connection() as conn:
                 await conn.execute(
@@ -1487,18 +1564,22 @@ async def _publish(
     """Make the leader's result visible to cache readers and to waiters in other processes."""
     now = ctx.clock()
     if settled.ok and settled.data is not None and settled.provider and settled.connection_id:
-        # An inconclusive or empty answer (found = False) is not worth keeping: the next call asks again.
-        ttl = 0 if settled.found is False else call.cap.cache_ttl_seconds
-        stored_data = {} if ttl <= 0 else settled.data
+        # Only a found answer is cached. Anything else (not found, or an executor that did not say) is
+        # published with its TTL over, so the next call asks again; the answer still reaches the callers that
+        # waited for this execution (flight.JOIN_GRACE_S). A capability that is never cached (TTL 0, e.g. an
+        # AI answer) keeps no data in the database at all.
+        keeps_data = call.cap.cache_ttl_seconds > 0
+        ttl = call.cap.cache_ttl_seconds if settled.found is True else 0
         await flight.finish_success(
             ctx.pool,
             request_id,
             traj.run_id,
             flight.StoredResult(
-                data=stored_data,
+                data=settled.data if keeps_data else {},
                 provider=settled.provider,
                 connection_id=settled.connection_id,
                 found=settled.found,
+                withheld=not keeps_data,
             ),
             now + timedelta(seconds=ttl),
         )

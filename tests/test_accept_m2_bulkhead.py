@@ -7,7 +7,6 @@ bypass A within max_queue_wait_s and are served by connection B without stalling
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Awaitable, Callable
 
 from farm.context import FarmContext
@@ -36,11 +35,14 @@ async def test_bulkhead_slow_connection_a_bypassed_to_b_within_max_queue_wait(
     c2.concurrency = 5
     c2.priority = 2
 
-    # reoon-01 is held slow (0.4s), reoon-02 is fast (immediate)
+    # reoon-01 is held by an event (never by a sleep, so CPU load cannot change the order), reoon-02 is fast
+    slow_started = asyncio.Event()
+    release_slow = asyncio.Event()
+
     async def scripted_call(req: ExecRequest) -> ExecResult:
         if req.connection.id == "reoon-01":
-            await asyncio.sleep(0.4)
-            return ok_result()
+            slow_started.set()
+            await release_slow.wait()
         return ok_result()
 
     executor = AsyncFnExecutor(scripted_call)
@@ -48,21 +50,19 @@ async def test_bulkhead_slow_connection_a_bypassed_to_b_within_max_queue_wait(
 
     # Start slow call on reoon-01 in the background
     slow_task = asyncio.create_task(route(ctx, "verify_email", {"email": "slow@example.com"}, caller="test"))
-    # Wait briefly for slow call to acquire reoon-01 gate
-    await asyncio.sleep(0.02)
+    # The slow call is inside the executor, so it holds reoon-01's gate
+    await asyncio.wait_for(slow_started.wait(), 30)
 
-    # 5 concurrent requests while reoon-01 is held busy
-    t0 = time.monotonic()
-    fast_results = await asyncio.gather(
-        *(
-            route(ctx, "verify_email", {"email": f"user{i}@example.com"}, caller="test")
-            for i in range(5)
-        )
+    # 5 concurrent requests while reoon-01 is held busy (the guard only catches a hang, it is not a timing check)
+    fast_results = await asyncio.wait_for(
+        asyncio.gather(
+            *(route(ctx, "verify_email", {"email": f"user{i}@example.com"}, caller="test") for i in range(5))
+        ),
+        30,
     )
-    t_elapsed = time.monotonic() - t0
 
-    # All 5 requests completed well before the slow call finished
-    assert t_elapsed < 0.25, f"fast calls took {t_elapsed:.3f}s, expected < 0.25s"
+    # All 5 requests completed while the slow call was still held: they did not wait for it
+    assert not slow_task.done()
 
     # All 5 requests were successfully served by reoon-02 (bypassing saturated reoon-01)
     for res in fast_results:
@@ -73,7 +73,8 @@ async def test_bulkhead_slow_connection_a_bypassed_to_b_within_max_queue_wait(
         assert ("skip", "reoon-01") in run_kinds
         assert ("candidate", "reoon-02") in run_kinds
 
-    # The slow call on reoon-01 completes cleanly
+    # The slow call on reoon-01 completes cleanly once released
+    release_slow.set()
     slow_res = await slow_task
     assert slow_res.ok
     assert slow_res.source is not None and slow_res.source.connection_id == "reoon-01"
