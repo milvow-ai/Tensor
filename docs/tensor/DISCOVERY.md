@@ -1,6 +1,7 @@
 # Tensor — Discovery (T0, step 1)
 
-**Status (2026-10-24):** round 1 asked; answers pending. Owner: Amaan (Milvow). Lead: Claude (T0 design session).
+**Status (2026-10-24):** round 1 answered (all eight proposals accepted); round 2 (the items with no default) asked.
+Owner: Amaan (Milvow). Lead: Claude (T0 design session).
 Brief: `briefs/T0-tensor-design-session.md`. Nothing is built before the owner approves `docs/tensor/BUILD-PLAN.md`.
 
 ## Sources read (2026-10-24)
@@ -64,9 +65,35 @@ The owner may answer "default" to accept the proposal in brackets.
    [founder voice, plain, 60–110 words, one question, no links in the first email]
 
 ## Answers
-None yet.
+
+### Round 1 (owner, 2026-10-24): all eight proposals accepted
+The right-hand column is the lead's working reading; the owner confirms it when approving this document.
+
+| # | Decision | Working reading |
+|---|---|---|
+| D1 | Goal: ≥ 4 qualified meetings a month by day 90; reply-rate and cost-per-lead targets are fixed after a 200-email baseline | Day 90 counts from the first real send. A qualified meeting is a held call with a decision maker at an ICP company who confirms a workflow problem Milvow solves |
+| D2 | Tensor sells AI workflow automation only; an email cites only proof the owner has confirmed in writing | The website offer (A) and its audit module leave the first build |
+| D3 | Prospects: US; 20–500 staff; founder, COO or head of operations; 2–3 verticals run as measured experiments | Verticals are chosen in the research step from evidence, then confirmed by the owner |
+| D4 | Sending: 2 outreach domains × 2 mailboxes, ramping to about 25 per mailbox a day; ≤ $150 a month on top of current subscriptions; a priced domain and mailbox proposal comes first | Ceiling ≈ 100 sends a day; the real daily volume is set by the approval time available (round 2, Q5). Buying stays the owner's decision |
+| D5 | Compliance: US B2B only, under CAN-SPAM (honest headers, postal address, one-click unsubscribe, suppression kept forever); EU, UK and Canadian prospects excluded until their rules are designed | The country rule is a hard check in the send guard, not only a search filter |
+| D6 | A person approves every email until 100 sends with 0 false claims (Gate T); then approval by exception | Replies Tensor sends are approved the same way in that period |
+| D7 | Client Tensors are a done-for-you service first (Milvow runs them); client logins come later | Each client is a tenant with its own client pack; Milvow is client #1 |
+| D8 | Voice: founder voice, plain, 60–110 words, one question, no links in the first email | Follow-ups obey the same rules; a style lint enforces them in code |
+
+### Round 2 — the items with no default (asked 2026-10-24)
+1. **Deal size and sales cycle.** Typical value of a first engagement (USD) and the time from first call to signature.
+   This sets the cost a meeting may carry and how long follow-ups run.
+2. **Real proof.** Each proof point Tensor may cite: the client (named or anonymous), what Milvow built, the measured
+   result, and whether the client allows naming. Are the Cigna and Aetna case studies real?
+3. **Postal address** for the footer. CAN-SPAM accepts a street address, a USPS PO box or a private mailbox registered
+   with a commercial mail receiving agency.
+4. **Who signs.** The name and title on the emails.
+5. **Who operates.** Who reviews dossiers and approves emails day to day, and how many hours a week.
+6. **First client.** Is a first Tensor client in sight? If so, its industry and size.
 
 ## Decisions
 | Date | Decision | By |
 |---|---|---|
 | 2026-10-24 | Tensor is designed in its own session from brief T0 (discovery → research → requirements → Figma flows → architecture → build plan); no code before BUILD-PLAN approval | owner |
+| 2026-10-24 | Round 1: all eight proposals accepted (D1–D8) | owner |
+| 2026-10-24 | The outreach domain and mailbox research runs first, because warm-up gates the first send (D4) | owner (D4), lead (order) |

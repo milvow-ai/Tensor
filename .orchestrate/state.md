@@ -13,11 +13,14 @@
 **Rules carried over:** restart `farm run` by killing the whole process tree (`taskkill /T`) and confirming the port changed owner · Bifrost started detached · Hermes: check effects, not reports; no user@host URLs in its commands · write config files without BOM · no HFK business matters; funding-engine is code only (never `clients/hfk`, data, tokens).
 
 ## Tensor T0 — design session (started 2026-10-24; brief `briefs/T0-tensor-design-session.md`)
-**Status (2026-10-24):** step 1 Discovery: round 1 asked, answers pending (`docs/tensor/DISCOVERY.md`). No code before the owner approves `docs/tensor/BUILD-PLAN.md`.
+**Status (2026-10-24):** step 1 Discovery: round 1 answered (all eight proposals accepted, D1–D8 in `docs/tensor/DISCOVERY.md`); round 2 (deal size, real proof, postal address, signer, operator, first client) asked. No code before the owner approves `docs/tensor/BUILD-PLAN.md`.
+**In flight:** R7 outreach domains + mailboxes research (`briefs/T0-R7-outreach-mailboxes.md`), Farm job `3ed9e105-bb20-479d-ac14-068037013e62` on agy-01 (Gemini 3.1 Pro, answer mode). Collect with `ai_result`, verify the load-bearing prices, save as `research/r7-outreach-mailboxes.md`, then write the priced proposal (buying is the owner's decision).
 **Artefacts (owner's yes on each, pushed after each yes):** DISCOVERY · research refresh · REQUIREMENTS · Figma file "Tensor" (one page per artefact) · ARCHITECTURE · LEGO-MAP · QUALITY-PLAN · BUILD-PLAN, all in `docs/tensor/`.
 **Kickoff findings:** funding-engine `main` (`e7a273e`) connects mailboxes with a Gmail App Password over SMTP/IMAP; `gmail_oauth` is only an allowed value, not built · the local funding-engine checkout is on `fix/daily-report-unfinished-runs`, so T0 reads `main` with `git show` and never switches branches there · live Farm: Clay 2/2, Claude 3/4, Gemini 4/9 (free), Hermes 1/1, Codex 0/3 · `research/` is 3 weeks old, so prices get refreshed.
 **Decisions (date — who):**
 - 2026-10-24: Tensor is designed in its own session from brief T0 with the agency method; building starts only after BUILD-PLAN approval — owner.
+- 2026-10-24: Discovery round 1: all eight proposals accepted (workflow automation only; US B2B 20–500 staff; 2 domains × 2 mailboxes ramping to ~25/day; ≤ $150/mo; CAN-SPAM only, EU/UK/Canada excluded; every email approved until Gate T; done-for-you client Tensors; founder voice 60–110 words) — owner.
+- 2026-10-24: Mailbox and domain research runs first because warm-up gates the first send — owner (D4), lead (order).
 
 ## Effort 2 — Plan (v1, 2026-10-24; estimates, not promises)
 | ID | Scope (see docs/ARCHITECTURE.md) | Done when (the check) | Days |
