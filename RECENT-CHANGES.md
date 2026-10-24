@@ -5,6 +5,41 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
 
 ---
 
+## 2026-10-24 (evening) — SERVER1: the Farm on a Linux server for the Milvow team (kit ready, no server yet)
+
+- **Proven on Linux** in WSL Ubuntu 24.04 (temporary unprivileged test user; Postgres refuses root): the full suite gave
+  2,446 passed, 6 failed. Each Linux-only failure is fixed with a regression test: the data dir defaulted to
+  `D:/farm-data` on Linux (one platform-aware default for every module now); `edit_roots` had to be absolute for the OS
+  that validates (the PC's registry failed on Linux, the server's on Windows: one database serves both); a token-store id
+  with a backslash was a path on Windows only (either separator refused everywhere); the embedded Postgres kept its log
+  inside the data dir on Linux (now started the same way on every OS); Claude Desktop's config honours
+  `XDG_CONFIG_HOME`; Windows-only tests are gated. Two deploy bugs found on the way: every `scripts/linux/*.sh` was
+  mode 0644 in git (systemd would fail `203/EXEC`) and nothing forced LF (a CRLF checkout breaks bash) → executable bits
+  + `.gitattributes`, both tested.
+- **Server kit:** `harness-farm.service` now runs as user `farm` (it ran as root: Claude Code refuses to skip
+  permissions as root), `Restart=always`, hardened, writes only `/var/lib/harness-farm`; Bifrost unit; watchdog restarts
+  as root but alerts as `farm`; daily encrypted state backup (age to the owner's public key; manifest; restore drill;
+  damaged archives refused); `install-server.sh`, `/usr/local/bin/farm` wrapper, `update.sh` (backup → ff → sync →
+  `farm db backup` → migrate → restart → health, rollback); `check.sh` honours `tests/quarantine.txt` like `check.ps1`.
+- **Farm changes for a server:** `farm registry for-server` (PC registry → server registry: no Windows path or WSL
+  prefix, one login home per AI account, figma-bridge disabled; `config/registry.server.yaml` generated from the live
+  registry, git-ignored, 34 changes); `FARM_ENV_FILE`; `farm connect --url` / `FARM_PUBLIC_URL`; headless logins (OAuth
+  prints its URL and takes `FARM_OAUTH_CALLBACK_PORT` for `ssh -L`; Codex `--device-auth`; agy without a session bus);
+  `farm db backup` (the password no longer on `pg_dump`'s command line); `farm member add/list/remove` (Supabase sign-in,
+  confirmed so no e-mail, + `users`/`memberships` for F1B RLS).
+- **Decisions in `docs/RUNBOOK-SERVER.md`:** Tailscale (free Personal plan, up to 6 users) with `tailscale serve` in
+  front of the Farm on 127.0.0.1 (FastMCP's Host check is off by default; a test locks that in); figma-bridge stays on
+  each person's machine (Figma's remote MCP admits listed clients only); one Farm per database (cutover, not both).
+  Server: 4 vCPU / 8 GB recommended near Supabase Mumbai — DigitalOcean Bangalore $48/mo, Hetzner Singapore CPX32
+  €49.49, Hetzner Germany CPX32 €35.99, CX43 €16.49 but unavailable (prices checked 2026-10-24). **Owner decides and
+  buys.**
+- **Not done:** no server bought, so none of the done-when checks has run (members over the tailnet, `ask_ai` + Clay from
+  the server, a restore drill on the server). The Console still admits only `farm_settings.owner_email` and runs only on
+  the PC, so members cannot use the dashboard yet (needs a member check and hosting: on the server behind Tailscale or
+  on Vercel).
+
+---
+
 ## 2026-10-24 (midday) — F1B merged; live database at 0019; start-up hotfix (D50)
 
 - **F1B merged** (`330612c`): tenant isolation is now enforced in the database — roles `farm_app` (row level security
