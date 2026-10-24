@@ -108,7 +108,7 @@ async def test_save_secret_writes_the_key_and_points_the_account_at_it(
     monkeypatch.setattr("farm.connect.commands.set_secret", fake_set_secret)
     monkeypatch.setenv("REOON_KEY_01", "placeholder")  # restored (unset) after the test
     await seed_connection(pool, "reoon", "reoon-01", status="needs_login", auth_ref="env:REOON_OLD")
-    sealed = seal("rk_live_123", _jwk(tmp_path), f"{MILVOW_TENANT_ID}|REOON_KEY_01|secret")
+    sealed = seal("rk_live_test_7f3a9c2e41", _jwk(tmp_path), f"{MILVOW_TENANT_ID}|REOON_KEY_01|secret")
     status, result = await execute_command(
         pool,
         uuid4(),
@@ -117,7 +117,7 @@ async def test_save_secret_writes_the_key_and_points_the_account_at_it(
         actor="owner",
     )
     assert (status, result) == ("done", {"saved": "REOON_KEY_01"})
-    assert saved == {"REOON_KEY_01": "rk_live_123"} and os.environ["REOON_KEY_01"] == "rk_live_123"
+    assert saved == {"REOON_KEY_01": "rk_live_test_7f3a9c2e41"} and os.environ["REOON_KEY_01"] == "rk_live_test_7f3a9c2e41"
     assert await _rows(pool, "select auth_ref from public.connections where id = 'reoon-01'") == [
         ("env:REOON_KEY_01",)
     ]
@@ -130,11 +130,11 @@ async def test_a_key_sealed_for_another_name_is_rejected(
     pool: DbPool, service: LoginService, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("farm.connect.commands.set_secret", lambda name, value: pytest.fail("must not save"))
-    sealed = seal("rk_live_123", _jwk(tmp_path), f"{MILVOW_TENANT_ID}|OTHER_NAME|secret")
+    sealed = seal("rk_live_test_7f3a9c2e41", _jwk(tmp_path), f"{MILVOW_TENANT_ID}|OTHER_NAME|secret")
     status, result = await execute_command(
         pool, uuid4(), "save_secret", {"name": "REOON_KEY_01", "sealed": sealed}, actor="owner"
     )
-    assert status == "rejected" and "rk_live_123" not in json.dumps(result)
+    assert status == "rejected" and "rk_live_test_7f3a9c2e41" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("sealed_for", ["HUNTER_KEY_01", "WRONG_NAME"])
@@ -143,7 +143,7 @@ async def test_a_queued_sealed_command_keeps_no_ciphertext(
 ) -> None:
     monkeypatch.setattr("farm.connect.commands.set_secret", lambda name, value: tmp_path / ".env")
     monkeypatch.setenv("HUNTER_KEY_01", "placeholder")
-    payload = {"name": "HUNTER_KEY_01", "sealed": seal("hk_1", _jwk(tmp_path), f"{MILVOW_TENANT_ID}|{sealed_for}|secret")}
+    payload = {"name": "HUNTER_KEY_01", "sealed": seal("hk_test_5b1d8e4077", _jwk(tmp_path), f"{MILVOW_TENANT_ID}|{sealed_for}|secret")}
     cmd_id = uuid4()
     async with pool.connection() as conn:
         await conn.execute(

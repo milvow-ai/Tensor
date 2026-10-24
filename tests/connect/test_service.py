@@ -187,15 +187,15 @@ async def test_a_pasted_code_reaches_the_driver_sealed(pool: DbPool, tmp_path: P
             row = await _wait(pool, sid, "waiting_for_user")
         assert row["auth_url"] == "https://example.test/oauth" and row["input_hint"] == "Paste the code"
         _, jwk, _ = load_or_create_keys(tmp_path / "keys")
-        wrong = seal("code-123", jwk, f"{MILVOW_TENANT_ID}|{UUID(int=1)}|login_input")
+        wrong = seal("code-test-7f3a9c2e41", jwk, f"{MILVOW_TENANT_ID}|{UUID(int=1)}|login_input")
         with pytest.raises(SealedError):
             await svc.submit_input(MILVOW_TENANT_ID, sid, wrong, "owner")
-        sealed = seal("code-123", jwk, f"{MILVOW_TENANT_ID}|{sid}|login_input")
+        sealed = seal("code-test-7f3a9c2e41", jwk, f"{MILVOW_TENANT_ID}|{sid}|login_input")
         await svc.submit_input(MILVOW_TENANT_ID, sid, sealed, "owner")
         row = await _wait(pool, sid, "done")
     finally:
         await svc.stop()
-    assert driver.submitted == ["code-123"]
+    assert driver.submitted == ["code-test-7f3a9c2e41"]
     assert row["needs_input"] is False
 
 

@@ -1,6 +1,6 @@
 """Stands in for the claude CLI in tests: the ``auth login`` transcript of Claude Code 2.1.299 and its stdin code.
 
-The code ``good-code`` signs in (FAKE_CLAUDE_EMAIL, default jane@example.com); anything else fails like a refused code.
+The code ``good-code-7f3a9c2e41`` signs in (FAKE_CLAUDE_EMAIL, default jane@example.com); anything else fails like a refused code.
 """
 
 import json
@@ -12,7 +12,7 @@ home = Path(os.environ["CLAUDE_CONFIG_DIR"])
 args = sys.argv[1:]
 email = os.environ.get("FAKE_CLAUDE_EMAIL", "jane@example.com")
 if args[:2] == ["auth", "login"]:
-    print("Opening browser to sign in…")
+    print("Opening browser to sign inâ€¦")
     print(
         "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=x"
         "&response_type=code&redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=s",
@@ -21,7 +21,7 @@ if args[:2] == ["auth", "login"]:
     sys.stdout.write("Paste code here if prompted > ")
     sys.stdout.flush()
     code = sys.stdin.readline().strip()
-    if code != "good-code":
+    if code != "good-code-7f3a9c2e41":
         print("Login failed: Request failed with status code 400")
         sys.exit(1)
     (home / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "fake"}}), encoding="utf-8")
@@ -39,7 +39,7 @@ elif args[:1] == ["-p"]:
     if (home / ".credentials.json").exists():
         print("PONG")
     else:
-        print("Invalid API key · Please run /login")
+        print("Invalid API key Â· Please run /login")
         sys.exit(1)
 else:
     sys.exit(2)

@@ -144,7 +144,7 @@ async def test_claude_pasted_code_signs_in(pool: DbPool, tmp_path: Path, existin
             row = await _wait(pool, sid, "waiting_for_user")
         assert "oauth/authorize" in row["auth_url"] and row["method"] == "paste_code"
         jwk = load_or_create_keys(tmp_path / "keys")[1]
-        await svc.submit_input(MILVOW_TENANT_ID, sid, seal("good-code", jwk, f"{MILVOW_TENANT_ID}|{sid}|login_input"), "o")
+        await svc.submit_input(MILVOW_TENANT_ID, sid, seal("good-code-7f3a9c2e41", jwk, f"{MILVOW_TENANT_ID}|{sid}|login_input"), "o")
         row = await _wait(pool, sid, "done")
     finally:
         await svc.stop()
@@ -172,7 +172,7 @@ async def test_a_refused_claude_code_fails_and_keeps_the_account(pool: DbPool, t
             await asyncio.sleep(0.05)
             row = await _wait(pool, sid, "waiting_for_user")
         jwk = load_or_create_keys(tmp_path / "keys")[1]
-        await svc.submit_input(MILVOW_TENANT_ID, sid, seal("wrong", jwk, f"{MILVOW_TENANT_ID}|{sid}|login_input"), "o")
+        await svc.submit_input(MILVOW_TENANT_ID, sid, seal("wrong-code-5b1d8e40", jwk, f"{MILVOW_TENANT_ID}|{sid}|login_input"), "o")
         row = await _wait(pool, sid, "failed")
     finally:
         await svc.stop()
