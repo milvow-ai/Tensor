@@ -27,6 +27,30 @@ export function LoginForm({
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(initialError);
   const [sending, setSending] = useState(false);
+  const codeId = useId();
+  const [code, setCode] = useState("");
+  const [verifying, setVerifying] = useState(false);
+
+  async function onVerifyCode(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!sentTo || code.length < 6) return;
+    setError(null);
+    setVerifying(true);
+    try {
+      const { createClient } = await import("@/lib/supabase/client");
+      const { error: verifyError } = await createClient().auth.verifyOtp({ email: sentTo, token: code, type: "email" });
+      if (verifyError) {
+        setError("That code is wrong or has expired. Check the newest email, or request a new one.");
+        return;
+      }
+      // The session cookie is set; the app's owner check decides what this address may see.
+      window.location.assign(next);
+    } catch {
+      setError("Could not reach the sign-in service. Check the connection and try again.");
+    } finally {
+      setVerifying(false);
+    }
+  }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -75,16 +99,43 @@ export function LoginForm({
 
   if (sentTo) {
     return (
-      <div role="status" className="flex flex-col items-center gap-3 py-2 text-center">
-        <div className="flex size-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
-          <MailCheck aria-hidden="true" className="size-5" />
+      <div className="flex flex-col gap-4">
+        <div role="status" className="flex flex-col items-center gap-3 py-2 text-center">
+          <div className="flex size-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
+            <MailCheck aria-hidden="true" className="size-5" />
+          </div>
+          <div className="space-y-1">
+            <p className="font-medium text-sm">Check your inbox</p>
+            <p className="text-muted-foreground text-sm">
+              If {sentTo} is the owner's address, a sign-in link is on its way. It works once and expires soon.
+            </p>
+          </div>
         </div>
-        <div className="space-y-1">
-          <p className="font-medium text-sm">Check your inbox</p>
-          <p className="text-muted-foreground text-sm">
-            If {sentTo} is the owner's address, a sign-in link is on its way. It works once and expires soon.
-          </p>
-        </div>
+        {/* The code is the fallback when a mail scanner opens the link first or the link opens in another browser. */}
+        <form onSubmit={onVerifyCode} noValidate className="flex flex-col gap-3">
+          {error ? (
+            <Alert variant="destructive" role="alert">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
+          <Field>
+            <FieldLabel htmlFor={codeId}>Or enter the code from the email</FieldLabel>
+            <Input
+              id={codeId}
+              name="code"
+              autoComplete="one-time-code"
+              inputMode="numeric"
+              placeholder="123456"
+              maxLength={10}
+              value={code}
+              onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))}
+            />
+          </Field>
+          <Button type="submit" disabled={verifying || code.length < 6}>
+            {verifying ? <Spinner data-icon="inline-start" /> : null}
+            Sign in with code
+          </Button>
+        </form>
         <Button variant="ghost" size="sm" onClick={() => setSentTo(null)}>
           Use a different email
         </Button>

@@ -70,3 +70,27 @@ test("signing out returns to /login", async () => {
   expect(response.status).toBe(303);
   expect(response.headers.get("location")).toBe("/login");
 });
+
+test("after the link is sent, the code from the email can be typed instead and a wrong one is explained", async ({
+  page,
+}) => {
+  // Supabase is not reachable from the test: answer its two auth calls here and record what was asked.
+  const asked: Record<string, unknown>[] = [];
+  await page.route("**/auth/v1/otp**", (route) => route.fulfill({ status: 200, json: {} }));
+  await page.route("**/auth/v1/verify**", async (route) => {
+    asked.push(route.request().postDataJSON() as Record<string, unknown>);
+    await route.fulfill({ status: 403, json: { code: 403, error_code: "otp_expired", msg: "Token has expired" } });
+  });
+  await page.goto(`${server.url}/login`);
+  await page.getByLabel("Email").fill("owner@example.com");
+  await page.getByRole("button", { name: "Send magic link" }).click();
+  await expect(page.getByText("Check your inbox")).toBeVisible();
+
+  const signIn = page.getByRole("button", { name: "Sign in with code" });
+  await expect(signIn).toBeDisabled();
+  await page.getByLabel("Or enter the code from the email").fill("12a3456");
+  await expect(page.getByLabel("Or enter the code from the email")).toHaveValue("123456");
+  await signIn.click();
+  await expect(page.getByText("That code is wrong or has expired.")).toBeVisible();
+  expect(asked).toEqual([expect.objectContaining({ email: "owner@example.com", token: "123456", type: "email" })]);
+});

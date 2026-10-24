@@ -648,3 +648,39 @@ def test_a_member_gets_a_sign_in_and_a_membership_and_the_key_is_never_shown(
     assert "no members yet" in CliRunner().invoke(cli_app, ["member", "list"]).output
     assert CliRunner().invoke(cli_app, ["member", "add", "not-an-email"]).exit_code == 2
     assert CliRunner().invoke(cli_app, ["member", "add", "bob@example.com", "--role", "boss"]).exit_code == 2
+
+
+def test_the_farm_makes_the_owner_email_an_owner_member_once(scratch_db: Callable[[], str]) -> None:
+    """F1 kept farm_settings.owner_email but made no membership, so RLS hid farm_settings and the Console showed
+    the owner "Not authorized". Every Farm start links the owner; a second start changes nothing."""
+    from farm.db.pool import open_pool, run
+    from farm.tenancy.members import ensure_owner_member
+
+    url = scratch_db()
+    command.upgrade(alembic_config(url), "head")
+    owner = "7c1d2e3f-0000-4000-8000-0000000000aa"
+
+    async def start_twice() -> list[str | None]:
+        pool = await open_pool(url)
+        try:
+            kw = {"supabase_url": SUPABASE, "service_key": "service-role-" + "x" * 24}
+            nobody = await ensure_owner_member(pool, **kw)  # owner_email not set yet: nothing to do
+            async with pool.connection() as conn:
+                await conn.execute("update public.farm_settings set owner_email = 'Owner@Example.com'")
+            return [nobody, await ensure_owner_member(pool, **kw), await ensure_owner_member(pool, **kw)]
+        finally:
+            await pool.close()
+
+    with respx.mock(assert_all_called=False) as mock:
+        create = mock.post(f"{SUPABASE}/auth/v1/admin/users").mock(
+            return_value=httpx.Response(201, json={"id": owner, "email": "owner@example.com"})
+        )
+        results = run(start_twice())
+    assert results == [None, "Owner@Example.com", None]
+    assert create.call_count == 1
+    with psycopg.connect(url) as conn:
+        rows = conn.execute(
+            "select u.email, u.auth_subject, m.tenant_id, m.role "
+            "from public.users u join public.memberships m on m.user_id = u.id"
+        ).fetchall()
+    assert rows == [("Owner@Example.com", owner, MILVOW_TENANT_ID, "owner")]

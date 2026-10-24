@@ -15,6 +15,7 @@ nothing); their tokens are revoked with ``farm token revoke``.
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -116,6 +117,41 @@ async def add_member(
             (tenant_id, user_id, role.value),
         )
     return user_id
+
+
+async def ensure_owner_member(
+    pool: DbPool, *, supabase_url: str, service_key: str, tenant_id: UUID = MILVOW_TENANT_ID
+) -> str | None:
+    """Make ``farm_settings.owner_email`` an owner member; returns the e-mail when it was made now.
+
+    The Console admits the owner only through RLS, which needs a ``memberships`` row (F1B); F1 kept
+    ``owner_email`` but made no membership, so the owner was shown "Not authorized". Runs at every Farm start
+    and does nothing when the owner is already a linked owner.
+    """
+    async with system_connection(pool) as conn:
+        cur = await conn.execute(
+            "select owner_email from public.farm_settings where tenant_id = %s", (tenant_id,)
+        )
+        row = await cur.fetchone()
+        email = (row[0] or "").strip() if row else ""
+        if not email:
+            return None
+        cur = await conn.execute(
+            """
+            select 1 from public.memberships m join public.users u on u.id = m.user_id
+             where m.tenant_id = %s and m.role = 'owner' and lower(u.email) = lower(%s)
+               and u.auth_subject is not null
+            """,
+            (tenant_id, email),
+        )
+        if await cur.fetchone():
+            return None
+    address = check_email(email)
+    auth_id, _ = await asyncio.to_thread(
+        ensure_auth_user, address, supabase_url=supabase_url, service_key=service_key
+    )
+    await add_member(pool, email, Role.OWNER, auth_id, tenant_id=tenant_id)
+    return email
 
 
 async def list_members(pool: DbPool, *, tenant_id: UUID = MILVOW_TENANT_ID) -> list[Member]:

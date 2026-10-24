@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import os
 import secrets
 import signal
 import time
@@ -65,6 +66,25 @@ from farm.tenancy import MILVOW_TENANT_ID, TokenIdentity, current_tenant, use_te
 from farm.tenancy.active import for_each_tenant
 
 log = structlog.get_logger(__name__)
+
+
+async def _ensure_owner_member(pool: DbPool) -> None:
+    """The Console owner needs a membership to pass RLS; a failure is logged, never stops the Farm."""
+    import httpx
+
+    from farm.tenancy.members import MemberError, ensure_owner_member
+
+    supabase_url, service_key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not service_key:
+        log.info("owner_member.skipped", reason="SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set")
+        return
+    try:
+        added = await ensure_owner_member(pool, supabase_url=supabase_url, service_key=service_key)
+    except (MemberError, httpx.HTTPError) as exc:
+        log.warning("owner_member.failed", error=type(exc).__name__, detail=str(exc)[:200])
+        return
+    if added:
+        log.info("owner_member.added", email=added)
 
 authenticated_client_name: ContextVar[str | None] = ContextVar("farm_authenticated_client", default=None)
 
@@ -369,6 +389,7 @@ async def run_farm(
     login_service = LoginService(ctx.pool, driver_factory=driver_for, test_job=_no_login_test)
     set_login_service(login_service)
     await login_service.start()
+    await _ensure_owner_member(ctx.pool)
     await scheduler.start()
 
     # Trigger background MCP catalogue refresh
