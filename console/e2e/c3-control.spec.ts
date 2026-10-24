@@ -34,14 +34,14 @@ test.describe("C3 — Console Control & Deploy Acceptance Tests", () => {
     await saveBtn.click();
 
     // Verify toast confirms routing update
-    await expect(page.locator("[data-sonner-toast]", { hasText: "Routing for" })).toBeVisible();
+    await expect(page.locator("[data-sonner-toast]", { hasText: "Routing for" }).first()).toBeVisible();
 
     // Restore original order so fixture state remains clean
     const moveUpBtn = page.getByRole("button", { name: /Move .* up/i }).nth(1);
     if (await moveUpBtn.isVisible()) {
       await moveUpBtn.click();
       await saveBtn.click();
-      await expect(page.locator("[data-sonner-toast]", { hasText: "Routing for" })).toBeVisible();
+      await expect(page.locator("[data-sonner-toast]", { hasText: "Routing for" }).first()).toBeVisible();
     }
 
     expect(problems()).toEqual([]);

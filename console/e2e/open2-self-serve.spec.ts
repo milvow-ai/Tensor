@@ -87,7 +87,7 @@ test("Add your first MCP server enqueues add_provider and the integration appear
   expect(problems()).toEqual([]);
 });
 
-test("Add AI account tells you the exact `farm ai login` command and the account needs a login", async ({
+test("Add AI account opens its sign-in card and the account needs a login", async ({
   page,
   baseURL,
 }) => {
@@ -112,17 +112,18 @@ test("Add AI account tells you the exact `farm ai login` command and the account
   await expect(dialog.getByRole("heading", { name: "Integration Added" })).toBeVisible();
   // Never a fake "active": the account waits for its login until the owner has done it
   await expect(dialog.getByText("needs_login", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("farm ai login claude-02")).toBeVisible();
+  await expect(dialog.getByTestId("sign-in-card")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Sign in" })).toBeVisible();
   await dialog.getByRole("button", { name: "Done" }).click();
 
-  // The Farm applied it: the AI pool exists, its account waits for the login and shows the exact command
+  // The Farm applied it: the AI pool exists, its account waits for the login and shows the sign-in button
   await untilTheFarmShows(page, async () => {
     await page.goto("/pools/ai/claude");
     await expect(page.getByTestId("account-row").filter({ hasText: "claude-02" })).toBeVisible({ timeout: 1_000 });
   });
   const account = page.getByTestId("account-row").filter({ hasText: "claude-02" });
   await expect(account.getByText("Needs login", { exact: true })).toBeVisible();
-  await expect(account.getByText("farm ai login claude-02")).toBeVisible();
+  await expect(account.getByTestId("account-signin-button")).toBeVisible();
   expect(problems()).toEqual([]);
 });
 

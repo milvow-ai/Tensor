@@ -19,7 +19,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { submitCommand } from "@/lib/farm/actions";
+import { readCommand, submitCommand } from "@/lib/farm/actions";
 import { AI_CLI_INFO, AI_CLIS, type AiCli } from "@/lib/farm/command-meta";
 
 import { SignInCard } from "./sign-in-card";
@@ -95,7 +95,25 @@ export function AddAccountsDialog({ defaultProviderId = "claude", trigger, onAdd
         return;
       }
 
-      const result = res.data.result as
+      const cmdId = res.data.id;
+      let cmd = res.data;
+      const started = Date.now();
+      while (cmd.status === "queued" || cmd.status === "running") {
+        if (Date.now() - started > 15_000) break;
+        await new Promise((r) => setTimeout(r, 200));
+        const polled = await readCommand(cmdId);
+        if (polled.ok && polled.data) {
+          cmd = polled.data;
+        }
+      }
+
+      if (cmd.status !== "done") {
+        toast.error(cmd.status === "rejected" ? "Failed to add accounts: rejected" : "Failed to add accounts");
+        setLoading(false);
+        return;
+      }
+
+      const result = cmd.result as
         | {
             connection_ids?: string[];
             session_ids?: string[];

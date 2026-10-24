@@ -117,11 +117,11 @@ test("accounts are paginated and sortable, and the URL carries the state", async
   await expect.poll(ids).toEqual(["claude-02", "claude-03", "claude-01"]);
 });
 
-test("an AI account that needs a login shows the exact command, and its limit state counts down", async ({ page }) => {
+test("an AI account that needs a login shows the sign-in action, and its limit state counts down", async ({ page }) => {
   await page.goto("/pools/ai/claude");
   const standby = row(page, "claude-02");
   await expect(standby.getByText("Needs login", { exact: true })).toBeVisible();
-  await expect(standby.getByText("farm ai login claude-02")).toBeVisible();
+  await expect(standby.getByTestId("account-signin-button")).toBeVisible();
 
   const overflow = row(page, "claude-03");
   await expect(overflow.getByText("Limit reached")).toBeVisible();

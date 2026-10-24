@@ -851,6 +851,7 @@ function connectionSeeds(now: number): ConnSeed[] {
       label: "Codex (ChatGPT Plus)",
       authRef: "cli:codex-01",
       priority: 1,
+      status: "needs_login",
       plan: { name: "Plus", price: 20, day: 8 },
       meta: {
         cli: "codex",
@@ -1194,7 +1195,7 @@ export const TEST_CONNECT_PUBLIC_KEY: ConnectPublicKeyJwk = {
 export function buildScriptedLoginSessions(now: number): LoginSession[] {
   return [
     {
-      id: "session-queued",
+      id: "00000000-0000-4000-8000-000000000001", // queued
       connection_id: "claude-05",
       provider_id: "claude",
       method: "paste_code",
@@ -1215,7 +1216,7 @@ export function buildScriptedLoginSessions(now: number): LoginSession[] {
       finished_at: null,
     },
     {
-      id: "session-starting",
+      id: "00000000-0000-4000-8000-000000000002", // starting
       connection_id: "claude-06",
       provider_id: "claude",
       method: "paste_code",
@@ -1236,7 +1237,7 @@ export function buildScriptedLoginSessions(now: number): LoginSession[] {
       finished_at: null,
     },
     {
-      id: "session-device-code",
+      id: "00000000-0000-4000-8000-000000000003", // device-code
       connection_id: "codex-01",
       provider_id: "codex",
       method: "device_code",
@@ -1257,7 +1258,7 @@ export function buildScriptedLoginSessions(now: number): LoginSession[] {
       finished_at: null,
     },
     {
-      id: "session-paste-code",
+      id: "00000000-0000-4000-8000-000000000004", // paste-code
       connection_id: "claude-02",
       provider_id: "claude",
       method: "paste_code",
@@ -1278,7 +1279,7 @@ export function buildScriptedLoginSessions(now: number): LoginSession[] {
       finished_at: null,
     },
     {
-      id: "session-verifying",
+      id: "00000000-0000-4000-8000-000000000005", // verifying
       connection_id: "gemini-02",
       provider_id: "gemini",
       method: "paste_code",
@@ -1299,7 +1300,7 @@ export function buildScriptedLoginSessions(now: number): LoginSession[] {
       finished_at: null,
     },
     {
-      id: "session-done",
+      id: "00000000-0000-4000-8000-000000000006", // done
       connection_id: "codex-02",
       provider_id: "codex",
       method: "device_code",

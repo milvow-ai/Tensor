@@ -140,9 +140,11 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
     case "add_connection": {
       const spec = commandPayloadSchemas.add_connection.parse(rawPayload);
       const { provider_id } = spec;
-      if (!w.providers.some((p) => p.id === provider_id)) throw new Rejection(`No pool with id "${provider_id}".`);
+      const prov = w.providers.find((p) => p.id === provider_id);
+      if (!prov) throw new Rejection(`No pool with id "${provider_id}".`);
       if (w.connections.some((c) => c.id === spec.id))
         throw new Rejection(`An account with id "${spec.id}" already exists.`);
+      const isAi = prov.kind === "ai" || spec.auth_ref.startsWith("cli:");
       w.connections.push({
         id: spec.id,
         providerId: provider_id,
@@ -153,7 +155,7 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
         strategy: null,
         concurrency: spec.concurrency,
         ratePerMin: null,
-        status: "active",
+        status: isAi ? "needs_login" : "active",
         plan: {
           ...spec.plan,
           renews_on: spec.plan.billing_day ? nextMonthlyReset(spec.plan.billing_day, now) : undefined,
@@ -475,7 +477,7 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
         });
         connectionIds.push(connId);
 
-        const sessionId = `session-login-${connId}`;
+        const sessionId = crypto.randomUUID();
         const isDeviceCode = spec.provider_id === "codex";
         const session: LoginSession = {
           id: sessionId,
@@ -514,7 +516,7 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
       const spec = commandPayloadSchemas.start_login.parse(rawPayload);
       const conn = findConnection(w, spec.connection_id);
       const isDeviceCode = spec.method === "device_code" || conn.providerId === "codex";
-      const sessionId = `session-start-${conn.id}-${Date.now()}`;
+      const sessionId = crypto.randomUUID();
       const session: LoginSession = {
         id: sessionId,
         connection_id: conn.id,

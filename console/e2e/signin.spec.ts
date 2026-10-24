@@ -111,7 +111,7 @@ test.describe("Dashboard sign-in and sealed secrets", () => {
     await expect(card).toBeVisible();
 
     // Verify duplicate reason and actions
-    await expect(card.getByText("Duplicate account")).toBeVisible();
+    await expect(card.getByRole("heading", { name: "Duplicate account" })).toBeVisible();
     await expect(card.getByText("same account as claude-01")).toBeVisible();
     await expect(card.getByRole("button", { name: "Try again in a private window" })).toBeVisible();
     await expect(card.getByRole("button", { name: "Remove this slot" })).toBeVisible();
