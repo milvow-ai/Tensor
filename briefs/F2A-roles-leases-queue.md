@@ -40,8 +40,8 @@ the Q0E sweeps) · `farm/manager/scheduler.py` · `farm/control/heartbeat.py` ·
 kill a worker mid-job → its lease expires and the job is retried or failed per the existing rules, never run twice concurrently;
 three scheduler processes → maintenance runs exactly once per tick; a stalled lease holder cannot renew or release after expiry.
 
-**Database changes:** one migration `farm/db/migrations/versions/0020_f2a_leases_roles.py`, `down_revision` = the latest revision
-on the branch when you start (F1B's `0019` if it is merged — say which), full downgrade.
+**Database changes:** one migration `farm/db/migrations/versions/0021_f2a_leases_roles.py`, `down_revision = "0020"` (F1C), full
+downgrade.
 
 **Owns:** `farm/platform/**` (new) · `farm/control/run.py` · `farm/control/cli.py` (new role commands only) · `farm/ai/jobs.py` ·
 `farm/control/commands.py` (moving the sweeps out only) · `farm/manager/scheduler.py` · `farm/control/heartbeat.py` · the new migration ·

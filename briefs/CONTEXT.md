@@ -96,6 +96,7 @@ The Farm makes no AI decisions itself: routing is deterministic code. Design sou
 
 ## 6. Builder rules (every brief)
 Touch only the files your brief owns. Never `git add/commit/push`, deploy, delete outside the repo, or send data off the machine. Never read or print `.env`. Do not change `pyproject.toml` unless your brief owns it.
+**Never stop, restart or kill a process you did not start yourself** — above all the owner's live Farm on `127.0.0.1:8787` (`farm.exe run`), Bifrost, or another builder. If you need a Farm to test against, start your own on a different port and stop only that one. (2026-10-24: the live Farm was hard-killed during a spike round.)
 Finish by running `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1` and include its last lines in your reply.
 
 Run every command in the foreground and wait for it; never start long commands in the background and poll them (each poll re-sends your whole context and burns quota). Report results once, at the end.

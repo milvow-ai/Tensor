@@ -31,11 +31,15 @@ $Wt = "D:\Harness Farm\wt-$Name"
 $RunDir = Join-Path $Runs $Name
 $env:UV_CACHE_DIR = 'D:\dev-cache\uv'; $env:FARM_DATA_DIR = 'D:/farm-data'; $env:npm_config_cache = 'D:\dev-cache\npm'
 $env:PLAYWRIGHT_BROWSERS_PATH = 'D:\dev-cache\ms-playwright'
+# Temp files go to D: as well: C: has almost no free space, and pytest, Next.js and the builders write a lot of temp data.
+$env:TEMP = 'D:\dev-cache\tmp'; $env:TMP = $env:TEMP; New-Item -ItemType Directory -Force $env:TEMP | Out-Null
 
 function Write-Json($path, $obj) { [IO.File]::WriteAllText($path, ($obj | ConvertTo-Json -Depth 6)) }
 
 function Invoke-Gate($dir) {
   $out = powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'scripts\check.ps1') 2>&1 | Out-String
+  New-Item -ItemType Directory -Force $RunDir | Out-Null
+  [IO.File]::WriteAllText((Join-Path $RunDir 'gate-full.txt'), $out)
   $ok = $out -match 'RESULT: all passed'
   $tail = @($out -split "`r?`n" | Where-Object { $_ -match 'PASS|FAIL|RESULT|failed|passed|Error' } | Select-Object -Last 10)
   $consoleTouched = @(git -C $dir status --short -- console).Count + @(git -C $dir diff --name-only "$Main...HEAD" -- console).Count

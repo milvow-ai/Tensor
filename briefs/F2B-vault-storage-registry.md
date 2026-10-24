@@ -33,7 +33,7 @@ a home that works the same on one PC and on many servers. `docs/ARCHITECTURE.md`
 a wrong master key fails closed; secrets never appear in logs (capture logs in the test); key rotation re-wraps without losing
 secrets; storage keys are tenant-prefixed and a tenant cannot read another tenant's key; registry sync for tenant B leaves A untouched.
 
-**Database changes:** one migration `farm/db/migrations/versions/0021_f2b_vault_storage.py`, `down_revision = "0020"` (F2A; if F2A is
+**Database changes:** one migration `farm/db/migrations/versions/0022_f2b_vault_storage.py`, `down_revision = "0021"` (F2A; if F2A is
 not merged when you start, chain to the latest revision and say so), full downgrade.
 
 **Dependencies:** `uv add cryptography` (if not present) and `uv add --dev moto[s3]`; `uv add aioboto3` only if you use it.
