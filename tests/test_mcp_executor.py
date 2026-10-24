@@ -20,7 +20,7 @@ from farm.executors.mcp import (
     map_request_params,
     map_tool_result,
 )
-from farm.secrets import resolve_auth, resolve_token_store
+from farm.secrets import register_secret, resolve_auth, resolve_token_store
 from tests.fake_mcp_server import create_fake_clay_server, create_fake_generic_server
 
 SENTINEL_SECRET = "SENTINEL-secret-4f9c2a71"
@@ -121,7 +121,7 @@ async def test_tool_call_successful_mapping(temp_data_dir: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_auth_error_maps_to_needs_login(temp_data_dir: Path) -> None:
+async def test_tool_auth_text_is_the_tools_error_not_a_login_state(temp_data_dir: Path) -> None:
     server = create_fake_clay_server("clay-01")
     server.state.auth_error = True  # type: ignore[attr-defined]
     executor = McpExecutor(data_dir=temp_data_dir)
@@ -143,13 +143,13 @@ async def test_auth_error_maps_to_needs_login(temp_data_dir: Path) -> None:
     result = await executor.execute(req)
 
     assert result.ok is False
-    assert result.error_kind == ErrorKind.NEEDS_LOGIN
+    # Q0-03: words in a tool's own error say nothing about the account (only the transport path can).
+    assert result.error_kind == ErrorKind.BAD_REQUEST
     assert "clay-01" in str(result.error)
-    assert "farm mcp login clay-01" in str(result.error)
 
 
 @pytest.mark.asyncio
-async def test_credits_exhausted_payload_maps_to_limit_reached(temp_data_dir: Path) -> None:
+async def test_credits_exhausted_payload_is_the_tools_error_not_an_account_state(temp_data_dir: Path) -> None:
     server = create_fake_clay_server("clay-02")
     server.state.credits_exhausted = True  # type: ignore[attr-defined]
     executor = McpExecutor(data_dir=temp_data_dir)
@@ -171,12 +171,12 @@ async def test_credits_exhausted_payload_maps_to_limit_reached(temp_data_dir: Pa
     result = await executor.execute(req)
 
     assert result.ok is False
-    assert result.error_kind == ErrorKind.LIMIT_REACHED
+    assert result.error_kind == ErrorKind.BAD_REQUEST
     assert "Insufficient credits" in str(result.error) or "CREDITS_EXHAUSTED" in str(result.error)
 
 
 @pytest.mark.asyncio
-async def test_rate_limit_error_mapping(temp_data_dir: Path) -> None:
+async def test_rate_limit_text_in_a_tool_error_is_not_a_rate_limit(temp_data_dir: Path) -> None:
     server = create_fake_clay_server("clay-03")
     server.state.rate_limit_error = True  # type: ignore[attr-defined]
     executor = McpExecutor(data_dir=temp_data_dir)
@@ -198,7 +198,7 @@ async def test_rate_limit_error_mapping(temp_data_dir: Path) -> None:
     result = await executor.execute(req)
 
     assert result.ok is False
-    assert result.error_kind == ErrorKind.RATE_LIMITED
+    assert result.error_kind == ErrorKind.BAD_REQUEST
 
 
 @pytest.mark.asyncio
@@ -285,6 +285,7 @@ async def test_sentinel_token_never_leaks(
     # 2. Auth error execution
     server.state.auth_error = True  # type: ignore[attr-defined]
     server.state.auth_error_message = f"Unauthorized with token {SENTINEL_SECRET}"  # type: ignore[attr-defined]
+    register_secret(SENTINEL_SECRET)  # what the OAuth provider does with every token it loads
     caplog.clear()
 
     with caplog.at_level(logging.DEBUG):
@@ -393,7 +394,7 @@ def test_executor_protocol_conformance() -> None:
 
 
 @pytest.mark.asyncio
-async def test_server_error_mapping(temp_data_dir: Path) -> None:
+async def test_server_error_text_in_a_tool_error_is_the_tools_error(temp_data_dir: Path) -> None:
     server = create_fake_clay_server("clay-server-err")
     server.state.server_error = True  # type: ignore[attr-defined]
     executor = McpExecutor(data_dir=temp_data_dir)
@@ -414,11 +415,11 @@ async def test_server_error_mapping(temp_data_dir: Path) -> None:
 
     result = await executor.execute(req)
     assert result.ok is False
-    assert result.error_kind == ErrorKind.SERVER
+    assert result.error_kind == ErrorKind.BAD_REQUEST
 
 
 @pytest.mark.asyncio
-async def test_empty_not_found_error_mapping(temp_data_dir: Path) -> None:
+async def test_not_found_text_in_a_tool_error_is_the_tools_error(temp_data_dir: Path) -> None:
     server = create_fake_clay_server("clay-empty")
     server.state.custom_error = "Contact not found: 404 No results"  # type: ignore[attr-defined]
     executor = McpExecutor(data_dir=temp_data_dir)
@@ -439,8 +440,7 @@ async def test_empty_not_found_error_mapping(temp_data_dir: Path) -> None:
 
     result = await executor.execute(req)
     assert result.ok is False
-    assert result.error_kind == ErrorKind.EMPTY
-    assert result.found is False
+    assert result.error_kind == ErrorKind.BAD_REQUEST
 
 
 @pytest.mark.asyncio
