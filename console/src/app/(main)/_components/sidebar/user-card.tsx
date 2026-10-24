@@ -31,12 +31,12 @@ export function UserCard({ user, collapsed = false }: UserCardProps) {
         <button
           type="button"
           aria-label={`User menu for ${user.name}`}
-          className={`group flex w-full cursor-pointer items-center gap-2.5 rounded-[var(--kit-radius-control,8px)] p-1.5 text-left transition-colors hover:bg-[var(--kit-bg-subtle,#f3f4f6)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1f6feb)] dark:hover:bg-[#21262d] ${
+          className={`group flex w-full cursor-pointer items-center gap-2.5 rounded-[var(--kit-radius-control,8px)] p-1.5 text-left transition-colors hover:bg-[var(--kit-bg-subtle,#f3f4f6)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1a63d6)] dark:hover:bg-[#21262d] ${
             collapsed ? "justify-center p-1" : ""
           }`}
         >
           <Avatar className="size-8 shrink-0 rounded-lg">
-            <AvatarFallback className="rounded-lg bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] font-semibold text-[var(--kit-accent,#1f6feb)] text-xs dark:text-[#58a6ff]">
+            <AvatarFallback className="rounded-lg bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] font-semibold text-[var(--kit-accent,#1a63d6)] text-xs dark:text-[#58a6ff]">
               {initials}
             </AvatarFallback>
           </Avatar>
@@ -45,7 +45,7 @@ export function UserCard({ user, collapsed = false }: UserCardProps) {
               <span className="truncate font-medium text-[var(--kit-text-primary,#111827)] text-xs dark:text-[#f0f6fc]">
                 {user.name}
               </span>
-              <span className="truncate text-[10px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+              <span className="truncate text-[10px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                 {user.email}
               </span>
             </div>
@@ -53,7 +53,7 @@ export function UserCard({ user, collapsed = false }: UserCardProps) {
           {!collapsed && (
             <ChevronsUpDown
               aria-hidden="true"
-              className="size-3.5 shrink-0 text-[var(--kit-text-secondary,#6b7280)] transition-colors group-hover:text-[var(--kit-text-primary,#111827)] dark:text-[#8b949e] dark:group-hover:text-[#f0f6fc]"
+              className="size-3.5 shrink-0 text-[var(--kit-text-secondary,#5b6370)] transition-colors group-hover:text-[var(--kit-text-primary,#111827)] dark:text-[#8b949e] dark:group-hover:text-[#f0f6fc]"
             />
           )}
         </button>
@@ -68,7 +68,7 @@ export function UserCard({ user, collapsed = false }: UserCardProps) {
           <div className="truncate font-semibold text-[var(--kit-text-primary,#111827)] text-xs dark:text-[#f0f6fc]">
             {user.name}
           </div>
-          <div className="truncate text-[10px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+          <div className="truncate text-[10px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
             {user.email}
           </div>
           <div className="mt-1 text-[10px] text-[var(--kit-text-muted,#9ca3af)] dark:text-[#6e7681]">

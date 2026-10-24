@@ -30,13 +30,13 @@ export function RecentActivity({ runs }: { runs: RunRow[] }) {
           <h2 className="font-semibold text-[var(--kit-text-primary,#111827)] text-sm dark:text-[#f0f6fc]">
             Recent activity
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Latest tool calls, runs, and delegations.
           </p>
         </div>
         <Link
           href="/runs"
-          className="inline-flex items-center gap-1 font-medium text-[var(--kit-accent,#1f6feb)] text-xs hover:underline dark:text-[#58a6ff]"
+          className="inline-flex items-center gap-1 font-medium text-[var(--kit-accent,#1a63d6)] text-xs hover:underline dark:text-[#58a6ff]"
         >
           <span>View all</span>
           <ArrowUpRight className="size-3.5" />
@@ -46,7 +46,7 @@ export function RecentActivity({ runs }: { runs: RunRow[] }) {
       {/* List */}
       <div className="flex-1 divide-y divide-[var(--kit-border,#e6e8ec)] overflow-y-auto dark:divide-[#30363d]">
         {runs.length === 0 ? (
-          <div className="py-8 text-center text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <div className="py-8 text-center text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             No recent runs recorded yet.
           </div>
         ) : (
@@ -60,11 +60,11 @@ export function RecentActivity({ runs }: { runs: RunRow[] }) {
                 <div className="min-w-0">
                   <Link
                     href={`/runs/${run.id}`}
-                    className="truncate font-semibold text-[var(--kit-text-primary,#111827)] hover:text-[var(--kit-accent,#1f6feb)] dark:text-[#f0f6fc] dark:hover:text-[#58a6ff]"
+                    className="truncate font-semibold text-[var(--kit-text-primary,#111827)] hover:text-[var(--kit-accent,#1a63d6)] dark:text-[#f0f6fc] dark:hover:text-[#58a6ff]"
                   >
                     {run.capability}
                   </Link>
-                  <div className="truncate text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+                  <div className="truncate text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                     {run.caller} · {run.provider_name ?? "direct"}
                   </div>
                 </div>
@@ -79,7 +79,7 @@ export function RecentActivity({ runs }: { runs: RunRow[] }) {
                     {run.duration_ms !== null ? `${run.duration_ms} ms` : "in flight"}
                   </div>
                 </div>
-                <div className="hidden text-[11px] text-[var(--kit-text-secondary,#6b7280)] sm:block dark:text-[#8b949e]">
+                <div className="hidden text-[11px] text-[var(--kit-text-secondary,#5b6370)] sm:block dark:text-[#8b949e]">
                   <RelativeTime iso={run.started_at} />
                 </div>
               </div>

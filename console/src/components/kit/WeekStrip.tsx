@@ -51,7 +51,7 @@ export const WeekStrip = forwardRef<HTMLDivElement, WeekStripProps>(
       return (
         <div
           ref={ref}
-          className={`rounded-[var(--kit-radius-card,12px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] p-6 text-center text-[var(--kit-text-secondary,#6b7280)] dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#8b949e] ${className}`}
+          className={`rounded-[var(--kit-radius-card,12px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] p-6 text-center text-[var(--kit-text-secondary,#5b6370)] dark:border-[#30363d] dark:bg-[#161b22] dark:text-[#8b949e] ${className}`}
           {...props}
         >
           <p className="text-sm">No schedule days available.</p>

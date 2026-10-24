@@ -45,10 +45,10 @@ export const SegmentedTabs: React.FC<SegmentedTabsProps> = ({ tabs, activeTab, o
             aria-selected={isActive}
             type="button"
             onClick={() => onTabChange(tab.id)}
-            className={`cursor-pointer select-none rounded-[calc(var(--kit-radius-control,8px)-2px)] px-3 py-1 font-medium text-xs transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1f6feb)] ${
+            className={`cursor-pointer select-none rounded-[calc(var(--kit-radius-control,8px)-2px)] px-3 py-1 font-medium text-xs transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1a63d6)] ${
               isActive
                 ? "bg-[var(--kit-bg-card,#ffffff)] font-semibold text-[var(--kit-text-primary,#111827)] shadow-sm dark:bg-[#161b22] dark:text-[#f0f6fc]"
-                : "text-[var(--kit-text-secondary,#6b7280)] hover:text-[var(--kit-text-primary,#111827)] dark:text-[#8b949e] dark:hover:text-[#f0f6fc]"
+                : "text-[var(--kit-text-secondary,#5b6370)] hover:text-[var(--kit-text-primary,#111827)] dark:text-[#8b949e] dark:hover:text-[#f0f6fc]"
             }`}
           >
             {tab.label}
@@ -88,7 +88,7 @@ export const RankedBarList: React.FC<RankedBarListProps> = ({ rows, maxRows, cla
             <div className="flex items-center justify-between text-xs">
               <div className="flex items-center gap-2 truncate">
                 {row.icon && (
-                  <span className="flex shrink-0 items-center text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+                  <span className="flex shrink-0 items-center text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                     {row.icon}
                   </span>
                 )}
@@ -96,7 +96,7 @@ export const RankedBarList: React.FC<RankedBarListProps> = ({ rows, maxRows, cla
                   {row.label}
                 </span>
                 {row.sublabel && (
-                  <span className="truncate text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+                  <span className="truncate text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                     {row.sublabel}
                   </span>
                 )}
@@ -105,7 +105,7 @@ export const RankedBarList: React.FC<RankedBarListProps> = ({ rows, maxRows, cla
                 <span className="font-semibold text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">
                   {formattedVal}
                 </span>
-                <span className="font-semibold text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+                <span className="font-semibold text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                   {Math.round(row.share)}%
                 </span>
               </div>
@@ -248,7 +248,7 @@ export const BreakdownCard = forwardRef<HTMLDivElement, BreakdownCardProps>(
 
         {/* Ranked rows list */}
         {empty || rows.length === 0 ? (
-          <div className="py-8 text-center text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <div className="py-8 text-center text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             No breakdown data available.
           </div>
         ) : (
@@ -261,7 +261,7 @@ export const BreakdownCard = forwardRef<HTMLDivElement, BreakdownCardProps>(
             {viewAllHref ? (
               <a
                 href={viewAllHref}
-                className="inline-flex items-center gap-1 font-medium text-[var(--kit-accent,#1f6feb)] text-xs hover:underline dark:text-[#58a6ff]"
+                className="inline-flex items-center gap-1 font-medium text-[var(--kit-accent,#1a63d6)] text-xs hover:underline dark:text-[#58a6ff]"
               >
                 <span>View all breakdown</span>
                 <ChevronRight className="h-3.5 w-3.5" />
@@ -270,7 +270,7 @@ export const BreakdownCard = forwardRef<HTMLDivElement, BreakdownCardProps>(
               <button
                 type="button"
                 onClick={onViewAll}
-                className="inline-flex cursor-pointer items-center gap-1 font-medium text-[var(--kit-accent,#1f6feb)] text-xs hover:underline dark:text-[#58a6ff]"
+                className="inline-flex cursor-pointer items-center gap-1 font-medium text-[var(--kit-accent,#1a63d6)] text-xs hover:underline dark:text-[#58a6ff]"
               >
                 <span>View all breakdown</span>
                 <ChevronRight className="h-3.5 w-3.5" />

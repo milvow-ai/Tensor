@@ -17,8 +17,8 @@ export function SettingsTabs({ active }: { active: SettingsTab }) {
             aria-current={selected ? "page" : undefined}
             className={`-mb-px border-b-2 px-3 py-2 font-medium text-xs transition-colors ${
               selected
-                ? "border-[var(--kit-accent,#1f6feb)] text-[var(--kit-accent,#1f6feb)]"
-                : "border-transparent text-[var(--kit-text-secondary,#6b7280)] hover:text-[var(--kit-text-primary,#111827)]"
+                ? "border-[var(--kit-accent,#1a63d6)] text-[var(--kit-accent,#1a63d6)]"
+                : "border-transparent text-[var(--kit-text-secondary,#5b6370)] hover:text-[var(--kit-text-primary,#111827)]"
             }`}
           >
             {tab.label}

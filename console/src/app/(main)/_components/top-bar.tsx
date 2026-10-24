@@ -70,7 +70,7 @@ export function LiveDot() {
     <div
       role="status"
       aria-label="Live data streaming active"
-      className="flex items-center gap-1.5 px-2 py-1 text-xs text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]"
+      className="flex items-center gap-1.5 px-2 py-1 text-xs text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]"
     >
       <span className="relative flex h-2 w-2">
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />

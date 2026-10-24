@@ -91,7 +91,7 @@ export function AlertsCard({
           <h2 className="font-semibold text-[var(--kit-text-primary,#111827)] text-sm dark:text-[#f0f6fc]">
             Alerts
           </h2>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             {showOlder
               ? "All open alerts, newest first."
               : "Open alerts from the last 24 hours, newest first."}
@@ -99,7 +99,7 @@ export function AlertsCard({
         </div>
         <span
           data-testid="alerts-open"
-          className="rounded-full bg-[var(--kit-bg-subtle,#f3f4f6)] px-2.5 py-0.5 font-semibold text-[var(--kit-text-secondary,#6b7280)] text-xs tabular-nums dark:bg-[#21262d] dark:text-[#8b949e]"
+          className="rounded-full bg-[var(--kit-bg-subtle,#f3f4f6)] px-2.5 py-0.5 font-semibold text-[var(--kit-text-secondary,#5b6370)] text-xs tabular-nums dark:bg-[#21262d] dark:text-[#8b949e]"
         >
           {open.length} open
         </span>
@@ -136,7 +136,7 @@ export function AlertsCard({
                     <p className="font-medium text-[var(--kit-text-primary,#111827)] text-xs leading-snug dark:text-[#f0f6fc]">
                       {alert.message}
                     </p>
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[var(--kit-text-secondary,#6b7280)] text-[11px] dark:text-[#8b949e]">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[var(--kit-text-secondary,#5b6370)] text-[11px] dark:text-[#8b949e]">
                       <ToneBadge tone={meta.tone}>{meta.label}</ToneBadge>
                       <RefLabel reference={alert.ref} href={link} />
                       <RelativeTime iso={alert.created_at} />
@@ -171,7 +171,7 @@ export function AlertsCard({
           <button
             type="button"
             onClick={() => setShowOlder(!showOlder)}
-            className="cursor-pointer font-medium text-[var(--kit-accent,#1f6feb)] text-xs hover:underline dark:text-[#58a6ff]"
+            className="cursor-pointer font-medium text-[var(--kit-accent,#1a63d6)] text-xs hover:underline dark:text-[#58a6ff]"
           >
             {showOlder ? "Hide older alerts" : `Show older (${older.length})`}
           </button>

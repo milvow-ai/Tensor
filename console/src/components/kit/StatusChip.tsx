@@ -32,8 +32,8 @@ const STATUS_CONFIG: Record<FarmStatus, StatusConfig> = {
     defaultLabel: "Running",
     icon: Loader2,
     classes:
-      "bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] text-[var(--kit-accent,#1f6feb)] dark:bg-[rgba(56,139,253,0.15)] dark:text-[#58a6ff]",
-    iconClasses: "text-[var(--kit-accent,#1f6feb)] dark:text-[#58a6ff] animate-spin",
+      "bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] text-[var(--kit-accent,#1a63d6)] dark:bg-[rgba(56,139,253,0.15)] dark:text-[#58a6ff]",
+    iconClasses: "text-[var(--kit-accent,#1a63d6)] dark:text-[#58a6ff] animate-spin",
   },
   done: {
     defaultLabel: "Done",

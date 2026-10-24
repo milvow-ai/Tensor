@@ -15,4 +15,4 @@ export const KIT_CARD =
   "rounded-[var(--kit-radius-card,12px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] shadow-[var(--kit-shadow-card)] dark:border-[#30363d] dark:bg-[#161b22]";
 
 export const KIT_TEXT_PRIMARY = "text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]";
-export const KIT_TEXT_SECONDARY = "text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]";
+export const KIT_TEXT_SECONDARY = "text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]";

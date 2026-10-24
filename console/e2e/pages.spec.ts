@@ -11,15 +11,15 @@ interface Screen {
 // Every page of the Console: the nav pages, the pool detail pages, and the sign-in states.
 const SCREENS: Screen[] = [
   { name: "overview", path: "/overview", heading: "Overview" },
-  { name: "tools-pools", path: "/pools/tools", heading: "Tools & Pools" },
+  { name: "tools-pools", path: "/pools/tools", heading: "Tools" },
   { name: "pool-clay", path: "/pools/clay", heading: "Clay" },
   { name: "pool-zerobounce", path: "/pools/zerobounce", heading: "ZeroBounce" },
   { name: "ai-pools", path: "/pools/ai", heading: "AI Pools" },
   { name: "pool-claude", path: "/pools/ai/claude", heading: "Claude" },
-  { name: "runs", path: "/runs", heading: "Runs" },
+  { name: "runs", path: "/runs", heading: "Activity" },
   { name: "routing", path: "/routing", heading: "Routing" },
   { name: "policies", path: "/policies", heading: "Policies & Budgets" },
-  { name: "billing", path: "/billing", heading: "Billing" },
+  { name: "billing", path: "/usage", heading: "Usage & Cost" },
   { name: "memory", path: "/memory", heading: "Memory & Evidence" },
   { name: "integrations", path: "/integrations", heading: "Integrations" },
   { name: "settings", path: "/settings", heading: "Settings" },

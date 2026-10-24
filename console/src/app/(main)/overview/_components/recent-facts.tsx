@@ -11,18 +11,18 @@ export function RecentFacts({ facts }: { facts: FactRow[] }) {
       <div className="flex items-center justify-between border-[var(--kit-border,#e6e8ec)] border-b pb-3 dark:border-[#30363d]">
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5">
-            <Brain className="size-4 text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]" />
+            <Brain className="size-4 text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]" />
             <h2 className="font-semibold text-[var(--kit-text-primary,#111827)] text-sm dark:text-[#f0f6fc]">
               Recently learned
             </h2>
           </div>
-          <p className="text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <p className="text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             Facts extracted and remembered by agents.
           </p>
         </div>
         <Link
           href="/memory"
-          className="inline-flex items-center gap-1 font-medium text-[var(--kit-accent,#1f6feb)] text-xs hover:underline dark:text-[#58a6ff]"
+          className="inline-flex items-center gap-1 font-medium text-[var(--kit-accent,#1a63d6)] text-xs hover:underline dark:text-[#58a6ff]"
         >
           <span>Memory</span>
           <ArrowUpRight className="size-3.5" />
@@ -32,7 +32,7 @@ export function RecentFacts({ facts }: { facts: FactRow[] }) {
       {/* List */}
       <div className="flex-1 divide-y divide-[var(--kit-border,#e6e8ec)] overflow-y-auto dark:divide-[#30363d]">
         {facts.length === 0 ? (
-          <div className="py-8 text-center text-[var(--kit-text-secondary,#6b7280)] text-xs dark:text-[#8b949e]">
+          <div className="py-8 text-center text-[var(--kit-text-secondary,#5b6370)] text-xs dark:text-[#8b949e]">
             No memories saved yet. Agents store facts here as they run.
           </div>
         ) : (
@@ -46,13 +46,13 @@ export function RecentFacts({ facts }: { facts: FactRow[] }) {
                   className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
                     fact.freshness_state === "fresh"
                       ? "bg-[var(--kit-positive-soft,#dcfce7)] text-[var(--kit-positive-text,#15803d)] dark:bg-[rgba(63,185,80,0.15)] dark:text-[#56d364]"
-                      : "bg-[var(--kit-bg-subtle,#f3f4f6)] text-[var(--kit-text-secondary,#6b7280)] dark:bg-[#21262d] dark:text-[#8b949e]"
+                      : "bg-[var(--kit-bg-subtle,#f3f4f6)] text-[var(--kit-text-secondary,#5b6370)] dark:bg-[#21262d] dark:text-[#8b949e]"
                   }`}
                 >
                   {fact.freshness_state}
                 </span>
               </div>
-              <p className="line-clamp-2 text-[var(--kit-text-secondary,#6b7280)] text-[11px] leading-relaxed dark:text-[#8b949e]">
+              <p className="line-clamp-2 text-[var(--kit-text-secondary,#5b6370)] text-[11px] leading-relaxed dark:text-[#8b949e]">
                 <span className="font-mono text-[10px] text-[var(--kit-text-muted,#9ca3af)] dark:text-[#6e7681]">
                   {fact.attribute}:
                 </span>{" "}

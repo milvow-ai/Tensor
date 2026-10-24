@@ -47,7 +47,7 @@ export const ChartTooltip: React.FC<ChartTooltipProps> = ({ active, payload, lab
     <div className="z-50 min-w-[180px] rounded-[var(--kit-radius-control,8px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-card,#ffffff)] p-3 text-xs shadow-[var(--kit-shadow-popover)] dark:border-[#30363d] dark:bg-[#161b22]">
       <div className="mb-2 flex items-center justify-between border-[var(--kit-border,#e6e8ec)] border-b pb-2 dark:border-[#30363d]">
         <span className="font-semibold text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">{label}</span>
-        <span className="font-semibold text-[var(--kit-text-secondary,#6b7280)] tabular-nums dark:text-[#8b949e]">
+        <span className="font-semibold text-[var(--kit-text-secondary,#5b6370)] tabular-nums dark:text-[#8b949e]">
           Total: {formatCompactNumber(total)} {metric}
         </span>
       </div>
@@ -63,7 +63,7 @@ export const ChartTooltip: React.FC<ChartTooltipProps> = ({ active, payload, lab
                   style={{ backgroundColor: item.color }}
                   aria-hidden="true"
                 />
-                <span className="truncate text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+                <span className="truncate text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
                   {item.name}
                 </span>
               </div>
@@ -205,7 +205,7 @@ export const TrendChartCard = forwardRef<HTMLDivElement, TrendChartCardProps>(
 
         {/* Chart View */}
         {empty || data.length === 0 ? (
-          <div className="flex h-56 flex-col items-center justify-center rounded-[var(--kit-radius-control,8px)] border border-[var(--kit-border,#e6e8ec)] border-dashed text-[var(--kit-text-secondary,#6b7280)] text-xs dark:border-[#30363d] dark:text-[#8b949e]">
+          <div className="flex h-56 flex-col items-center justify-center rounded-[var(--kit-radius-control,8px)] border border-[var(--kit-border,#e6e8ec)] border-dashed text-[var(--kit-text-secondary,#5b6370)] text-xs dark:border-[#30363d] dark:text-[#8b949e]">
             <span>No data points for this period.</span>
           </div>
         ) : (

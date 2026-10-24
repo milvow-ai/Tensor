@@ -148,7 +148,7 @@ export function MainShell({
                 type="button"
                 onClick={() => setMobileOpen(false)}
                 aria-label="Close navigation"
-                className="cursor-pointer rounded p-1 text-[var(--kit-text-secondary,#6b7280)] hover:bg-[var(--kit-bg-subtle,#f3f4f6)] dark:text-[#8b949e] dark:hover:bg-[#21262d]"
+                className="cursor-pointer rounded p-1 text-[var(--kit-text-secondary,#5b6370)] hover:bg-[var(--kit-bg-subtle,#f3f4f6)] dark:text-[#8b949e] dark:hover:bg-[#21262d]"
               >
                 <X className="size-4" />
               </button>
@@ -174,7 +174,7 @@ export function MainShell({
               type="button"
               onClick={() => setMobileOpen(true)}
               aria-label="Open navigation menu"
-              className="cursor-pointer rounded p-1.5 text-[var(--kit-text-secondary,#6b7280)] hover:bg-[var(--kit-bg-subtle,#f3f4f6)] md:hidden dark:text-[#8b949e] dark:hover:bg-[#21262d]"
+              className="cursor-pointer rounded p-1.5 text-[var(--kit-text-secondary,#5b6370)] hover:bg-[var(--kit-bg-subtle,#f3f4f6)] md:hidden dark:text-[#8b949e] dark:hover:bg-[#21262d]"
             >
               <PanelLeft className="size-5" />
             </button>
@@ -193,7 +193,7 @@ export function MainShell({
         </header>
 
         {/* Page content */}
-        <main className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 md:p-6">
+        <main tabIndex={0} aria-label="Page content" className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 md:p-6">
           {children}
         </main>
       </div>

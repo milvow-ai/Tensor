@@ -22,8 +22,8 @@ export const NavItem = forwardRef<HTMLAnchorElement, NavItemProps>(
     const IconComponent = item.icon;
 
     const activeClasses = isActive
-      ? "bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] text-[var(--kit-accent,#1f6feb)] dark:text-[#58a6ff] font-semibold"
-      : "text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e] hover:bg-[var(--kit-bg-subtle,#f3f4f6)] dark:hover:bg-[#21262d] hover:text-[var(--kit-text-primary,#111827)] dark:hover:text-[#f0f6fc]";
+      ? "bg-[var(--kit-accent-soft,rgba(31,111,235,0.1))] text-[#0b57d0] dark:text-[#58a6ff] font-semibold"
+      : "text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e] hover:bg-[var(--kit-bg-subtle,#f3f4f6)] dark:hover:bg-[#21262d] hover:text-[var(--kit-text-primary,#111827)] dark:hover:text-[#f0f6fc]";
 
     return (
       <a
@@ -39,8 +39,8 @@ export const NavItem = forwardRef<HTMLAnchorElement, NavItemProps>(
         <IconComponent
           className={`h-4 w-4 shrink-0 ${
             isActive
-              ? "text-[var(--kit-accent,#1f6feb)] dark:text-[#58a6ff]"
-              : "text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]"
+              ? "text-[var(--kit-accent,#1a63d6)] dark:text-[#58a6ff]"
+              : "text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]"
           }`}
         />
         {!collapsed && <span className="flex-1 truncate">{item.title}</span>}
@@ -48,8 +48,8 @@ export const NavItem = forwardRef<HTMLAnchorElement, NavItemProps>(
           <span
             className={`shrink-0 rounded-full px-1.5 py-0.5 font-semibold text-[10px] tabular-nums ${
               isActive
-                ? "bg-[var(--kit-accent,#1f6feb)] text-white"
-                : "bg-[var(--kit-bg-subtle,#f3f4f6)] text-[var(--kit-text-secondary,#6b7280)] dark:bg-[#21262d] dark:text-[#8b949e]"
+                ? "bg-[var(--kit-accent,#1a63d6)] text-white"
+                : "bg-[var(--kit-bg-subtle,#f3f4f6)] text-[var(--kit-text-secondary,#5b6370)] dark:bg-[#21262d] dark:text-[#8b949e]"
             }`}
           >
             {item.badge}
@@ -73,7 +73,7 @@ export const NavSection: React.FC<NavSectionProps> = ({ label, items, activeHref
   return (
     <div className="space-y-1">
       {label && !collapsed && (
-        <div className="px-3 py-1.5 font-bold text-[10px] text-[var(--kit-text-muted,#9ca3af)] uppercase tracking-wider dark:text-[#6e7681]">
+        <div className="px-3 py-1.5 font-bold text-[10px] text-[#5b6370] uppercase tracking-wider dark:text-[#8b949e]">
           {label}
         </div>
       )}
@@ -151,7 +151,7 @@ export const AppSidebar = forwardRef<HTMLElement, AppSidebarProps>(
         <div className="flex shrink-0 items-center justify-between border-[var(--kit-border,#e6e8ec)] border-b p-3.5 dark:border-[#30363d]">
           <div className="flex items-center gap-2.5 truncate">
             {logo ?? (
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1f6feb)] font-bold text-sm text-white">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1a63d6)] font-bold text-sm text-white">
                 HF
               </div>
             )}
@@ -167,7 +167,7 @@ export const AppSidebar = forwardRef<HTMLElement, AppSidebarProps>(
               type="button"
               onClick={onToggleCollapse}
               aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-              className="cursor-pointer rounded-[var(--kit-radius-control,8px)] p-1 text-[var(--kit-text-secondary,#6b7280)] transition-colors hover:bg-[var(--kit-bg-subtle,#f3f4f6)] dark:text-[#8b949e] dark:hover:bg-[#21262d]"
+              className="cursor-pointer rounded-[var(--kit-radius-control,8px)] p-1 text-[var(--kit-text-secondary,#5b6370)] transition-colors hover:bg-[var(--kit-bg-subtle,#f3f4f6)] dark:text-[#8b949e] dark:hover:bg-[#21262d]"
             >
               {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
             </button>

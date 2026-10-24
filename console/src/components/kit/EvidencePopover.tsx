@@ -63,7 +63,7 @@ export const EvidencePopover = forwardRef<HTMLDivElement, EvidencePopoverProps>(
           {children ?? (
             <button
               type="button"
-              className="inline-flex cursor-pointer select-none items-center gap-1 text-[var(--kit-accent,#1f6feb)] text-xs hover:underline dark:text-[#58a6ff]"
+              className="inline-flex cursor-pointer select-none items-center gap-1 text-[var(--kit-accent,#1a63d6)] text-xs hover:underline dark:text-[#58a6ff]"
               aria-label="View status evidence"
             >
               <HelpCircle className="h-3.5 w-3.5" />
@@ -80,11 +80,11 @@ export const EvidencePopover = forwardRef<HTMLDivElement, EvidencePopoverProps>(
           {/* Header */}
           <div className="flex items-center justify-between border-[var(--kit-border,#e6e8ec)] border-b pb-2 dark:border-[#30363d]">
             <div className="flex items-center gap-1.5 font-semibold text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">
-              <Terminal className="h-3.5 w-3.5 text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]" />
+              <Terminal className="h-3.5 w-3.5 text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]" />
               <span>Observed Evidence</span>
             </div>
             {state && (
-              <span className="rounded bg-[var(--kit-bg-subtle,#f3f4f6)] px-1.5 py-0.5 font-bold text-[10px] text-[var(--kit-text-secondary,#6b7280)] uppercase tracking-wider dark:bg-[#21262d] dark:text-[#8b949e]">
+              <span className="rounded bg-[var(--kit-bg-subtle,#f3f4f6)] px-1.5 py-0.5 font-bold text-[10px] text-[var(--kit-text-secondary,#5b6370)] uppercase tracking-wider dark:bg-[#21262d] dark:text-[#8b949e]">
                 {state}
               </span>
             )}
@@ -96,11 +96,11 @@ export const EvidencePopover = forwardRef<HTMLDivElement, EvidencePopoverProps>(
           </div>
 
           {/* Metadata: source run + checked at */}
-          <div className="space-y-1 text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+          <div className="space-y-1 text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
             {sourceRun && (
               <div className="flex justify-between">
                 <span>Source run:</span>
-                <span className="font-mono text-[var(--kit-accent,#1f6feb)] dark:text-[#58a6ff]">
+                <span className="font-mono text-[var(--kit-accent,#1a63d6)] dark:text-[#58a6ff]">
                   {sourceRun.label ?? sourceRun.id}
                 </span>
               </div>

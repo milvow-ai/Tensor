@@ -126,11 +126,11 @@ export const ApprovalCard = forwardRef<HTMLDivElement, ApprovalCardProps>(
               <span className="font-semibold text-[var(--kit-text-primary,#111827)] text-sm dark:text-[#f0f6fc]">
                 {what.tool}
               </span>
-              <span className="rounded bg-[var(--kit-bg-subtle,#f3f4f6)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:bg-[#21262d] dark:text-[#8b949e]">
+              <span className="rounded bg-[var(--kit-bg-subtle,#f3f4f6)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:bg-[#21262d] dark:text-[#8b949e]">
                 {what.action}
               </span>
             </div>
-            <p className="truncate font-mono text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+            <p className="truncate font-mono text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
               Target: <span className="text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">{what.target}</span>
             </p>
           </div>
@@ -145,14 +145,14 @@ export const ApprovalCard = forwardRef<HTMLDivElement, ApprovalCardProps>(
 
         {/* Why statement */}
         <div className="rounded-[var(--kit-radius-control,8px)] border border-[var(--kit-border,#e6e8ec)] bg-[var(--kit-bg-subtle,#f3f4f6)] p-3 text-[var(--kit-text-primary,#111827)] leading-relaxed dark:border-[#30363d] dark:bg-[#21262d] dark:text-[#f0f6fc]">
-          <span className="mb-1 block font-semibold text-[var(--kit-text-secondary,#6b7280)] dark:text-[#8b949e]">
+          <span className="mb-1 block font-semibold text-[var(--kit-text-secondary,#5b6370)] dark:text-[#8b949e]">
             Agent's reason:
           </span>
           {why}
         </div>
 
         {/* Metadata: who & cost */}
-        <div className="flex items-center justify-between border-[var(--kit-border,#e6e8ec)] border-t pt-1 text-[11px] text-[var(--kit-text-secondary,#6b7280)] dark:border-[#30363d] dark:text-[#8b949e]">
+        <div className="flex items-center justify-between border-[var(--kit-border,#e6e8ec)] border-t pt-1 text-[11px] text-[var(--kit-text-secondary,#5b6370)] dark:border-[#30363d] dark:text-[#8b949e]">
           <div>
             Requested by{" "}
             <span className="font-medium text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">{who.agent}</span>{" "}
@@ -179,7 +179,7 @@ export const ApprovalCard = forwardRef<HTMLDivElement, ApprovalCardProps>(
           >
             <X className="h-3.5 w-3.5" />
             <span>Deny</span>
-            <kbd className="ml-1 rounded bg-[var(--kit-bg-subtle,#f3f4f6)] px-1 font-mono text-[10px] text-[var(--kit-text-secondary,#6b7280)] dark:bg-[#21262d] dark:text-[#8b949e]">
+            <kbd className="ml-1 rounded bg-[var(--kit-bg-subtle,#f3f4f6)] px-1 font-mono text-[10px] text-[var(--kit-text-secondary,#5b6370)] dark:bg-[#21262d] dark:text-[#8b949e]">
               D
             </kbd>
           </button>
@@ -188,7 +188,7 @@ export const ApprovalCard = forwardRef<HTMLDivElement, ApprovalCardProps>(
             type="button"
             disabled={disabled}
             onClick={onApprove}
-            className="inline-flex flex-1 cursor-pointer select-none items-center justify-center gap-1.5 rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1f6feb)] px-3 py-2 font-medium text-white shadow-sm transition-colors hover:bg-[var(--kit-accent-hover,#195ac0)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1f6feb)] disabled:opacity-40"
+            className="inline-flex flex-1 cursor-pointer select-none items-center justify-center gap-1.5 rounded-[var(--kit-radius-control,8px)] bg-[var(--kit-accent,#1a63d6)] px-3 py-2 font-medium text-white shadow-sm transition-colors hover:bg-[var(--kit-accent-hover,#195ac0)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kit-accent,#1a63d6)] disabled:opacity-40"
           >
             <Check className="h-3.5 w-3.5" />
             <span>Approve</span>
