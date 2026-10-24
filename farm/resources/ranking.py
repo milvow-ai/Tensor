@@ -3,9 +3,12 @@
 Pure functions that score and order eligible candidates by:
 (a) price class: free (unit_cost 0) < pay-only-if-found (charged_on found) < cheapest per unit;
 (b) soonest reset first among equal price (spend credits that expire first);
-(c) success rate over the last 50 calls (from connection_health counts);
-(d) priority (lower is first);
+(c) priority (lower is first): the owner's order, so failover follows it;
+(d) success rate over the last 50 outcomes, which only breaks a tie between equal priorities;
 (e) id (alphabetical tie-break).
+
+``success_count`` / ``failure_count`` of a candidate are therefore counts over the recent window (the router
+loads them from ``connection_health.recent_outcomes``), never lifetime totals.
 """
 
 from __future__ import annotations
@@ -81,7 +84,7 @@ def _soonest_reset(candidate: Any) -> tuple[tuple[int, datetime], str]:
 
 
 def _success_rate(candidate: Any) -> tuple[float, str]:
-    """Success rate (0.0 to 1.0, default 1.0 for new accounts) from connection_health counts."""
+    """Success rate (0.0 to 1.0, default 1.0 for new accounts) over the candidate's recent outcomes."""
     success = int(getattr(candidate, "success_count", 0) or 0)
     failure = int(getattr(candidate, "failure_count", 0) or 0)
     total = success + failure
@@ -103,8 +106,8 @@ def score_candidate(candidate: Any) -> tuple[tuple[Any, ...], str]:
         price_class,
         unit_cost,
         reset_key,
-        -rate,
         priority,
+        -rate,
         cid,
     )
     reason = (
@@ -115,7 +118,7 @@ def score_candidate(candidate: Any) -> tuple[tuple[Any, ...], str]:
 
 
 def rank_candidates[C: Rankable](candidates: Sequence[C]) -> RankingResult[C]:
-    """Order candidates by price class -> soonest reset -> success rate -> priority -> id."""
+    """Order candidates by price class -> soonest reset -> priority -> recent success rate -> id."""
     scored: list[tuple[tuple[Any, ...], str, C]] = []
     for c in candidates:
         key, reason = score_candidate(c)

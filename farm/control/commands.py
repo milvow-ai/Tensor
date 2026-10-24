@@ -11,11 +11,15 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
 
+import psycopg
 import structlog
 from psycopg.types.json import Jsonb
 from pydantic import (
@@ -39,6 +43,7 @@ from farm.registry.models import (
     Strategy,
     looks_like_secret,
 )
+from farm.resources.trajectory import fail_orphaned_runs
 from farm.secrets import AuthRefError, redact, resolve_auth, resolve_token_store
 from farm.settings import data_dir
 
@@ -406,6 +411,34 @@ def export_command_schemas() -> dict[str, dict[str, Any]]:
     return {kind: validator.model_json_schema() for kind, validator in PAYLOAD_VALIDATORS.items()}
 
 
+class _Rollback(Exception):
+    """Raised inside a transaction block to roll it back without an error reaching the caller."""
+
+
+class _TxOutcome:
+    """Lets the code inside a ``_transaction`` block ask for a rollback while it still returns its result."""
+
+    rollback = False
+
+
+@asynccontextmanager
+async def _transaction(
+    pool: DbPool, outcome: _TxOutcome | None = None
+) -> AsyncIterator[psycopg.AsyncConnection[Any]]:
+    """A pooled connection inside one transaction: everything the block writes commits together or not at all.
+
+    The pool's connections are autocommit, so without this each statement of a command would commit by itself.
+    When ``outcome.rollback`` is set by the time the block ends, the transaction is rolled back instead.
+    """
+    try:
+        async with pool.connection() as conn, conn.transaction():
+            yield conn
+            if outcome is not None and outcome.rollback:
+                raise _Rollback
+    except _Rollback:
+        pass
+
+
 async def _emit_audit(
     conn: Any,
     actor: str,
@@ -500,7 +533,7 @@ async def execute_provider_command(
             status = cmd.status or "needs_login"
             auth_ref = cmd.auth_ref or f"cli:{account_id}"
 
-            async with pool.connection() as conn:
+            async with _transaction(pool) as conn:
                 if existing_provider is None:
                     await conn.execute(
                         "insert into public.providers "
@@ -563,7 +596,6 @@ async def execute_provider_command(
                     None,
                     {"account_id": account_id, "kind": "ai", "status": status},
                 )
-                await conn.commit()
 
             await write_registry_file(pool, registry_path)
             next_step = f"farm ai login {account_id}"
@@ -657,7 +689,7 @@ async def execute_provider_command(
                     next_step = "farm mcp sync"
 
             config = {**cmd.config, "mcp": mcp_spec.model_dump(mode="json")}
-            async with pool.connection() as conn:
+            async with _transaction(pool) as conn:
                 await conn.execute(
                     "insert into public.providers "
                     "(id, name, kind, executor, default_strategy, enabled, config) "
@@ -725,7 +757,6 @@ async def execute_provider_command(
                     None,
                     {"connection_id": conn_id, "kind": "mcp", "status": status},
                 )
-                await conn.commit()
 
             await write_registry_file(pool, registry_path)
 
@@ -784,7 +815,7 @@ async def execute_provider_command(
                 next_step = "Connection ready"
 
             config = {**cmd.config, "spec": cmd.spec}
-            async with pool.connection() as conn:
+            async with _transaction(pool) as conn:
                 await conn.execute(
                     "insert into public.providers "
                     "(id, name, kind, executor, default_strategy, enabled, config) "
@@ -824,7 +855,6 @@ async def execute_provider_command(
                     None,
                     {"connection_id": conn_id, "kind": "openapi", "status": status},
                 )
-                await conn.commit()
 
             await write_registry_file(pool, registry_path)
             return "done", {
@@ -846,7 +876,7 @@ async def execute_provider_command(
             assert isinstance(payload, UpdateProviderPayload)
             cmd_up = payload
 
-        async with pool.connection() as conn:
+        async with _transaction(pool) as conn:
             cur = await conn.execute(
                 "select id, name, enabled, default_strategy, config from public.providers where id = %s",
                 (cmd_up.provider_id,),
@@ -888,7 +918,6 @@ async def execute_provider_command(
 
             after = {**before, **{k: getattr(cmd_up, k) for k in updates if hasattr(cmd_up, k)}}
             await _emit_audit(conn, actor, "update_provider", cmd_up.provider_id, before, after)
-            await conn.commit()
 
         await write_registry_file(pool, registry_path)
         return "done", {"provider_id": cmd_up.provider_id, "updated": list(updates.keys())}
@@ -903,7 +932,7 @@ async def execute_provider_command(
             assert isinstance(payload, RemoveProviderPayload)
             cmd_rm = payload
 
-        async with pool.connection() as conn:
+        async with _transaction(pool) as conn:
             cur = await conn.execute(
                 "select id from public.providers where id = %s",
                 (cmd_rm.provider_id,),
@@ -960,7 +989,6 @@ async def execute_provider_command(
                 (cmd_rm.provider_id,),
             )
             await _emit_audit(conn, actor, "remove_provider", cmd_rm.provider_id, None, {"status": "deleted"})
-            await conn.commit()
 
         await write_registry_file(pool, registry_path)
         return "done", {"provider_id": cmd_rm.provider_id, "status": "deleted"}
@@ -999,7 +1027,18 @@ async def execute_command(
         log.warning("command.rejected", cmd_id=str(cid), reason=reason)
         return "rejected", {"error": reason}
 
-    async with pool.connection() as conn:
+    if kind in ("add_provider", "update_provider", "remove_provider"):
+        # These open their own transactions (and sync tools over the network): hold no outer connection.
+        assert isinstance(payload, (AddProviderPayload, UpdateProviderPayload, RemoveProviderPayload))
+        try:
+            return await execute_provider_command(pool, kind, payload, actor=actor)
+        except Exception as exc:
+            log.exception("command.execution_failed", cmd_id=str(cid), error=str(exc))
+            return "failed", {"error": f"Execution exception: {exc}"}
+
+    # One transaction per command: its writes and its audit row commit together or not at all.
+    outcome = _TxOutcome()
+    async with _transaction(pool, outcome) as conn:
         before: dict[str, Any] | None = None
         after: dict[str, Any] | None = None
         try:
@@ -1067,6 +1106,7 @@ async def execute_command(
                 before = {}
                 after = {"strategy": payload.strategy}
 
+                # Look up every target first: a command that is rejected must not have written anything.
                 if payload.connection_id:
                     cur = await conn.execute(
                         "select strategy from public.connections where id = %s",
@@ -1076,11 +1116,6 @@ async def execute_command(
                     if row is None:
                         return "rejected", {"error": f"Connection '{payload.connection_id}' not found"}
                     before["strategy"] = row[0]
-                    await conn.execute(
-                        "update public.connections set strategy = %s where id = %s",
-                        (payload.strategy, payload.connection_id),
-                    )
-
                 if payload.provider_id:
                     cur = await conn.execute(
                         "select default_strategy from public.providers where id = %s",
@@ -1090,11 +1125,6 @@ async def execute_command(
                     if row is None:
                         return "rejected", {"error": f"Provider '{payload.provider_id}' not found"}
                     before["default_strategy"] = row[0]
-                    await conn.execute(
-                        "update public.providers set default_strategy = %s where id = %s",
-                        (payload.strategy, payload.provider_id),
-                    )
-
                 if payload.capability:
                     cur = await conn.execute(
                         "select default_strategy from public.capabilities where name = %s",
@@ -1104,6 +1134,18 @@ async def execute_command(
                     if row is None:
                         return "rejected", {"error": f"Capability '{payload.capability}' not found"}
                     before["default_strategy"] = row[0]
+
+                if payload.connection_id:
+                    await conn.execute(
+                        "update public.connections set strategy = %s where id = %s",
+                        (payload.strategy, payload.connection_id),
+                    )
+                if payload.provider_id:
+                    await conn.execute(
+                        "update public.providers set default_strategy = %s where id = %s",
+                        (payload.strategy, payload.provider_id),
+                    )
+                if payload.capability:
                     await conn.execute(
                         "update public.capabilities set default_strategy = %s where name = %s",
                         (payload.strategy, payload.capability),
@@ -1393,14 +1435,15 @@ async def execute_command(
                         auth_err = str(aerr)
 
                 if auth_ok and curr_status == "needs_login":
-                    await conn.execute(
-                        "update public.connections set status = 'active' where id = %s",
-                        (payload.connection_id,),
-                    )
-                    curr_status = "active"
                     from farm.registry.writer import write_registry_file
 
-                    await conn.commit()
+                    # One idempotent statement on its own connection: the registry file written next sees it.
+                    async with pool.connection() as flip_conn:
+                        await flip_conn.execute(
+                            "update public.connections set status = 'active' where id = %s",
+                            (payload.connection_id,),
+                        )
+                    curr_status = "active"
                     await write_registry_file(pool)
 
                 result_data = {
@@ -1486,7 +1529,11 @@ async def execute_command(
                 target = payload.connection_id or payload.provider_id or ""
                 before = {}
                 after = {"max_parallel": payload.max_parallel}
+                new_concurrency = 0
+                new_meta: dict[str, Any] = {}
+                new_config: dict[str, Any] = {}
 
+                # Look up both targets first: a command that is rejected must not have written anything.
                 if payload.connection_id:
                     cur = await conn.execute(
                         "select concurrency, meta from public.connections where id = %s",
@@ -1499,15 +1546,9 @@ async def execute_command(
                     curr_meta = row[1] or {}
                     before["concurrency"] = curr_concurrency
                     before["max_parallel"] = curr_meta.get("max_parallel")
-
                     new_concurrency = max(curr_concurrency, payload.max_parallel)
                     new_meta = {**curr_meta, "max_parallel": payload.max_parallel}
-                    await conn.execute(
-                        "update public.connections set concurrency = %s, meta = %s where id = %s",
-                        (new_concurrency, Jsonb(new_meta), payload.connection_id),
-                    )
                     after["concurrency"] = new_concurrency
-
                 if payload.provider_id:
                     cur = await conn.execute(
                         "select config from public.providers where id = %s",
@@ -1519,6 +1560,13 @@ async def execute_command(
                     curr_config = row[0] or {}
                     before["provider_max_parallel"] = curr_config.get("max_parallel")
                     new_config = {**curr_config, "max_parallel": payload.max_parallel}
+
+                if payload.connection_id:
+                    await conn.execute(
+                        "update public.connections set concurrency = %s, meta = %s where id = %s",
+                        (new_concurrency, Jsonb(new_meta), payload.connection_id),
+                    )
+                if payload.provider_id:
                     await conn.execute(
                         "update public.providers set config = %s where id = %s",
                         (Jsonb(new_config), payload.provider_id),
@@ -1607,73 +1655,141 @@ async def execute_command(
                 all_ok = all(r.ok for r in results) if results else True
                 return ("done" if all_ok else "failed"), {"target": target, "results": res_list}
 
-            elif kind in ("add_provider", "update_provider", "remove_provider"):
-                assert isinstance(payload, (AddProviderPayload, UpdateProviderPayload, RemoveProviderPayload))
-                return await execute_provider_command(pool, kind, payload, actor=actor)
-
             return "rejected", {"error": f"Unhandled kind '{kind}'"}
 
         except Exception as exc:
+            outcome.rollback = True  # half a command is worse than none
             log.exception("command.execution_failed", cmd_id=str(cid), error=str(exc))
             return "failed", {"error": f"Execution exception: {exc}"}
 
 
-async def process_command(pool: DbPool, command_id: UUID | str) -> tuple[str, dict[str, Any]]:
-    """Fetch queued command, execute it, record result, and mark it done/rejected/failed."""
-    cid = command_id if isinstance(command_id, UUID) else UUID(str(command_id))
+COMMAND_LEASE_S = 900.0
+"""How long a command may stay ``running`` (slowest known: ~2 minutes)."""
+
+_CLAIMER = f"pid{os.getpid()}-{uuid4().hex[:8]}"
+"""Names this process in ``farm_commands.claimed_by``; only the claimer may record the result."""
+
+
+class ClaimedCommand(BaseModel):
+    id: UUID
+    kind: str
+    payload: dict[str, Any]
+    created_by: str
+
+
+async def claim_command(pool: DbPool, command_id: UUID | None = None) -> ClaimedCommand | None:
+    """Atomically move one queued command to ``running`` for this process.
+
+    One statement decides the winner: the row is returned only to the caller whose ``update`` saw
+    ``status = 'queued'``. With ``command_id`` it claims that command; without, the oldest queued one
+    (``skip locked`` so concurrent consumers take different rows instead of waiting on each other).
+    Returns None when there is nothing to claim: no queued command, or somebody else already holds it.
+    """
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "update public.farm_commands set status = 'running', claimed_by = %(by)s, claimed_at = now() "
+            "where id = (select id from public.farm_commands where status = 'queued' "
+            "            and (%(id)s::uuid is null or id = %(id)s::uuid) "
+            "            order by created_at, id limit 1 for update skip locked) "
+            "and status = 'queued' "
+            "returning id, kind, payload, coalesce(created_by, 'system')",
+            {"by": _CLAIMER, "id": command_id},
+        )
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    return ClaimedCommand(id=row[0], kind=row[1], payload=row[2] or {}, created_by=row[3])
+
+
+async def _run_claimed(pool: DbPool, claimed: ClaimedCommand) -> tuple[str, dict[str, Any]]:
+    status, result = await execute_command(
+        pool, claimed.id, claimed.kind, claimed.payload, actor=claimed.created_by
+    )
 
     async with pool.connection() as conn:
         cur = await conn.execute(
-            "select kind, payload, coalesce(created_by, 'system') from public.farm_commands "
-            "where id = %s for update",
-            (cid,),
+            "update public.farm_commands set status = %s, result = %s, done_at = now() "
+            "where id = %s and status = 'running' and claimed_by = %s returning id",
+            (status, Jsonb(result), claimed.id, _CLAIMER),
         )
-        row = await cur.fetchone()
-        if row is None:
-            return "rejected", {"error": "Command not found"}
+        recorded = await cur.fetchone() is not None
+    if not recorded:
+        # The lease sweep already failed this command (it ran longer than the lease): that verdict stands.
+        log.warning("command.result_dropped", cmd_id=str(claimed.id), kind=claimed.kind, status=status)
+        return "failed", {
+            "error": "command lease expired before the command finished; its result was not recorded"
+        }
 
-        kind, payload_raw, created_by = row[0], row[1] or {}, row[2]
-        await conn.execute(
-            "update public.farm_commands set status = 'running' where id = %s",
-            (cid,),
-        )
-
-    status, result = await execute_command(pool, cid, kind, payload_raw, actor=created_by)
-
-    async with pool.connection() as conn:
-        await conn.execute(
-            "update public.farm_commands set status = %s, result = %s, done_at = now() where id = %s",
-            (status, Jsonb(result), cid),
-        )
-
-    log.info("command.processed", cmd_id=str(cid), kind=kind, status=status)
+    log.info("command.processed", cmd_id=str(claimed.id), kind=claimed.kind, status=status)
     return status, result
 
 
-async def poll_and_execute_queued(pool: DbPool, limit: int = 10) -> int:
-    """Find queued commands and execute them. Returns number of commands processed."""
-    async with pool.connection() as conn:
-        cur = await conn.execute(
-            "select id from public.farm_commands where status = 'queued' "
-            "order by created_at asc limit %s for update skip locked",
-            (limit,),
-        )
-        rows = await cur.fetchall()
+async def process_command(pool: DbPool, command_id: UUID | str) -> tuple[str, dict[str, Any]]:
+    """Claim one queued command, execute it, record the result and mark it done/rejected/failed.
 
+    A command that is not queued (unknown id, already running, or finished) is never executed here.
+    """
+    cid = command_id if isinstance(command_id, UUID) else UUID(str(command_id))
+    claimed = await claim_command(pool, cid)
+    if claimed is None:
+        async with pool.connection() as conn:
+            cur = await conn.execute("select status from public.farm_commands where id = %s", (cid,))
+            row = await cur.fetchone()
+        if row is None:
+            return "rejected", {"error": "Command not found"}
+        return str(row[0]), {"error": f"Command is {row[0]}, not queued: it was not executed again"}
+    return await _run_claimed(pool, claimed)
+
+
+async def poll_and_execute_queued(pool: DbPool, limit: int = 10) -> int:
+    """Claim and execute up to ``limit`` queued commands. Returns the number this call executed."""
     count = 0
-    for row in rows:
-        cid = row[0]
-        await process_command(pool, cid)
+    while count < limit:
+        claimed = await claim_command(pool)
+        if claimed is None:
+            break
+        await _run_claimed(pool, claimed)
         count += 1
     return count
+
+
+async def fail_expired_command_claims(
+    pool: DbPool,
+    lease_s: float = COMMAND_LEASE_S,
+    now: datetime | None = None,
+) -> int:
+    """Fail every command that has been ``running`` longer than the lease (its process died or hung).
+
+    The reason names what the owner should do: such a command may have partly run, so check the audit log and
+    queue it again if needed. Returns the number of commands failed.
+    """
+    current = now or datetime.now(UTC)
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "update public.farm_commands set status = 'failed', done_at = %(now)s, "
+            "result = jsonb_build_object('error', 'command lease expired: it was running for more than ' "
+            "|| %(lease)s::int || ' s without a result (the process that claimed it died or hung). It may "
+            "have partly run: check the audit log, then queue it again if it is still needed.', "
+            "'claimed_by', claimed_by, 'claimed_at', coalesce(claimed_at, created_at)) "
+            "where status = 'running' "
+            "and coalesce(claimed_at, created_at) < %(now)s::timestamptz - make_interval(secs => %(lease)s) "
+            "returning id",
+            {"now": current, "lease": lease_s},
+        )
+        rows = await cur.fetchall()
+    for row in rows:
+        log.warning("command.lease_expired", cmd_id=str(row[0]), lease_s=lease_s)
+    return len(rows)
 
 
 class CommandConsumer:
     """Background polling worker for farm_commands."""
 
-    def __init__(self, pool: DbPool, poll_interval_s: float = 2.0) -> None:
+    def __init__(self, pool: DbPool, poll_interval_s: float = 2.0, sweep_interval_s: float = 60.0) -> None:
         self.pool = pool
         self.poll_interval_s = poll_interval_s
+        self.sweep_interval_s = sweep_interval_s
+        self._last_sweep = 0.0
         self._running = False
         self._task: asyncio.Task[None] | None = None
 
@@ -1695,6 +1811,20 @@ class CommandConsumer:
             self._task = None
         log.info("command_consumer.stopped")
 
+    async def _sweep_if_due(self) -> None:
+        """Fail commands and runs whose process died (leases expired); once per ``sweep_interval_s``."""
+        loop_time = asyncio.get_running_loop().time()
+        if loop_time - self._last_sweep < self.sweep_interval_s:
+            return
+        self._last_sweep = loop_time
+        try:
+            await fail_expired_command_claims(self.pool)
+            await fail_orphaned_runs(self.pool)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("command_consumer.sweep_error", error=str(exc))
+
     async def _loop(self) -> None:
         while self._running:
             try:
@@ -1703,6 +1833,8 @@ class CommandConsumer:
                 break
             except Exception as exc:
                 log.error("command_consumer.poll_error", error=str(exc))
+
+            await self._sweep_if_due()
 
             try:
                 await asyncio.sleep(self.poll_interval_s)

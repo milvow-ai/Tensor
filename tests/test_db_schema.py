@@ -185,7 +185,7 @@ def test_every_table_has_tenant_id_default(db_url: str) -> None:
         "where table_schema = 'public' and column_name = 'tenant_id'",
     )
     # tables added after the M1a contract also carry it; memberships has no default (its tenant is always explicit)
-    assert {r[0] for r in rows} == set(KEY_COLUMNS) | {"pool_state", "integration_requests", "memberships"}
+    assert {r[0] for r in rows} == set(KEY_COLUMNS) | {"pool_state", "integration_requests", "memberships", "budget_reservations"}
     for table, data_type, nullable, default in rows:
         assert data_type == "uuid" and nullable == "NO", table
         if table != "memberships":

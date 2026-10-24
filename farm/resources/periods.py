@@ -3,7 +3,9 @@
 The ledger decides which ``quota_usage`` row a reservation lands on in SQL; the router and the capacity report
 need the same boundaries in Python (when does an exhausted connection come back, when does a meter reset).
 ``tests/test_periods.py`` checks both implementations against each other on random timestamps, so they cannot
-drift apart silently. All boundaries are UTC; ``rolling_5h`` / ``total`` / ``none`` have no boundary.
+drift apart silently. All boundaries are UTC; ``rolling_5h`` / ``total`` / ``none`` have no boundary and
+share one ``quota_usage`` row (``rolling_5h`` is limited by the sliding 5-hour sum of its reservations
+instead, see ``farm_quota_consumed``).
 """
 
 from __future__ import annotations

@@ -131,34 +131,52 @@ def test_watchdog_restart_and_alert_on_failure(tmp_path: Path) -> None:
 
     The heartbeat file and log are per-test: a real `farm run` on this PC writes a fresh heartbeat in the
     shared data dir, which would make the watchdog (rightly) report the Farm healthy.
+
+    The script dispatches its alert with `uv run farm alert send`, which starts a Python process and talks to a
+    database: seconds when the machine is idle, more than the timeout under load, and a real alert row in the
+    real database. A stand-in `uv` first on PATH records the call instead, so the test is instant and asserts
+    what the watchdog asked for, not how fast this PC is.
     """
-    result = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            "scripts/farm-watchdog.ps1",
-            "-TestMode",
-            "-NoSpawn",
-            "-SkipBifrost",
-            "-FarmUrl",
-            "http://127.0.0.1:59999",
-            "-FarmHeartbeatFile",
-            str(tmp_path / "no-heartbeat.json"),
-            "-LogFile",
-            str(tmp_path / "watchdog.log"),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    calls = tmp_path / "uv-calls.txt"
+    script = f'@echo off\r\necho %*>>"{calls}"\r\nexit /b 0\r\n'
+    (fake_bin / "uv.cmd").write_bytes(script.encode("ascii"))
+    env = {**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"}
+    out_file = tmp_path / "watchdog.out"
+    with out_file.open("wb") as out:  # a file, not pipes: no reader threads to starve under load
+        result = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "scripts/farm-watchdog.ps1",
+                "-TestMode",
+                "-NoSpawn",
+                "-SkipBifrost",
+                "-FarmUrl",
+                "http://127.0.0.1:59999",
+                "-FarmHeartbeatFile",
+                str(tmp_path / "no-heartbeat.json"),
+                "-LogFile",
+                str(tmp_path / "watchdog.log"),
+            ],
+            stdout=out,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+            env=env,
+        )
+    stdout = out_file.read_text(encoding="utf-8", errors="replace")
     assert result.returncode == 0
-    assert "Farm unhealthy" in result.stdout
-    assert "Restarting Farm..." in result.stdout
-    assert "ALERT: Harness Farm Watchdog: Farm process unhealthy" in result.stdout
-    assert "[TestMode] Single iteration complete" in result.stdout
+    assert "Farm unhealthy" in stdout
+    assert "Restarting Farm..." in stdout
+    assert "ALERT: Harness Farm Watchdog: Farm process unhealthy" in stdout
+    assert "[TestMode] Single iteration complete" in stdout
+    asked = calls.read_text(encoding="utf-8")
+    assert "run farm alert send --kind farm_down" in asked and "--severity critical" in asked
 
 
 @respx.mock

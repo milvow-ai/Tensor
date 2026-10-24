@@ -528,6 +528,22 @@ def test_farm_serve_over_stdio_offers_the_ai_tools_and_runs_a_job_end_to_end(ser
     assert Path(path).read_bytes() == b"served over stdio"
 
 
+def farm_processes() -> list[psutil.Process]:
+    """The `farm serve` child processes of this test process."""
+    return [
+        proc
+        for proc in psutil.Process().children(recursive=True)
+        if "from farm.control.cli import app" in " ".join(_cmdline(proc))
+    ]
+
+
+def _cmdline(proc: psutil.Process) -> list[str]:
+    try:
+        return proc.cmdline()
+    except psutil.Error:
+        return []
+
+
 def test_stopping_farm_serve_while_a_job_runs_fails_it_as_farm_restart_and_kills_the_worker(
     served_farm: ServedFarm,
 ) -> None:
@@ -541,10 +557,14 @@ def test_stopping_farm_serve_while_a_job_runs_fails_it_as_farm_restart_and_kills
         async with Client(served_farm.transport()) as client:
             found["job"] = (await start(client, ai="claude", account="claude-02"))["job_id"]
             found["pids"] = await pids_of(pid_file)
+            found["farm"] = farm_processes()
         # leaving the block closes stdin: the Farm process is asked to stop while the worker runs
+        # The stop is asynchronous: wait for the Farm process itself to exit (its shutdown is what writes the row).
+        assert found["farm"], "the Farm process was not found"
+        await asyncio.to_thread(psutil.wait_procs, found["farm"], STARTUP_TIMEOUT_S)
 
     try:
-        asyncio.run(asyncio.wait_for(talk(), STARTUP_TIMEOUT_S))
+        asyncio.run(asyncio.wait_for(talk(), STARTUP_TIMEOUT_S * 2))
         state, kind, *_ = served_farm.job_row(found["job"])
         assert (state, kind) == ("failed", "farm_restart")  # the stopping Farm said so itself, before it exited
         asyncio.run(all_gone(*found["pids"]))  # and took the worker's whole process tree with it
