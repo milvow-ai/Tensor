@@ -37,6 +37,13 @@ export default defineConfig({
       dependencies: ["screens"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
+    {
+      // The component gallery is static: it reads no fixture state, so it needs no place in the order above.
+      // Reduced motion makes charts draw at once, so the screenshots never catch an animation half way.
+      name: "kit",
+      testMatch: /kit\.spec\.ts/,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" },
+    },
   ],
   webServer: {
     command: `pnpm exec next start -p ${PORT} -H 127.0.0.1`,
