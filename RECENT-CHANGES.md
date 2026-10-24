@@ -5,6 +5,25 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
 
 ---
 
+## 2026-10-24 (later) — UI kit approved; second session loss; PC memory leak found
+
+- **Owner approved the dashboard look (Round 0)**: "Apply your 6 polish fixes and merge the UI kit." Gemini applied the six
+  fixes (A3A-R1: numbers in Geist Sans with tabular figures, current models and account ids in the sample data, sidebar scrolls
+  with the plan card pinned, day-chip label fits, plain gallery copy, locale toggle on "Tokens consumed"); vitest 49/49. Not
+  merged yet: its end-to-end tests and screenshots could not run because the PC ran out of memory.
+- **The Claude Code session ended a second time.** The builders survived this time (F1B, S0, A3A kept running); only the
+  notifications were lost.
+- **The live Farm died at 10:19:31 with no log line** and was restarted detached. Cause found afterwards (D47): Windows' commit
+  memory was exhausted (47 of 50 GB while all processes together hold 18 GB). Three vendor services leak handles —
+  AcerSystemCentralService (374k), AcerCentralService (284k), MediaTek Bluetooth `mtkbtsvc` (229k) — and the console host the
+  Farm was attached to crashed when it could not grow its stack. Fix on the PC: restart those services or reboot. Fix in the
+  product: run the Farm without a console (D47). Until then heavy jobs run one at a time.
+- `briefs/CONTEXT.md` §6: builders must never stop, restart or kill a process they did not start (above all the live Farm).
+- `scripts/round.ps1`: `-Foreground` (waits in-process so the lead is notified), `-Main` (defaults to the current branch),
+  `-ClaudeConfigDir`; Hermes rounds use GLM-5 through the Bedrock mantle endpoint (owner's direction).
+
+---
+
 ## 2026-10-24 (later) — Session ended mid-build: recovered; live database at 0018
 
 - The previous Claude Code session ended; the live Farm and two builders (S0, F1B) were child processes and stopped with it.
