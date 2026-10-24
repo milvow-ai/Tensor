@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +48,7 @@ from farm.executors.mcp.connect import (
 from farm.executors.mcp.mapping import get_capability_mapping, map_request_params, map_tool_result
 from farm.registry.models import MCP_CAPABILITY_PREFIX, McpProviderSpec
 from farm.secrets import ensure_token_store_dir, redact, resolve_auth, resolve_token_store
+from farm.settings import data_dir_path
 
 logger = structlog.get_logger(__name__)
 
@@ -93,7 +93,7 @@ class McpExecutor:
     ) -> None:
         """``directory`` finds a provider's ``mcp`` block; ``transports`` replaces how its transport is built
         (tests hand in in-process servers; production leaves it alone)."""
-        self._data_dir = data_dir or Path(os.environ.get("FARM_DATA_DIR", "D:/farm-data"))
+        self._data_dir = data_dir or data_dir_path()
         self._clients: dict[str, Client[Any]] = {}
         self._directory = directory
         self._transports = transports
@@ -115,6 +115,10 @@ class McpExecutor:
 
     def get_token_store_dir(self, connection: ConnectionView) -> Path:
         """Resolve and ensure the token store directory for a connection."""
+        if "/" in connection.id or "\\" in connection.id:
+            # Either separator, on every OS: one database serves the Windows PC and the Linux server, so an id
+            # that is a plain name on Linux ("..\\..\\x") must not become a path on Windows.
+            raise ValueError(f"Path traversal detected: connection id {connection.id!r} has a path separator")
         if connection.auth_ref.startswith("token-store:"):
             store_dir = resolve_token_store(connection.auth_ref, data_dir=self._data_dir)
         else:

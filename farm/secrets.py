@@ -23,6 +23,8 @@ import threading
 from pathlib import Path
 from urllib.parse import quote, quote_plus, unquote
 
+from farm.settings import data_dir_path
+
 __all__ = [
     "AUTH_SCHEMES",
     "AuthRefError",
@@ -167,7 +169,7 @@ def resolve_token_store(auth_ref: str, *, data_dir: Path | None = None) -> Path:
     if scheme != "token-store":
         raise AuthRefError(f"expected 'token-store:' auth_ref, got '{scheme}:'")
     base_data_dir = (
-        data_dir if data_dir is not None else Path(os.environ.get("FARM_DATA_DIR", "D:/farm-data"))
+        data_dir if data_dir is not None else data_dir_path()
     )
     tokens_root = (base_data_dir / "tokens").resolve()
     store_dir = (tokens_root / ref).resolve()
@@ -264,9 +266,9 @@ def set_secret(name: str, value: str, *, env_path: Path | None = None) -> Path:
     if any(char in value for char in "\r\n\0"):
         raise ValueError(f"the value of {name} contains a line break, which a .env file cannot hold")
 
-    from farm.settings import DEFAULT_ENV_PATH
+    from farm.settings import env_file
 
-    path = env_path or DEFAULT_ENV_PATH
+    path = env_path or env_file()
     existing = path.read_bytes().decode("utf-8") if path.is_file() else ""
     newline = "\r\n" if "\r\n" in existing else "\n"
     lines = existing.split("\n")

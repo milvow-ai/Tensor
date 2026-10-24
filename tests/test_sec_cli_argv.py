@@ -139,6 +139,7 @@ async def test_large_task_handling(fake_harness: FakeCliHarness) -> None:
     assert "exceeds command-line length limit" in str(res.error)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason=".cmd/.bat shims exist only on Windows (npm and pip write them)")
 def test_shim_resolution() -> None:
     """resolve_shim resolves python and npm shims and detects unresolvable batch files."""
     with tempfile.TemporaryDirectory() as td:
@@ -171,7 +172,8 @@ async def test_unresolvable_batch_shim_refused() -> None:
 
         out = await run_cli_process([str(bad_bat), "arg1"])
         assert out.exit_code != 0
-        assert "Refusing to execute unresolvable batch file" in out.stderr
+        if sys.platform == "win32":  # elsewhere a .bat is not a program at all, and is refused as not found
+            assert "Refusing to execute unresolvable batch file" in out.stderr
 
 
 @pytest.mark.asyncio

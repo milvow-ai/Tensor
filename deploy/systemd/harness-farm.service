@@ -1,20 +1,28 @@
 [Unit]
 Description=Harness Farm MCP gateway and execution engine
-After=network-online.target
+Documentation=file:///opt/harness-farm/docs/RUNBOOK-SERVER.md
+After=network-online.target harness-farm-bifrost.service
 Wants=network-online.target
 
 [Service]
 Type=simple
+# Never root: the AI CLIs run as children of this process (Claude Code refuses to skip permissions as root).
+User=farm
+Group=farm
 WorkingDirectory=/opt/harness-farm
 EnvironmentFile=/etc/harness-farm/farm.env
-Environment=FARM_DATA_DIR=/var/lib/harness-farm
 ExecStart=/opt/harness-farm/.venv/bin/farm run
-Restart=on-failure
+# Always: a clean exit of a 24/7 service is a fault too. The watchdog timer catches hangs (/health).
+Restart=always
 RestartSec=5
+# farm run lets in-flight calls finish for up to 30 s, then marks unfinished AI jobs.
+TimeoutStopSec=90
 StateDirectory=harness-farm
+StateDirectoryMode=0700
+UMask=0077
 LimitNOFILE=65536
 
-# Hardening
+# Hardening: everything but the state directory is read-only, /home and /root are hidden.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

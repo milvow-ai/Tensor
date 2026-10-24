@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ from structlog.testing import capture_logs
 from typer.testing import CliRunner
 
 from farm.control.cli import app
-from farm.mcp.importer import ImportFailed, format_report, import_servers
+from farm.mcp.importer import ImportFailed, format_report, import_servers, source_path
 from farm.registry import RegistryError, load_registry, parse_registry
 from farm.registry.models import looks_like_secret
 from farm.secrets import redact, set_secret
@@ -138,10 +139,16 @@ def test_the_named_sources_are_found_where_the_clients_keep_them(
     (home / ".codex").mkdir(parents=True)
     shutil.copy(FIXTURES / "codex_config.toml", home / ".codex" / "config.toml")
     shutil.copy(FIXTURES / "claude_code.json", home / ".claude.json")
-    appdata = tmp_path / "appdata" / "Claude"
-    appdata.mkdir(parents=True)
-    shutil.copy(FIXTURES / "claude_desktop_config.json", appdata / "claude_desktop_config.json")
-    environ = {"APPDATA": str(tmp_path / "appdata")}
+    # Where Claude Desktop keeps its file on this OS (Linux: the XDG config dir; the server runs Linux).
+    if sys.platform == "win32":
+        desktop = tmp_path / "appdata" / "Claude"
+    elif sys.platform == "darwin":
+        desktop = home / "Library" / "Application Support" / "Claude"
+    else:
+        desktop = tmp_path / "xdg" / "Claude"
+    desktop.mkdir(parents=True)
+    shutil.copy(FIXTURES / "claude_desktop_config.json", desktop / "claude_desktop_config.json")
+    environ = {"APPDATA": str(tmp_path / "appdata"), "XDG_CONFIG_HOME": str(tmp_path / "xdg")}
 
     names = []
     for source in ("claude-desktop", "claude-code", "codex"):
@@ -470,3 +477,12 @@ def test_a_connection_may_override_env_and_headers_with_references_only() -> Non
 )
 def test_the_secret_shape_detector(text: str, secret: bool) -> None:
     assert looks_like_secret(text) is secret
+
+
+def test_claude_desktop_on_linux_follows_the_xdg_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux (the server): ``$XDG_CONFIG_HOME/Claude/...``, else ``~/.config/Claude/...``; never Windows' APPDATA."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    home, xdg, name = tmp_path / "home", tmp_path / "xdg", "claude_desktop_config.json"
+    environ = {"XDG_CONFIG_HOME": str(xdg), "APPDATA": str(tmp_path / "appdata")}
+    assert source_path("claude-desktop", home=home, environ=environ) == xdg / "Claude" / name
+    assert source_path("claude-desktop", home=home, environ={}) == home / ".config" / "Claude" / name

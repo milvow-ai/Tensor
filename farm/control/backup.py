@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from farm.db.pool import get_db_url, is_local_db, is_local_url
 from farm.secrets import redact
@@ -53,6 +54,13 @@ def _backups_dir(backup_directory: Path | None = None) -> Path:
         b_dir = get_data_dir() / "backups"
     b_dir.mkdir(parents=True, exist_ok=True)
     return b_dir
+
+
+def split_password(url: str) -> tuple[str, str | None]:
+    """``url`` as a libpq connection string without its password, and the password (None if it has none)."""
+    params = conninfo_to_dict(url)
+    password = params.pop("password", None)
+    return make_conninfo("", **params), None if password is None else str(password)
 
 
 def find_pg_dump(db_url: str | None = None, force_local: bool = False) -> Path:
@@ -167,10 +175,13 @@ def create_backup(
     timestamp = datetime.now(UTC).strftime(BACKUP_TIMESTAMP_FMT)
     target_file = b_dir / f"{BACKUP_PREFIX}{timestamp}{BACKUP_SUFFIX}"
 
-    # Prepare command: pg_dump --dbname <url> -F c -f <target_file>
-    # Pass password via PGPASSWORD environment variable when possible to avoid command-line exposure
+    # pg_dump --dbname <connection without its password> -F c -f <target_file>; the password travels in
+    # PGPASSWORD, never on the command line (every user of a server can read each process's arguments).
     env = os.environ.copy()
-    cmd = [str(pg_dump_bin), "--dbname", resolved_url, "-F", "c", "-f", str(target_file)]
+    dbname, password = split_password(resolved_url)
+    if password is not None:
+        env["PGPASSWORD"] = password
+    cmd = [str(pg_dump_bin), "--dbname", dbname, "-F", "c", "-f", str(target_file)]
 
     log.info("backup.started", target=str(target_file))
     try:

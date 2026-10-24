@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 import respx
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
@@ -124,6 +126,7 @@ async def test_concurrent_mcp_http_clients_and_caller_tracking(
         assert r_bad_token.status_code == 401
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="the PowerShell watchdog; Linux: tests/test_linux_server.py")
 def test_watchdog_restart_and_alert_on_failure(tmp_path: Path) -> None:
     """Acceptance 2: Watchdog in test mode detects dead farm, restarts, and records alert.
 

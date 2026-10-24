@@ -5,6 +5,7 @@ __pycache__/
 !.env.example
 .claude/worktrees/
 config/registry.owner.yaml
+config/registry.server.yaml
 
 # owner registry backups (contain account labels)
 config/*.bak-*

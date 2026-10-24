@@ -14,11 +14,13 @@ reproduced in ``tests/test_db_schema.py``:
   retried for 30 s. pgserver's ``pg_ctl`` gives up after 10 s (``TimeoutExpired``) and leaves a half-started
   postmaster behind, so a durable (``fsync = on``) database could not restart after a hard kill. Neither
   killing leftovers nor waiting helps: the holder is the server being started. The cure is not to put the log
-  inside the data directory: on Windows this module starts the postmaster itself with
+  inside the data directory: this module starts the postmaster itself with
   ``pg_ctl -l <FARM_DATA_DIR>/logs/<name>.log`` and lets pgserver attach to the running server. Crash
   recovery then works with ``fsync = on`` (the owner's runtime database) and ``fsync = off`` (throwaway test
   databases, where the skipped fsyncs only make tests faster). Reproduced and guarded by
-  ``tests/test_db_schema.py::test_local_server_restarts_after_a_hard_kill`` (both modes).
+  ``tests/test_db_schema.py::test_local_server_restarts_after_a_hard_kill`` (both modes). Linux has no such
+  clash, but starts the same way (with pgserver's Unix listen options: a domain socket, no TCP port), so the
+  log is in one place everywhere: capped, outside the data directory, and quoted when a start fails.
 * A ``postmaster.pid`` left by a dead server (or by a torn write, or naming a recycled PID) is removed.
 * A server that is still starting (``status`` not yet ``ready``) is waited for instead of asserted on.
 * pgserver's ``.handle_pids.json`` is rewritten when a crash left it empty or corrupt (it would otherwise
@@ -46,7 +48,7 @@ import psutil
 import structlog
 from pgserver._commands import POSTGRES_BIN_PATH
 from pgserver.postgres_server import PostgresServer, get_server
-from pgserver.utils import find_suitable_port
+from pgserver.utils import find_suitable_port, find_suitable_socket_dir
 
 from farm.settings import data_dir
 
@@ -303,10 +305,18 @@ def _prepare_pgdata(target: Path) -> None:
     _repair_handle_list(target)
 
 
+def _listen_options(target: Path) -> tuple[str, str]:
+    """Where the postmaster listens, as pgserver would start it: Windows a free TCP port on 127.0.0.1;
+    elsewhere a domain socket only (in ``pgdata``, or a short runtime directory if that path is too long)."""
+    if sys.platform == "win32":
+        return f'-h "{_LISTEN_HOST}"', f"-p {find_suitable_port(_LISTEN_HOST)}"
+    return '-h ""', f'-k "{find_suitable_socket_dir(target, PostgresServer.runtime_path)}"'
+
+
 def _start_postmaster(target: Path) -> None:
     """Start postgres with its log outside the data directory (see the module docstring), wait until ready."""
     logfile = _prepare_log(target)
-    port = find_suitable_port(_LISTEN_HOST)
+    listen, where = _listen_options(target)
     try:
         _pg_ctl(
             target,
@@ -314,9 +324,9 @@ def _start_postmaster(target: Path) -> None:
             "-t",
             str(_START_TIMEOUT_S),
             "-o",
-            f'-h "{_LISTEN_HOST}"',
+            listen,
             "-o",
-            f"-p {port}",
+            where,
             "-l",
             str(logfile),
             "start",
@@ -328,7 +338,7 @@ def _start_postmaster(target: Path) -> None:
             f"local postgres failed to start ({reason}); server log tail:\n{_log_tail(target)}"
         ) from None
     _wait_ready(target)
-    log.info("local_pg.started", pgdata=str(target), port=port, log=str(logfile))
+    log.info("local_pg.started", pgdata=str(target), listen=where, log=str(logfile))
 
 
 def _wait_ready(pgdata: Path, timeout: float = _READY_TIMEOUT_S) -> None:
@@ -365,9 +375,8 @@ def get_local_server(
             _clear_stale_pid(target)
         _prepare_pgdata(target)
         conf_changed = _apply_local_conf(target, durable=durable)
-        if not running and sys.platform == "win32":
+        if not running:
             _start_postmaster(target)
-        # elsewhere pgserver starts the server itself below (no log/crash-recovery clash outside Windows)
 
     server = get_server(target, cleanup_mode=None)  # attaches to the running server (or starts it)
 

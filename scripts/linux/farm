@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# `farm` in the owner's shell on the server (installed as /usr/local/bin/farm by install-server.sh): the
+# Farm's CLI, always as user farm, with the service's settings (/etc/harness-farm/farm.env), from the code dir.
+#   farm token create alice        farm ai login claude-02        farm db migrate
+set -euo pipefail
+
+APP="${FARM_APP_DIR:-/opt/harness-farm}"
+SETTINGS="${FARM_SETTINGS_FILE:-/etc/harness-farm/farm.env}"
+FARM_USER="${FARM_USER:-farm}"
+
+if [[ "$(id -un)" != "$FARM_USER" ]]; then
+    exec sudo -u "$FARM_USER" -H -- "$0" "$@"
+fi
+set -a
+# shellcheck source=/dev/null
+. "$SETTINGS"
+set +a
+cd "$APP"
+exec "$APP/.venv/bin/farm" "$@"

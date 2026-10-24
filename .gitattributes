@@ -1,0 +1,5 @@
+# Files that run on the Linux server keep LF line endings in every checkout, also on Windows (core.autocrlf):
+# a CRLF shell script fails as "bad interpreter", a CRLF unit or env file carries a stray \r into its values.
+*.sh text eol=lf
+scripts/linux/** text eol=lf
+deploy/** text eol=lf

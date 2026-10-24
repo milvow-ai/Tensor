@@ -56,6 +56,9 @@ app.add_typer(provider_app, name="provider")
 requests_app = typer.Typer(help="Integration requests: list, show, and resolve.")
 app.add_typer(requests_app, name="requests")
 
+member_app = typer.Typer(help="Team members: a Supabase sign-in and a membership of the tenant (Console).")
+app.add_typer(member_app, name="member")
+
 
 ALEMBIC_INI = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
 DEFAULT_REGISTRY = Path(__file__).resolve().parent.parent.parent / "config" / "registry.yaml"
@@ -120,6 +123,19 @@ def db_migrate(local: LocalOption = False) -> None:
         raise typer.Exit(code=1) from None
 
 
+@db_app.command(name="backup")
+def db_backup(local: LocalOption = False) -> None:
+    """Dump the database (pg_dump, custom format) into FARM_DATA_DIR/backups, kept 14 days; run it first."""
+    from farm.control.backup import create_backup
+
+    try:
+        target = create_backup(force_local=local)
+    except (FileNotFoundError, RuntimeError, TimeoutError) as exc:
+        print(f"db backup FAIL: {_safe(exc)}")
+        raise typer.Exit(code=1) from None
+    print(f"db backup ok: {target} ({target.stat().st_size} bytes)")
+
+
 @db_app.command(name="reset-local")
 def db_reset_local() -> None:
     """Drop and recreate the LOCAL embedded database (refuses when the configured URL is not local)."""
@@ -155,6 +171,13 @@ def configure_logging() -> None:
         # sys.stderr is looked up per logger, not captured once: swapping it later never leaves a dead stream.
         logger_factory=lambda *_: structlog.PrintLogger(file=sys.stderr),
         cache_logger_on_first_use=False,
+    )
+
+
+def _headless() -> bool:
+    """No browser can open here: Linux (a server, or SSH into one) without a graphical session."""
+    return sys.platform.startswith("linux") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
     )
 
 
@@ -340,6 +363,34 @@ def registry_export(
 def registry_schema() -> None:
     """Print the registry's JSON Schema (the Console builds its forms from it): ``... schema > file``."""
     typer.echo(json.dumps(export_json_schema(), indent=2))
+
+
+@registry_app.command(name="for-server")
+def registry_for_server(
+    source: Annotated[Path, typer.Argument(help="The PC's registry, e.g. config/registry.owner.yaml.")],
+    target: Annotated[Path, typer.Argument(help="Where to write it, e.g. config/registry.server.yaml.")],
+    data_dir: Annotated[
+        str, typer.Option("--data-dir", help="FARM_DATA_DIR on the server.")
+    ] = "/var/lib/harness-farm",
+) -> None:
+    """Rewrite the PC's registry for the Linux server: no Windows path or WSL, a login home per AI account."""
+    from farm.registry.server import server_registry_text
+
+    if target.resolve() == source.resolve():
+        raise _fail("the target must be a new file: the PC's registry is not changed", code=2)
+    try:
+        text, notes = server_registry_text(
+            source.read_text(encoding="utf-8"), source=str(source), data_dir=data_dir
+        )
+    except OSError as exc:
+        raise _fail(f"cannot read {source}: {exc.strerror or type(exc).__name__}") from None
+    except RegistryError as exc:
+        raise _fail(str(exc)) from None
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(text.encode("utf-8"))  # LF, no BOM: the server reads it
+    typer.echo(f"server registry written to {target} ({len(notes)} change(s))")
+    for note in notes:
+        typer.echo(f"  {note}")
 
 
 @app.command()
@@ -758,12 +809,20 @@ def ai_login(
         subprocess.run(["claude"], env=env)
     elif cli_name == "codex":
         env["CODEX_HOME"] = str(config_dir)
+        config_toml = config_dir / "config.toml"
+        if not config_toml.exists():
+            # The login stays in CODEX_HOME, not in a keyring (a server has none), as for codex-01 on the PC.
+            config_toml.write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
+        argv = ["codex", "login", *(["--device-auth"] if _headless() else [])]  # no browser: a code instead
         typer.echo(f"Account: {connection} (Codex)")
         typer.echo(f"Config directory: {config_dir}")
-        typer.echo(f"Command: CODEX_HOME={config_dir} codex login")
-        subprocess.run(["codex", "login"], env=env)
+        typer.echo(f"Command: CODEX_HOME={config_dir} {' '.join(argv)}")
+        subprocess.run(argv, env=env)
     elif cli_name in ("agy", "gemini"):
         typer.echo(f"Account: {connection} (Antigravity)")
+        # Without a D-Bus session agy (Linux) keeps the login in $HOME/.gemini/..., which is where the Farm's
+        # runs (started without one) look for it; a desktop or SSH session bus would put it in a keyring.
+        env.pop("DBUS_SESSION_BUS_ADDRESS", None)
         if meta.get("home"):
             # agy has no config-dir flag or variable; it keeps its login under the user's home directory, so
             # this account gets its own home (the executor sets the same variables when it runs jobs).
@@ -1181,6 +1240,88 @@ def token_revoke(
         raise typer.Exit(code=1)
 
 
+@member_app.command(name="add")
+def member_add(
+    email: Annotated[str, typer.Argument(help="The member's e-mail address (their Console sign-in).")],
+    role: Annotated[str, typer.Option(help="owner, admin or member.")] = "member",
+    name: Annotated[str | None, typer.Option(help="Display name.")] = None,
+) -> None:
+    """Give a person a Console sign-in (no e-mail is sent) and a membership of Milvow."""
+    import httpx
+
+    from farm.settings import load_env
+    from farm.tenancy import Role
+    from farm.tenancy.members import MemberError, add_member, check_email, ensure_auth_user
+
+    load_env()
+    try:
+        address = check_email(email)
+    except MemberError as exc:
+        raise _fail(str(exc), code=2) from None
+    if role not in {r.value for r in Role}:
+        raise _fail("role must be owner, admin or member", code=2)
+    member_role = Role(role)
+    supabase_url, service_key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not service_key:
+        raise _fail("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set: sign-ins live in Supabase")
+    try:
+        auth_id, created = ensure_auth_user(address, supabase_url=supabase_url, service_key=service_key)
+    except (MemberError, httpx.HTTPError) as exc:
+        raise _fail(f"cannot set up the sign-in for {address}: {_safe(exc)}") from None
+
+    async def main() -> None:
+        ctx = await _context(False)
+        try:
+            await add_member(ctx.pool, address, member_role, auth_id, display_name=name)
+        finally:
+            await ctx.aclose()
+
+    _run_farm(main())
+    how = "sign-in created" if created else "sign-in existed"
+    typer.echo(f"{address} is a {member_role.value} of Milvow ({how}).")
+    typer.echo("  Console: they open its login page and ask for a link.")
+    typer.echo("  IDE: farm token create <their-name>, then farm connect claude-code (send them both).")
+
+
+@member_app.command(name="list")
+def member_list() -> None:
+    """The members of Milvow, with their role and whether their sign-in is linked."""
+    from farm.tenancy.members import list_members
+
+    async def main() -> "list[Any]":
+        ctx = await _context(False)
+        try:
+            return await list_members(ctx.pool)
+        finally:
+            await ctx.aclose()
+
+    members = _run_farm(main())
+    if not members:
+        typer.echo("no members yet: farm member add <email>")
+    for member in members:
+        linked = "sign-in linked" if member.signed_up else "no sign-in"
+        typer.echo(f"{member.email}  {member.role.value}  {linked}  since {member.since:%Y-%m-%d}")
+
+
+@member_app.command(name="remove")
+def member_remove(
+    email: Annotated[str, typer.Argument(help="The member's e-mail address.")],
+) -> None:
+    """End a membership (the sign-in then sees nothing); revoke their tokens with farm token revoke."""
+    from farm.tenancy.members import remove_member
+
+    async def main() -> bool:
+        ctx = await _context(False)
+        try:
+            return await remove_member(ctx.pool, email.strip())
+        finally:
+            await ctx.aclose()
+
+    if not _run_farm(main()):
+        raise _fail(f"{email} is not a member of Milvow")
+    typer.echo(f"{email} is no longer a member of Milvow (revoke their tokens: farm token revoke <name>)")
+
+
 @alert_app.command(name="send")
 def alert_send(
     message: Annotated[str, typer.Option("--message", "-m", help="Alert message text.")] = "",
@@ -1236,6 +1377,14 @@ def connect_command(
     host: Annotated[str | None, typer.Option(help="Farm HTTP host.")] = None,
     port: Annotated[int | None, typer.Option(help="Farm HTTP port.")] = None,
     env_var: Annotated[str, typer.Option(help="Environment variable holding the token.")] = "FARM_TOKEN",
+    url_option: Annotated[
+        str | None,
+        typer.Option(
+            "--url",
+            help="The endpoint clients use, e.g. https://harness-farm.<tailnet>.ts.net/mcp on a server "
+            "(default: FARM_PUBLIC_URL, else http://<host>:<port>/mcp).",
+        ),
+    ] = None,
 ) -> None:
     """Print or write the snippet to attach an IDE or agent to the running Farm."""
     from farm.settings import http_host as get_http_host
@@ -1246,7 +1395,9 @@ def connect_command(
     h = host or get_http_host()
     p = port or get_http_port()
     path = get_http_path()
-    url = f"http://{h}:{p}{path}"
+    url = url_option or os.environ.get("FARM_PUBLIC_URL") or f"http://{h}:{p}{path}"
+    if not url.startswith(("http://", "https://")):
+        raise _fail(f"--url must be an http(s) URL, got {url!r}", code=2)
 
     home = Path.home()
     env = os.environ

@@ -1,11 +1,20 @@
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 DEFAULT_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 
-def load_env(path: Path = DEFAULT_ENV_PATH) -> None:
+def env_file() -> Path:
+    """The ``.env`` the Farm reads (and ``farm set-secret`` writes): ``FARM_ENV_FILE`` if set, else ``.env``
+    in the repository root. A server sets it to keep its secrets out of the read-only code checkout."""
+    override = os.environ.get("FARM_ENV_FILE")
+    return Path(override) if override else DEFAULT_ENV_PATH
+
+
+def load_env(path: Path | None = None) -> None:
+    path = env_file() if path is None else path
     if path.is_file():
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -35,10 +44,27 @@ def require(name: str) -> str:
     return val
 
 
+def default_data_dir() -> Path:
+    """Where the Farm keeps its state when FARM_DATA_DIR is not set: ``D:/farm-data`` on Windows (the owner's
+    PC), ``$XDG_DATA_HOME/harness-farm`` (``~/.local/share/harness-farm``) elsewhere. A server sets
+    FARM_DATA_DIR (``/var/lib/harness-farm``, see ``deploy/farm.env.example``)."""
+    if sys.platform == "win32":
+        return Path("D:/farm-data")
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "harness-farm"
+
+
+def data_dir_path() -> Path:
+    """FARM_DATA_DIR, else :func:`default_data_dir`; neither read from ``.env`` nor created (see
+    :func:`data_dir`)."""
+    raw = os.environ.get("FARM_DATA_DIR")
+    return Path(raw) if raw else default_data_dir()
+
+
 def data_dir() -> Path:
-    """Return the Farm data directory (env FARM_DATA_DIR, default D:/farm-data), created on demand."""
+    """Return the Farm data directory (FARM_DATA_DIR, else :func:`default_data_dir`), created on demand."""
     load_env()
-    path = Path(os.environ.get("FARM_DATA_DIR") or "D:/farm-data")
+    path = data_dir_path()
     path.mkdir(parents=True, exist_ok=True)
     return path
 

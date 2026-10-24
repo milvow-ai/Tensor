@@ -69,6 +69,7 @@ from farm import __version__
 from farm.executors.base import ConnectionView, ErrorKind
 from farm.registry.models import McpConnectionOverride, McpProviderSpec
 from farm.secrets import AuthRefError, redact, register_secret, resolve_auth
+from farm.settings import data_dir_path
 
 logger = structlog.get_logger(__name__)
 
@@ -583,6 +584,23 @@ class FarmOAuth(OAuth):
                 except StopAsyncIteration:
                     return
 
+    async def redirect_handler(self, authorization_url: str) -> None:
+        # A server has no browser: the URL is also printed, to be opened on any machine. With a fixed
+        # FARM_OAUTH_CALLBACK_PORT and `ssh -L <port>:localhost:<port>` the redirect reaches this process.
+        who = self._connection_id or "the account"
+        print(f"Open this URL to log {who} in:\n  {authorization_url}", file=sys.stderr)
+        await super().redirect_handler(authorization_url)
+
+
+def oauth_callback_port() -> int | None:
+    """``FARM_OAUTH_CALLBACK_PORT``: a fixed port for the login redirect (default: a free one per login)."""
+    raw = os.environ.get("FARM_OAUTH_CALLBACK_PORT", "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or not 1024 <= int(raw) <= 65535:
+        raise ValueError(f"FARM_OAUTH_CALLBACK_PORT must be a port number from 1024 to 65535, got {raw!r}")
+    return int(raw)
+
 
 class HeadlessOAuth(FarmOAuth):
     """OAuth that never opens a browser: serving a call must not hang on an interactive login."""
@@ -790,7 +808,7 @@ def build_transport(
         # The server's stderr goes to its own log file, never into the Farm's console: a 24/7 Farm keeps
         # one log per connection, and a captured parent stdio (no fileno, e.g. under pytest) cannot break
         # the launch.
-        log_dir = Path(os.environ.get("FARM_DATA_DIR", "D:/farm-data")) / "logs" / "mcp"
+        log_dir = data_dir_path() / "logs" / "mcp"
         log_dir.mkdir(parents=True, exist_ok=True)
         return StdioTransport(
             command=spec.command,
@@ -814,6 +832,7 @@ def build_transport(
             client_name=f"Harness Farm ({connection.id})",
             connection_id=connection.id,
             refresh_lock=refresh_lock,
+            callback_port=oauth_callback_port() if interactive else None,
         )
     return RemoteMCPServer(url=url, transport=spec.transport, headers=headers, auth=auth).to_transport()
 

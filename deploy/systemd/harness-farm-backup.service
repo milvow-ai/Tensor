@@ -1,0 +1,16 @@
+[Unit]
+Description=Harness Farm state backup (encrypted: CLI logins, OAuth token stores, secrets, registry)
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/harness-farm/farm.env
+ExecStart=/opt/harness-farm/scripts/linux/backup-state.sh
+Nice=10
+IOSchedulingClass=idle
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/backups/harness-farm

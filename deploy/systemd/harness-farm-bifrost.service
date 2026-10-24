@@ -1,0 +1,23 @@
+[Unit]
+Description=Bifrost LLM gateway for Harness Farm (127.0.0.1:8080; Hermes and the llm executor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=farm
+Group=farm
+EnvironmentFile=/etc/harness-farm/farm.env
+ExecStart=/opt/harness-farm/scripts/linux/start-bifrost.sh
+Restart=always
+RestartSec=5
+UMask=0077
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/harness-farm
+
+[Install]
+WantedBy=multi-user.target

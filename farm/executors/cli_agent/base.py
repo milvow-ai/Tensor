@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult
+from farm.settings import data_dir_path
 
 _current_effort: ContextVar[str | None] = ContextVar("_current_effort", default=None)
 
@@ -641,7 +642,7 @@ class BaseCliAgentExecutor:
                         return False, f"Invalid edit_roots entry: {r!r} (must be an absolute path)", None
                     roots.append(p_entry.resolve())
             else:
-                farm_data = Path(os.environ.get("FARM_DATA_DIR", "D:/farm-data"))
+                farm_data = data_dir_path()
                 roots = [(farm_data / "workspaces").resolve()]
 
             def _is_relative_to_root(path: Path, root: Path) -> bool:

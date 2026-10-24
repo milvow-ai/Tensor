@@ -20,11 +20,29 @@ step() {
     fi
 }
 
+# Quarantine (as scripts/check.ps1): tests/quarantine.txt lists tests that fail on the baseline for a known,
+# registered reason. They do not block the gate, but they still run and their result is printed.
+quarantine=()
+if [[ -f tests/quarantine.txt ]]; then
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -n "$line" ]] && quarantine+=("$line")
+    done <tests/quarantine.txt
+fi
+deselect=()
+for test_id in "${quarantine[@]}"; do deselect+=(--deselect "$test_id"); done
+
 # Environment switch: CHECK_ONLY_SECRETS=1 skips ruff/mypy/pytest
 if [[ "${CHECK_ONLY_SECRETS:-0}" != "1" ]]; then
     step "ruff"   uv run ruff check farm tests
     step "mypy"   uv run mypy
-    step "pytest" uv run pytest -q -p no:cacheprovider
+    step "pytest" uv run pytest -q -p no:cacheprovider "${deselect[@]}"
+    if [[ ${#quarantine[@]} -gt 0 ]]; then
+        qsum=$(uv run pytest -q -p no:cacheprovider "${quarantine[@]}" 2>&1 | grep -E '[0-9]+ (passed|failed)' | tail -n 1 || true)
+        echo "INFO  quarantine: ${#quarantine[@]} test(s) from tests/quarantine.txt, not blocking: ${qsum}"
+    fi
 fi
 
 # Secret grep over tracked + untracked (non-ignored) files

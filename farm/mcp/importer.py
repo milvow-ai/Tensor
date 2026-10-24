@@ -3,7 +3,7 @@
 Sources (every one is read, never changed):
 
 * ``claude-desktop``  ``%APPDATA%\\Claude\\claude_desktop_config.json`` (``~/Library/Application
-  Support/Claude/...`` on macOS, ``~/.config/Claude/...`` elsewhere): ``mcpServers``;
+  Support/Claude/...`` on macOS, ``$XDG_CONFIG_HOME/Claude/...`` (``~/.config``) elsewhere): ``mcpServers``;
 * ``claude-code``     ``~/.claude.json``: ``mcpServers`` and the ``mcpServers`` of every project;
 * ``codex``           ``$CODEX_HOME/config.toml`` (``~/.codex/config.toml``): ``[mcp_servers.<name>]``;
 * ``file:<path>``     a ``.toml`` in Codex's format, or JSON in the ``mcpServers`` format (Claude, Cursor).
@@ -114,7 +114,8 @@ def source_path(source: str, *, home: Path | None = None, environ: Mapping[str, 
             )
         if sys.platform == "darwin":
             return home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
-        return home / ".config" / "Claude" / "claude_desktop_config.json"
+        config_home = Path(env["XDG_CONFIG_HOME"]) if env.get("XDG_CONFIG_HOME") else home / ".config"
+        return config_home / "Claude" / "claude_desktop_config.json"
     if source == "claude-code":
         return home / ".claude.json"
     if source == "codex":

@@ -1348,6 +1348,7 @@ def test_farm_ai_login_starts_each_cli_in_its_own_home(
             )
     launched: list[tuple[list[str], dict[str, str]]] = []
     monkeypatch.setattr("subprocess.run", lambda argv, **kw: launched.append((argv, kw["env"])))
+    monkeypatch.setattr("farm.control.cli._headless", lambda: False)  # a desktop: codex opens its browser login
 
     run = CliRunner()
     outputs = [run.invoke(app, ["ai", "login", conn_id]) for conn_id in ("agy-02", "codex-02", "agy-01")]

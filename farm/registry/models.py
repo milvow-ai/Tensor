@@ -19,7 +19,7 @@ from collections import Counter
 from collections.abc import Iterator
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Any, Literal, get_args
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -298,7 +298,9 @@ class ConnectionSpec(_Model):
                 r_str = str(r).strip()
                 if not r_str or r_str == ".":
                     raise ValueError(f"edit_roots entry cannot be empty or '.': {r!r}")
-                if not Path(r_str).is_absolute():
+                # Absolute on either OS: one registry (and one database) serves the Windows PC and the Linux
+                # server; the edit-mode check at run time takes only what is absolute where it runs.
+                if not (PurePosixPath(r_str).is_absolute() or PureWindowsPath(r_str).is_absolute()):
                     raise ValueError(f"edit_roots entry must be an absolute path: {r!r}")
         return meta
 
