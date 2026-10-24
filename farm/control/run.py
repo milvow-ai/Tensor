@@ -58,7 +58,7 @@ from farm.manager.scheduler import ManagerScheduler
 from farm.mcp.store import DbDirectory
 from farm.mcp.sync import sync_all
 from farm.settings import data_dir, http_host, http_path, http_port
-from farm.tenancy import TokenIdentity, current_tenant, use_tenant
+from farm.tenancy import MILVOW_TENANT_ID, TokenIdentity, current_tenant, use_tenant
 from farm.tenancy.active import for_each_tenant
 
 log = structlog.get_logger(__name__)
@@ -340,7 +340,10 @@ async def run_farm(
     enable_keepawake(away_mode=True, data_directory=data_dir())
 
     job_manager = JobManager(ctx)
-    app = await create_farm_app(ctx, job_manager=job_manager, path=target_path)
+    # One tool surface per process until the per-tenant catalogue (A1, D51): it is built from tenant #1's MCP
+    # providers. Calls through it still run for the caller's tenant (TenantMiddleware sets it per request).
+    with use_tenant(MILVOW_TENANT_ID):
+        app = await create_farm_app(ctx, job_manager=job_manager, path=target_path)
 
     heartbeat_writer = HeartbeatWriter(
         component="command_consumer",

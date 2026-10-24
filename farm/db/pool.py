@@ -34,8 +34,22 @@ loop_factory = asyncio.SelectorEventLoop
 
 
 def run[T](main: Coroutine[Any, Any, T]) -> T:
-    """``asyncio.run`` on a selector loop: the entry point for any process that opens the pool."""
-    return asyncio.run(main, loop_factory=loop_factory)
+    """``asyncio.run`` on a selector loop: the entry point for any process that opens the pool.
+
+    The shared pool this run opened is closed before the loop shuts down, also when ``main`` fails: an open
+    pool leaves worker tasks that never finish cancelling, so a start-up error would hang the process instead
+    of exiting (D50). A pool that already existed belongs to another loop and is left alone.
+    """
+    outer = _global_pool
+
+    async def _main() -> T:
+        try:
+            return await main
+        finally:
+            if _global_pool is not None and _global_pool is not outer:
+                await close_pool()
+
+    return asyncio.run(_main(), loop_factory=loop_factory)
 
 
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
