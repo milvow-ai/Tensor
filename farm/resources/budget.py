@@ -22,6 +22,7 @@ from farm.manager.budgets import (
     PolicyDecision,
     check_budget_thresholds,
     check_paid_call,
+    decide_hold,
     get_month_to_date_spend,
 )
 
@@ -107,49 +108,15 @@ async def reserve(
         row = await cur.fetchone()
     outcome: dict[str, Any] = row[0] if row is not None and row[0] is not None else {}
 
-    if outcome.get("unknown_connection"):
-        return BudgetHold(
-            PolicyDecision(
-                allowed=False,
-                reason=f"Unknown connection '{connection_id}'",
-                error_kind="unknown_connection",
-            )
-        )
-    if "blocked" in outcome:
-        scope = str(outcome["blocked"])
-        budget_usd = Decimal(str(outcome["budget"]))
-        spend = Decimal(str(outcome["spend"]))
-        held = Decimal(str(outcome.get("held", 0)))
-        log.warning(
-            "budget.hard_stop_exceeded",
-            scope=scope,
-            ref=outcome.get("ref"),
-            budget=float(budget_usd),
-            spend=float(spend),
-            held=float(held),
-            cost=float(cost),
-        )
-        extra = f" + in flight ${held}" if held > 0 else ""
-        return BudgetHold(
-            PolicyDecision(
-                allowed=False,
-                reason=(
-                    f"hard stop: {scope} budget of ${budget_usd} exceeded "
-                    f"(spend ${spend}{extra} + est ${cost})"
-                ),
-                scope=scope,
-                budget_usd=budget_usd,
-                current_spend_usd=spend,
-                estimated_cost_usd=cost,
-                error_kind="budget_exhausted",
-            )
-        )
+    decision, hold_id = decide_hold(connection_id, cost, outcome)
+    if hold_id is None:
+        return BudgetHold(decision)
 
     try:
         await check_budget_thresholds(pool, now=current)
     except Exception:
         log.warning("budget.threshold_check_failed", exc_info=True)
-    return BudgetHold(PolicyDecision(allowed=True, estimated_cost_usd=cost), UUID(str(outcome["id"])))
+    return BudgetHold(decision, hold_id)
 
 
 async def release(pool: DbPool, hold_id: UUID) -> None:

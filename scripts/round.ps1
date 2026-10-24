@@ -91,10 +91,14 @@ if ($Action -eq 'work') {
     $m = $(if ($Model) { $Model } else { 'sonnet' })
     $env:CLAUDE_CONFIG_DIR = $ClaudeConfigDir
     $prompt = "You are a builder working in the git worktree $Wt. Execute the brief in $Brief exactly, following its rules. Touch only the files it lets you own. Never read any .env file. Never run git add, commit, push, reset, checkout or stash. Run every command in the foreground and wait for it. Finish with the reply format the brief asks for."
-    Push-Location $Wt
-    $raw = $prompt | claude -p --model $m --permission-mode bypassPermissions --output-format json 2>&1 | Out-String
-    Pop-Location
-    [IO.File]::WriteAllText("$RunDir\claude.json", $raw)
+    # Prompt in and output out through files, never through a PowerShell pipeline: a large or noisy CLI output piped into
+    # Out-String crashed the host with a StackOverflowException (round f1b, 2026-10-24).
+    [IO.File]::WriteAllText("$RunDir\prompt.txt", $prompt)
+    $claudeExe = (Get-Command claude -ErrorAction Stop).Source
+    $p = Start-Process -FilePath $claudeExe -WorkingDirectory $Wt -NoNewWindow -PassThru -Wait `
+      -ArgumentList @('-p', '--model', $m, '--permission-mode', 'bypassPermissions', '--output-format', 'json') `
+      -RedirectStandardInput "$RunDir\prompt.txt" -RedirectStandardOutput "$RunDir\claude.json" -RedirectStandardError "$RunDir\claude.err.txt"
+    $raw = [IO.File]::ReadAllText("$RunDir\claude.json")
     $b = $raw
     $i = $raw.IndexOf('{')  # the result object's key order varies (e.g. starts with "duration_api_ms")
     if ($i -ge 0) {
