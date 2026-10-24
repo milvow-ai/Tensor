@@ -9,6 +9,12 @@ agree without a coordinator:
 ``failed``         the last execution failed; failures are never cached (the next caller retries)
 =================  =========================================================================================
 
+A caller that waited for a running leader gets that leader's outcome even when the answer is not cached
+(TTL 0, ``found`` not true: ``expires_at`` is the finish time then, so a plain reader sees a stale row). Such
+an outcome stays joinable for ``JOIN_GRACE_S`` after it was published, independent of the cache TTL. A
+capability that is never cached (TTL 0) publishes no data at all (``withheld``): its answers are not kept in
+the database, so a waiter cannot join and runs the call itself.
+
 ``claim`` makes the caller the leader (insert, or a compare-and-swap takeover of a failed / expired /
 abandoned row), serves it a cached answer, or makes it wait for the leader that is running now. A leader
 that dies leaves a ``running`` row whose lease runs out; the next caller takes it over, so nothing waits for
@@ -22,7 +28,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Final
 from uuid import UUID
 
 from psycopg.types.json import Jsonb
@@ -30,6 +36,9 @@ from pydantic import BaseModel
 
 from farm.db.pool import DbPool
 from farm.resources.trajectory import to_jsonable
+
+JOIN_GRACE_S: Final = 30.0
+"""How long after publishing, a waiter that saw the leader running may still join its (uncached) outcome."""
 
 
 class StoredResult(BaseModel):
@@ -39,6 +48,9 @@ class StoredResult(BaseModel):
     provider: str
     connection_id: str
     found: bool | None = None
+    withheld: bool = False
+    """The answer was deliberately not stored (the capability is never cached, e.g. an AI answer): ``data`` is
+    empty and a waiter cannot join this outcome."""
 
 
 @dataclass(frozen=True)
@@ -120,11 +132,13 @@ async def claim(
         row_id, status, result, row_run_id, expires_at = row
         live = expires_at is not None and expires_at > now
 
-        if status == "succeeded" and live:
+        if status == "succeeded" and expires_at is not None:
             stored = StoredResult.model_validate(result)
-            if observed_running is not None:
+            joinable = observed_running is not None and not stored.withheld
+            if joinable and expires_at + timedelta(seconds=JOIN_GRACE_S) > now:
                 return Joined(stored=stored, error=None, run_id=row_run_id)
-            return Hit(stored=stored, expires_at=expires_at, run_id=row_run_id)
+            if live:
+                return Hit(stored=stored, expires_at=expires_at, run_id=row_run_id)
         if status == "running" and live:
             observed_running = row_run_id
             await asyncio.sleep(poll_s)

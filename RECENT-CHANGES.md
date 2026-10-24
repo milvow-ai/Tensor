@@ -5,6 +5,23 @@ tools live in `updates/`. The plan and its status live in `.orchestrate/state.md
 
 ---
 
+## 2026-10-24 (later) — Tenancy schema merged and the live database migrated
+
+- **F1A merged** (`b442e94`, full gate green): `tenants`, `users`, `memberships`; `workspace_id` renamed to `tenant_id` on every
+  tenant-owned table, with FKs and tenant-first indexes; Milvow is tenant #1 (`00000000-0000-0000-0000-000000000001`).
+  Expand step only: defaults stay until F1B passes the tenant explicitly and enforces RLS.
+- **Live Supabase database migrated 0013 → 0014** (Postgres 17.11):
+  1. Logical backup first (the local `pg_dump` is v16 and cannot dump a v17 server): every public table to CSV with row counts
+     and SHA-256 — `D:\farm-data\backups\logical-20261024T004114Z` (31 tables, 2,260 rows, revision 0013).
+  2. Farm stopped (whole process tree) → `farm db migrate` → Farm started (PID 488016) → health OK.
+  3. Verified: revision 0014; tenant `milvow` present; every table has `tenant_id` except the platform tables and
+     `client_tokens` (D34); row counts unchanged except `mcp_tools` 189 → 192 (the tool-catalog refresh at start-up).
+  4. Live: `farm ai test agy-01` → PONG; `farm ai test claude-02` → PONG; `clay__get-credits-available` answers.
+- **Started:** fix rounds Q0D (routing core), Q0E (commands, alerts, runs), Q0F (MCP relay, OAuth, Console numbers) on
+  Claude account 2, migrations 0015 → 0016 → 0017.
+
+---
+
 ## 2026-10-24 (later) — Quality baseline: first merges, verified live
 
 **Merged into `effort2/stage1-saas` (each behind the full gate: ruff, mypy, all tests, secret scan):**

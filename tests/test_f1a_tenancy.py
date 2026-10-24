@@ -146,7 +146,7 @@ def test_downgrade_upgrade_round_trip_with_data(scratch_db: Callable[[], str]) -
         assert _rows(url, "select tenant_id::text, rr_cursor from public.pool_state") == [(MILVOW, 3)]
         assert _rows(url, "select tenant_id::text from public.integration_requests") == [(MILVOW,)]
         assert _rows(url, "select tenant_id::text from public.capability_requests") == [(MILVOW,)]
-        assert _tenant_tables(url) == sorted([*tables_before, "memberships"])
+        assert _tenant_tables(url) == sorted([*tables_before, "memberships", "budget_reservations"])
 
         command.downgrade(cfg, "0013")
         assert _rows(url, "select to_regclass('public.tenants')::text") == [(None,)]

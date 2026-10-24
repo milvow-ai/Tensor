@@ -281,10 +281,12 @@ async def test_expire_releases_only_overdue_reservations(pool: DbPool) -> None:
     assert (await reservation(pool, fresh))["status"] == "reserved"
     assert (await reservation(pool, done))["status"] == "committed"
     assert await ledger.expire(pool) == 0
-    await ledger.commit(pool, old, 4)  # too late: the reservation is gone
+    await ledger.commit(pool, old, 4)  # late: the call ran, so its usage is recorded (Q0-13), reserved stays 3
     await ledger.release(pool, old)
-    assert await usage(pool) == (1, 3)
-    assert await ledger.reserve(pool, "c", "credits", 6, uuid4()) is not None  # 10 - 1 - 3 left
+    assert await usage(pool) == (5, 3)
+    assert (await reservation(pool, old))["status"] == "committed"
+    assert await ledger.reserve(pool, "c", "credits", 6, uuid4()) is None  # 10 - 5 - 3 left: the late usage counts
+    assert await ledger.reserve(pool, "c", "credits", 2, uuid4()) is not None
 
 
 # --- period arithmetic (SQL function, pure) -----------------------------------------------------------------
