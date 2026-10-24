@@ -1460,7 +1460,7 @@ async def test_a_job_fails_as_bad_request_when_the_farm_has_no_ask_ai_capability
 
 # --- the new tables follow the schema contract (CONTEXT section 3) -----------------------------------------------------------------
 
-DEFAULT_WORKSPACE = "00000000-0000-0000-0000-000000000001"
+DEFAULT_TENANT = "00000000-0000-0000-0000-000000000001"
 AI_TABLE_COLUMNS = {
     "ai_conversations": {
         "id", "ai", "account", "native_session_id", "turns", "tokens", "cost", "last_job_id", "created_at",
@@ -1475,7 +1475,7 @@ AI_TABLE_COLUMNS = {
 }
 
 
-def test_the_ai_tables_have_their_columns_a_workspace_id_default_and_row_level_security(db_url: str) -> None:
+def test_the_ai_tables_have_their_columns_a_tenant_id_default_and_row_level_security(db_url: str) -> None:
     with psycopg.connect(db_url, autocommit=True) as conn:
         columns = conn.execute(
             "select table_name, column_name, data_type, is_nullable, column_default "
@@ -1491,8 +1491,8 @@ def test_the_ai_tables_have_their_columns_a_workspace_id_default_and_row_level_s
     for table, expected in AI_TABLE_COLUMNS.items():
         present = {c[1] for c in columns if c[0] == table}
         assert expected <= present, f"{table}: missing {expected - present}"
-        (workspace,) = [c for c in columns if c[0] == table and c[1] == "workspace_id"]
-        assert workspace[2] == "uuid" and workspace[3] == "NO" and DEFAULT_WORKSPACE in workspace[4]
+        (tenant,) = [c for c in columns if c[0] == table and c[1] == "tenant_id"]
+        assert tenant[2] == "uuid" and tenant[3] == "NO" and DEFAULT_TENANT in tenant[4]
     assert rls == {"ai_conversations": True, "ai_jobs": True}
 
 

@@ -150,7 +150,7 @@ KEY_COLUMNS: dict[str, set[str]] = {
     "ai_jobs": {"id", "conversation_id", "turn", "ai", "account", "mode", "state", "timeout_s", "attempts", "run_id"},
 }
 FAKE_PW = "hunter2-not-a-real-password"  # sentinel that must never appear in CLI output
-DEFAULT_WORKSPACE = "00000000-0000-0000-0000-000000000001"
+DEFAULT_TENANT = "00000000-0000-0000-0000-000000000001"
 FUNCTIONS = {
     "farm_period_start",
     "farm_reserve",
@@ -178,16 +178,18 @@ def test_every_table_exists_with_key_columns(db_url: str) -> None:
         assert expected <= columns[table], f"{table}: missing {expected - columns[table]}"
 
 
-def test_every_table_has_workspace_id_default(db_url: str) -> None:
+def test_every_table_has_tenant_id_default(db_url: str) -> None:
     rows = _rows(
         db_url,
         "select table_name, data_type, is_nullable, column_default from information_schema.columns "
-        "where table_schema = 'public' and column_name = 'workspace_id'",
+        "where table_schema = 'public' and column_name = 'tenant_id'",
     )
-    assert {r[0] for r in rows} == set(KEY_COLUMNS)
+    # tables added after the M1a contract also carry it; memberships has no default (its tenant is always explicit)
+    assert {r[0] for r in rows} == set(KEY_COLUMNS) | {"pool_state", "integration_requests", "memberships"}
     for table, data_type, nullable, default in rows:
         assert data_type == "uuid" and nullable == "NO", table
-        assert DEFAULT_WORKSPACE in default, table
+        if table != "memberships":
+            assert DEFAULT_TENANT in default, table
 
 
 def test_ledger_functions_exist(db_url: str) -> None:
@@ -261,7 +263,7 @@ async def test_run_events_and_requests_checks(pool: DbPool) -> None:
             )
 
 
-async def test_capability_request_hash_is_unique_per_workspace(pool: DbPool) -> None:
+async def test_capability_request_hash_is_unique_per_tenant(pool: DbPool) -> None:
     async with pool.connection() as conn:
         await conn.execute(
             "insert into capability_requests (request_hash, capability, status) values ('h1', 'cap', 'pending')"

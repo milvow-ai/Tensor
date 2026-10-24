@@ -1,6 +1,6 @@
 """Result cache and cross-process single-flight ("flight"), both on one table: ``capability_requests``.
 
-One row per ``request_hash`` (unique per workspace) is the whole protocol, so any number of Farm processes
+One row per ``request_hash`` (unique per tenant) is the whole protocol, so any number of Farm processes
 agree without a coordinator:
 
 =================  =========================================================================================
@@ -103,7 +103,7 @@ async def claim(
                 "insert into public.capability_requests "
                 "(request_hash, capability, params, status, run_id, expires_at) "
                 "values (%s, %s, %s, 'running', %s, %s) "
-                "on conflict (workspace_id, request_hash) do nothing returning id",
+                "on conflict (tenant_id, request_hash) do nothing returning id",
                 (request_hash, capability, Jsonb(to_jsonable(params, None)), run_id, lease_until),
             )
             inserted = await cur.fetchone()

@@ -188,7 +188,7 @@ async def replace_tools(
                 "insert into public.mcp_tools (provider, name, description, input_schema, output_schema, "
                 "annotations, definition, schema_hash, synced_at) "
                 "values (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                "on conflict (workspace_id, provider, name) do update set "
+                "on conflict (tenant_id, provider, name) do update set "
                 "description = excluded.description, "
                 "input_schema = excluded.input_schema, output_schema = excluded.output_schema, "
                 "annotations = excluded.annotations, definition = excluded.definition, "
