@@ -14,6 +14,7 @@ import type {
   Connection,
   ConnectionQuery,
   ConnectionSortKey,
+  ConnectPublicKeyJwk,
   CostPerResultRow,
   EvidenceQuery,
   EvidenceRow,
@@ -24,6 +25,7 @@ import type {
   FarmOverview,
   IdlePaidRow,
   JsonObject,
+  LoginSession,
   Page,
   PoolDetail,
   PoolOverviewRow,
@@ -419,6 +421,155 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
       w.mcpTools = w.mcpTools.filter((t) => t.provider !== spec.provider_id);
       return { ok: true, provider_id: spec.provider_id };
     }
+    case "add_accounts": {
+      const spec = commandPayloadSchemas.add_accounts.parse(rawPayload);
+      const prov = w.providers.find((p) => p.id === spec.provider_id);
+      if (!prov) throw new Rejection(`Provider "${spec.provider_id}" not found.`);
+
+      const existingInPool = w.connections.filter((c) => c.providerId === spec.provider_id);
+      let nextNum = existingInPool.length + 1;
+
+      const connectionIds: string[] = [];
+      const sessionIds: string[] = [];
+
+      for (let i = 0; i < spec.count; i++) {
+        let connId = `${spec.provider_id}-${String(nextNum).padStart(2, "0")}`;
+        while (w.connections.some((c) => c.id === connId)) {
+          nextNum++;
+          connId = `${spec.provider_id}-${String(nextNum).padStart(2, "0")}`;
+        }
+        nextNum++;
+
+        const email = spec.emails?.[i];
+        const label = email ? `${prov.name} (${email})` : `${prov.name} ${connId}`;
+        const planName = spec.plan ?? "Default";
+
+        w.connections.push({
+          id: connId,
+          providerId: spec.provider_id,
+          label,
+          authRef: `cli:${connId}`,
+          scope: ["internal"],
+          priority: 100,
+          strategy: null,
+          concurrency: spec.max_parallel ?? 1,
+          ratePerMin: null,
+          status: "needs_login",
+          plan: { name: planName, price_usd: 0 },
+          meta: { cli: spec.cli ?? spec.provider_id },
+          health: {
+            circuit: "closed",
+            consecutiveFailures: 0,
+            lastErrorKind: null,
+            lastError: null,
+            lastErrorAt: null,
+            cooldownUntil: null,
+            successCount: 0,
+            failureCount: 0,
+            lastSuccessAt: null,
+            latencyMsP50: null,
+          },
+          sessionsCount: 0,
+          callsToday: 0,
+          units: [],
+        });
+        connectionIds.push(connId);
+
+        const sessionId = `session-login-${connId}`;
+        const isDeviceCode = spec.provider_id === "codex";
+        const session: LoginSession = {
+          id: sessionId,
+          connection_id: connId,
+          provider_id: spec.provider_id,
+          method: isDeviceCode ? "device_code" : "paste_code",
+          state: "waiting_for_user",
+          auth_url: isDeviceCode
+            ? "https://auth.openai.com/codex/device"
+            : `https://${spec.provider_id}.ai/oauth/authorize`,
+          user_code: isDeviceCode ? "WDJB-MJGN" : null,
+          verification_uri: isDeviceCode ? "https://auth.openai.com/codex/device" : null,
+          needs_input: !isDeviceCode,
+          input_hint: isDeviceCode ? null : "Paste the code the page shows you",
+          expires_at: new Date(now + 10 * 60 * 1000).toISOString(),
+          identity: email ? { email_masked: email, plan: planName } : {},
+          evidence: {},
+          error_kind: null,
+          error_excerpt: null,
+          created_by: "owner@farm.local",
+          created_at: new Date(now).toISOString(),
+          updated_at: new Date(now).toISOString(),
+          finished_at: null,
+        };
+        w.loginSessions.push(session);
+        sessionIds.push(sessionId);
+      }
+
+      return {
+        ok: true,
+        connection_ids: connectionIds,
+        session_ids: sessionIds,
+      };
+    }
+    case "start_login": {
+      const spec = commandPayloadSchemas.start_login.parse(rawPayload);
+      const conn = findConnection(w, spec.connection_id);
+      const isDeviceCode = spec.method === "device_code" || conn.providerId === "codex";
+      const sessionId = `session-start-${conn.id}-${Date.now()}`;
+      const session: LoginSession = {
+        id: sessionId,
+        connection_id: conn.id,
+        provider_id: conn.providerId,
+        method: isDeviceCode ? "device_code" : (spec.method ?? "paste_code"),
+        state: "waiting_for_user",
+        auth_url: isDeviceCode
+          ? "https://auth.openai.com/codex/device"
+          : `https://${conn.providerId}.ai/oauth/authorize`,
+        user_code: isDeviceCode ? "WDJB-MJGN" : null,
+        verification_uri: isDeviceCode ? "https://auth.openai.com/codex/device" : null,
+        needs_input: !isDeviceCode,
+        input_hint: isDeviceCode ? null : "Paste the code the page shows you",
+        expires_at: new Date(now + 10 * 60 * 1000).toISOString(),
+        identity: {},
+        evidence: {},
+        error_kind: null,
+        error_excerpt: null,
+        created_by: "owner@farm.local",
+        created_at: new Date(now).toISOString(),
+        updated_at: new Date(now).toISOString(),
+        finished_at: null,
+      };
+      w.loginSessions = w.loginSessions.filter((s) => !(s.connection_id === conn.id && !s.finished_at));
+      w.loginSessions.push(session);
+      return { ok: true, session_id: sessionId, connection_id: conn.id };
+    }
+    case "submit_login_input": {
+      const spec = commandPayloadSchemas.submit_login_input.parse(rawPayload);
+      const session = w.loginSessions.find((s) => s.id === spec.session_id);
+      if (!session) throw new Rejection(`Login session "${spec.session_id}" not found.`);
+      session.state = "verifying";
+      session.updated_at = new Date(now).toISOString();
+      return { ok: true, session_id: session.id, state: session.state };
+    }
+    case "cancel_login": {
+      const spec = commandPayloadSchemas.cancel_login.parse(rawPayload);
+      const session = w.loginSessions.find((s) => s.id === spec.session_id);
+      if (!session) throw new Rejection(`Login session "${spec.session_id}" not found.`);
+      session.state = "cancelled";
+      session.finished_at = new Date(now).toISOString();
+      session.updated_at = new Date(now).toISOString();
+      return { ok: true, session_id: session.id, state: "cancelled" };
+    }
+    case "save_secret": {
+      const spec = commandPayloadSchemas.save_secret.parse(rawPayload);
+      if (spec.connection_id) {
+        const conn = w.connections.find((c) => c.id === spec.connection_id);
+        if (conn) {
+          conn.authRef = `env:${spec.name}`;
+          conn.status = "active";
+        }
+      }
+      return { ok: true, saved: spec.name };
+    }
     default:
       throw new Rejection(`Command "${kind}" is not handled by this Console version.`);
   }
@@ -704,5 +855,29 @@ export class FixturesFarmData implements FarmData {
       page,
       pageSize,
     };
+  }
+
+  async getLoginSession(id: string): Promise<LoginSession | null> {
+    const w = world();
+    const session = w.loginSessions.find((s) => s.id === id);
+    return session ? { ...session } : null;
+  }
+
+  async getActiveLoginSession(connectionId: string): Promise<LoginSession | null> {
+    const w = world();
+    const active = w.loginSessions.find(
+      (s) =>
+        s.connection_id === connectionId && ["queued", "starting", "waiting_for_user", "verifying"].includes(s.state),
+    );
+    if (active) return { ...active };
+    const latest = [...w.loginSessions]
+      .filter((s) => s.connection_id === connectionId)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+    return latest ? { ...latest } : null;
+  }
+
+  async getConnectPublicKey(): Promise<ConnectPublicKeyJwk | null> {
+    const w = world();
+    return w.connectPublicKey ? { ...w.connectPublicKey } : null;
   }
 }
