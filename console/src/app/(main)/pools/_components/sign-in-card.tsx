@@ -228,6 +228,9 @@ export function SignInCard({
                 </a>
               </Button>
             )}
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Use a private window if this browser is signed in to another account.
+            </p>
             {viewModel.expiresAt && (
               <p className="text-[11px] text-muted-foreground">
                 Code expires in: <Countdown until={viewModel.expiresAt} className="font-medium text-foreground" />
