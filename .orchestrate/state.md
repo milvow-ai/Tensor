@@ -17,11 +17,12 @@
 Worktree `D:\Harness Farm\wt-a3`, branch `a3-dashboard` (from `e95072f`). Briefs in the worktree: `briefs/A3B-shell-overview.md` (agy-01 Gemini 3.8 Flash High: v2 nav shell + Overview + /tasks /approvals placeholders) and `briefs/A3C-usage-farm-ai.md` (claude-02 Sonnet: /usage + Farm → AI). Disjoint files. Farm job ids: see the A3 table below. Lead: review each diff, run e2e (one heavy job at a time), commit on `a3-dashboard` after each verified page, push, then merge to `effort2/stage1-saas` and `vercel deploy --prod`. Wave 2 after: Activity (from /runs), Farm → Tools/APIs, Memory, Settings tabs. If the lead runs out of tokens: open Claude desktop on the claude-02 (buddyscifi) login, read this block, check the jobs with `ai_status`, continue.
 | Round | Builder | Job id | Status |
 |---|---|---|---|
-| A3B shell + Overview | agy-01 Gemini 3.8 Flash High | `55a5437a-482d-4ac4-8b6d-63435488bd5d` | running (started 02:35) |
-| A3C Usage & Cost + Farm → AI | claude-02 Sonnet | `ade0b585-0d48-4933-bd06-8c6a716b12e0` | done 02:38, unchecked (worker could not run pnpm: permission prompt; lead runs checks) |
-| A3D-1 Activity | claude-02 Sonnet | `8cb5e7ed-67d1-4e2f-8eb7-0fe5b244b547` | running (brief `briefs/A3D-wave2.md`) |
-| A3D-2 Memory + Settings | claude-04 Sonnet | `897ba99e-893e-4b22-95ac-f3dbcf6be693` | running |
-| A3D-3 Farm → Tools / APIs | codex-01 | `d15a2b9a-cdde-41c6-9cc3-42463e793983` | running |
+| A3B shell + Overview | agy-01 Gemini 3.8 Flash High | `55a5437a-482d-4ac4-8b6d-63435488bd5d` | done, committed `3a3e0ae` |
+| A3C Usage & Cost + Farm → AI | claude-02 Sonnet | `ade0b585-0d48-4933-bd06-8c6a716b12e0` | done, committed `e4721f0` |
+| A3D-1 Activity | claude-02 Sonnet | `8cb5e7ed-67d1-4e2f-8eb7-0fe5b244b547` | done, committed `e4721f0` |
+| A3D-2 Memory + Settings | claude-04 Sonnet | `897ba99e-893e-4b22-95ac-f3dbcf6be693` | done, committed `e4721f0` |
+| NEXT | lead | — | full e2e on a3-dashboard running (03:15); fix failures, merge to effort2, vercel deploy --prod |
+| A3D-3 Farm → Tools / APIs | codex-01 | `d15a2b9a-cdde-41c6-9cc3-42463e793983` | done, committed `e4721f0` |
 
 ## Connect & Pools — LIVE (2026-10-25 02:10): https://harnessfarm.milvow.com (Vercel prod `harness-farm-console-qibox0a3y`); live DB at 0020; Farm restarted (uv run farm run, hidden); local dashboard localhost:3100. Next: owner signs codex-02/03, claude-01, agy-05 in from the dashboard. **Sign-in fix 2026-10-25:** `users`/`memberships` were empty after F1 → owner could not read `farm_settings` under RLS → /unauthorized. Fixed live with `farm member add milvow.ai@gmail.com --role owner` (owner OK). **Defect to fix:** Farm must create the owner membership from `owner_email` on migrate/start. Supabase built-in email allows only a few magic links per hour → add custom SMTP or a 6-digit code. Earlier notes: → `docs/design/CONNECT-HANDOFF.md`
 **Done 2026-10-25:** gate green on golive (pytest, ruff, mypy, secret-grep); `pnpm check` green; e2e 96/96 after fixes `9f4ab0d` + `5696c7d` (signin.spec.ts was in no Playwright project, so it had never run; L3-outdated specs; fixture login sessions now UUIDs — the Farm requires UUIDs, do not loosen the zod schema); golive merged into this branch. R7 written: `research/r7-outreach-mailboxes.md` (codex-01; 4 prices verified, 2 not; proposal ≈ $31/mo, nothing bought).
