@@ -100,14 +100,14 @@ test("every nav entry opens its page", async ({ page }) => {
   await page.goto("/overview");
   const nav = page.getByRole("navigation").or(page.locator('[data-slot="sidebar"]'));
   const links = [
-    ["Tools & Pools", "/pools/tools"],
-    ["AI Pools", "/pools/ai"],
-    ["Runs", "/runs"],
-    ["Routing", "/routing"],
-    ["Policies & Budgets", "/policies"],
-    ["Billing", "/billing"],
-    ["Memory & Evidence", "/memory"],
-    ["Integrations", "/integrations"],
+    ["Activity", "/runs"],
+    ["Tasks", "/tasks"],
+    ["AI", "/pools/ai"],
+    ["Tools", "/pools/tools"],
+    ["APIs", "/integrations"],
+    ["Usage & Cost", "/usage"],
+    ["Memory", "/memory"],
+    ["Approvals", "/approvals"],
     ["Settings", "/settings"],
     ["Overview", "/overview"],
   ] as const;
