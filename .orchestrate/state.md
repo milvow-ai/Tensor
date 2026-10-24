@@ -12,6 +12,13 @@
 **Owner to-do:** say go · OK the auto-start service (`scripts/install-farm-service.ps1`) · re-login agy-01 and codex-01..03 · OK worktree cleanup after the merge-status list · before T2: buy outreach domains + mailboxes (start warm-up early; costs money, owner decides) · Milvow client-pack inputs (offers, only real proof, sender name, postal address) · Reoon key in `.env`.
 **Rules carried over:** restart `farm run` by killing the whole process tree (`taskkill /T`) and confirming the port changed owner · Bifrost started detached · Hermes: check effects, not reports; no user@host URLs in its commands · write config files without BOM · no HFK business matters; funding-engine is code only (never `clients/hfk`, data, tokens).
 
+## Tensor T0 — design session (started 2026-10-24; brief `briefs/T0-tensor-design-session.md`)
+**Status (2026-10-24):** step 1 Discovery: round 1 asked, answers pending (`docs/tensor/DISCOVERY.md`). No code before the owner approves `docs/tensor/BUILD-PLAN.md`.
+**Artefacts (owner's yes on each, pushed after each yes):** DISCOVERY · research refresh · REQUIREMENTS · Figma file "Tensor" (one page per artefact) · ARCHITECTURE · LEGO-MAP · QUALITY-PLAN · BUILD-PLAN, all in `docs/tensor/`.
+**Kickoff findings:** funding-engine `main` (`e7a273e`) connects mailboxes with a Gmail App Password over SMTP/IMAP; `gmail_oauth` is only an allowed value, not built · the local funding-engine checkout is on `fix/daily-report-unfinished-runs`, so T0 reads `main` with `git show` and never switches branches there · live Farm: Clay 2/2, Claude 3/4, Gemini 4/9 (free), Hermes 1/1, Codex 0/3 · `research/` is 3 weeks old, so prices get refreshed.
+**Decisions (date — who):**
+- 2026-10-24: Tensor is designed in its own session from brief T0 with the agency method; building starts only after BUILD-PLAN approval — owner.
+
 ## Effort 2 — Plan (v1, 2026-10-24; estimates, not promises)
 | ID | Scope (see docs/ARCHITECTURE.md) | Done when (the check) | Days |
 |---|---|---|---|
