@@ -30,7 +30,7 @@ from fastmcp import FastMCP
 from fastmcp.tools import ToolResult
 from pydantic import Field, ValidationError
 
-from farm.ai.accounts import list_ai_accounts, load_accounts
+from farm.ai.accounts import list_ai_accounts
 from farm.ai.failures import AiRequestError
 from farm.ai.jobs import JobManager
 from farm.capabilities.schemas import (
@@ -133,38 +133,11 @@ async def register_ai_tools(
 
     @server.tool(annotations={"readOnlyHint": True})
     async def list_ais() -> dict[str, Any]:
-        """List the AIs and their accounts: status, login state, models, supported efforts, limit/reset time,
-        calls today, active and queued jobs and the parallel jobs each account takes (max_parallel)."""
-        report = await list_ai_accounts(ctx.pool, ctx.clock())
-        accounts = await load_accounts(ctx.pool)
-        meta_by_id = {a.id: (a.ai, a.meta) for a in accounts}
-
-        def _efforts_for(ai: str, meta: Any) -> list[str]:
-            raw = (
-                meta.get("efforts")
-                if isinstance(meta, dict)
-                else getattr(meta, "get", lambda k: None)("efforts")
-            )
-            if isinstance(raw, list):
-                return [str(e) for e in raw]
-            if isinstance(raw, str):
-                return [raw]
-            if ai == "claude":
-                return ["low", "medium", "high", "xhigh", "max"]
-            if ai == "codex":
-                return ["low", "medium", "high"]
-            return []
-
-        for acc in report.get("accounts", []):
-            ai, meta = meta_by_id.get(acc["id"], (acc.get("provider_id", ""), {}))
-            acc["efforts"] = _efforts_for(ai, meta)
-
-        for provider in report.get("ais", []):
-            for acc in provider.get("accounts", []):
-                ai, meta = meta_by_id.get(acc["id"], (provider.get("id", ""), {}))
-                acc["efforts"] = _efforts_for(ai, meta)
-
-        return report
+        """List the AIs (usable / total accounts, jobs) and each account once: usable now or, if not, why
+        (`unusable`) and when it is back (`back_at`); status, login state, models, efforts, a limit reset
+        still ahead (`reset_at`), calls today, active and queued jobs, max_parallel, and the last error as
+        {kind, at, message} (one short line; a success clears it)."""
+        return await list_ai_accounts(ctx.pool, ctx.clock())
 
     @server.tool()
     async def ask_ai_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:

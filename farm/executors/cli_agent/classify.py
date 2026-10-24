@@ -5,7 +5,9 @@ One rule order for every CLI:
 1. **Structured success** (the CLI's own result object says it worked) -> ok. Nothing else is read:
    the answer text and stderr of a successful run are never scanned for error words.
 2. **Structured failure** -> the error kind comes from the structured error fields
-   (status / HTTP code / error text) and stderr, through that CLI's table of exact phrases.
+   (status / HTTP code / error text) and stderr, through that CLI's tables of exact phrases: login
+   (``NEEDS_LOGIN``), a request the CLI refuses as given, such as a model it does not know
+   (``BAD_REQUEST``: the account is fine), and limits (``LIMIT_REACHED``), checked in that order.
 3. **No structured output** -> exit code and stderr only (exit 0 is a success).
 4. Anything the tables do not recognise -> ``ErrorKind.UNKNOWN`` (never a guess such as ``NEEDS_LOGIN``).
 
@@ -71,7 +73,15 @@ _LIMIT_COMMON = (
 _TABLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "claude": (
         _AUTH_COMMON
-        + (r"please run /login", r"claude login", r"setup-token", r"invalid authentication credentials"),
+        + (
+            r"please run /login",
+            r"claude login",
+            r"setup-token",
+            r"invalid authentication credentials",
+            # "Failed to authenticate: OAuth session expired and could not be refreshed". Not the transient
+            # "Failed to refresh OAuth token: another Claude Code process is refreshing it ...".
+            r"oauth session expired",
+        ),
         _LIMIT_COMMON + (r"at capacity",),
     ),
     "codex": (_AUTH_COMMON + (r"codex login",), _LIMIT_COMMON),
@@ -83,9 +93,22 @@ _TABLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "gemini": (_AUTH_COMMON + (r"gemini auth", r"login with google"), _LIMIT_COMMON + (r"model capacity",)),
     "hermes": (_AUTH_COMMON + (r"rejected your api key", r"hermes setup"), _LIMIT_COMMON),
 }
+# The CLI refused the request as given (BAD_REQUEST: neither the account's health nor its state changes).
+_REQUEST: dict[str, tuple[str, ...]] = {
+    # The CLI's own message for a model the API does not know or the account cannot use.
+    "claude": (r"issue with the selected model",),
+    # agy checks --model against its own list before any call: "invalid model selection (--model "x" ...):
+    # model x is not recognized as a known model or custom model in settings" (no tokens used).
+    "agy": (r"invalid model selection", r"is not recognized as a known model"),
+    # OpenRouter through Hermes, for a model whose free variant is gone: "Provider said: HTTP 404: This model
+    # is unavailable for free. The paid version is available now ...". A bare "HTTP 404: Provider returned
+    # error" names no cause and stays unknown.
+    "hermes": (r"model is unavailable for free",),
+}
 _COMPILED = {
     cli: (
         [re.compile(p, re.IGNORECASE) for p in auth],
+        [re.compile(p, re.IGNORECASE) for p in _REQUEST.get(cli, ())],
         [re.compile(p, re.IGNORECASE) for p in limit],
     )
     for cli, (auth, limit) in _TABLES.items()
@@ -93,9 +116,11 @@ _COMPILED = {
 
 
 def _kind_from_text(cli: str, text: str) -> ErrorKind | None:
-    auth, limit = _COMPILED[cli]
+    auth, request, limit = _COMPILED[cli]
     if any(p.search(text) for p in auth):
         return ErrorKind.NEEDS_LOGIN
+    if any(p.search(text) for p in request):
+        return ErrorKind.BAD_REQUEST
     if any(p.search(text) for p in limit):
         return ErrorKind.LIMIT_REACHED
     return None
@@ -136,11 +161,25 @@ def parse_reset(
 # --- helpers ---------------------------------------------------------------------------------------
 
 
+_ERROR_PREFIX = re.compile(r"^error:\s*", re.IGNORECASE)
+
+
+def _join_error_texts(texts: Iterable[str]) -> str:
+    """The cleaned error-channel texts, joined. A text that an earlier one already holds is kept once (agy
+    puts its error in the JSON and prints it again on stderr as ``error: ...``)."""
+    parts: list[str] = []
+    for raw in texts:
+        text = clean_cli_text(raw)
+        if text and not any(_ERROR_PREFIX.sub("", text) in part for part in parts):
+            parts.append(text)
+    return "\n".join(parts)
+
+
 def _failure(
     cli: str, kind_hint: ErrorKind | None, texts: Iterable[str], fallback: str, data: dict[str, Any] | None
 ) -> Classification:
     """Build a failure from the error-channel ``texts`` (joined) with an optional structured ``kind_hint``."""
-    text = "\n".join(t for t in (clean_cli_text(t) for t in texts) if t)
+    text = _join_error_texts(texts)
     kind = kind_hint or _kind_from_text(cli, text) or ErrorKind.UNKNOWN
     reset_at = parse_reset(text, data) if kind == ErrorKind.LIMIT_REACHED else None
     return Classification(ok=False, kind=kind, message=text or fallback, reset_at=reset_at)

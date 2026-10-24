@@ -14,21 +14,35 @@ wait inside the router. A whole pool can be capped with ``providers.config.max_p
 
 Picking (``rank``): AIs in the route order of ``ask_ai`` (``ai = "any"`` therefore prefers the first AI of the
 route), inside one AI the accounts that can start the job right away first, then by priority (lower first).
+
+``list_ai_accounts`` (``list_ais``, ``farm ai list``) reports each account once, with the verdict the picking
+uses (``usable``, else ``unusable`` and ``back_at``) and the last error as kind + time + one short line, so an
+old error is never read as the account's state now.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, NamedTuple
+from datetime import UTC, datetime
+from typing import Any, Final, NamedTuple
+from uuid import uuid4
 
 from farm.ai.failures import AiRequestError
 from farm.db.pool import DbPool, tenant_connection
+from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult, Executor
 from farm.resources import health
 
 ASK_AI = "ask_ai"
 UNROUTED_RANK = 1000
+PING: Final[Mapping[str, str]] = {"task": "Respond with only the word PONG", "mode": "answer"}
+"""The tiny call of ``farm ai test`` and of a login re-check."""
+DEFAULT_EFFORTS: Final[Mapping[str, tuple[str, ...]]] = {
+    "claude": ("low", "medium", "high", "xhigh", "max"),
+    "codex": ("low", "medium", "high"),
+}
+"""Efforts each CLI accepts when an account's ``meta.efforts`` does not say."""
 
 
 @dataclass(frozen=True)
@@ -51,6 +65,17 @@ class AccountInfo:
     route_rank: int
     active: int = 0
     queued: int = 0
+    last_error_kind: str | None = None
+    last_error_at: datetime | None = None
+
+    @property
+    def efforts(self) -> tuple[str, ...]:
+        raw = self.meta.get("efforts")
+        if isinstance(raw, list):
+            return tuple(str(e) for e in raw)
+        if isinstance(raw, str):
+            return (raw,)
+        return DEFAULT_EFFORTS.get(self.ai, ())
 
     @property
     def models(self) -> tuple[str, ...]:
@@ -86,6 +111,10 @@ class AccountInfo:
     def offers(self, model: str | None) -> bool:
         return model is None or model.lower() in {m.lower() for m in self.models}
 
+    def models_check(self, accepted: Sequence[str] | None) -> ModelCheck:
+        """This account's models against ``accepted``, the ones its CLI lists (``None``: cannot list)."""
+        return ModelCheck(self.id, self.models, None if accepted is None else tuple(accepted))
+
     def unusable_reason(self, now: datetime, *, model: str | None = None) -> str | None:
         """Why a job cannot be started on this account now (the router's skip reasons), or ``None``."""
         if not self.provider_enabled:
@@ -110,12 +139,47 @@ class AccountInfo:
         return None
 
 
+@dataclass(frozen=True)
+class ModelCheck:
+    """The models an account offers (registry ``meta.models``) against the ones its CLI accepts.
+
+    A CLI update can drop a model the registry still lists; jobs asking for it then fail. ``farm ai test``
+    runs this check wherever the CLI can list its models (agy).
+    """
+
+    account: str
+    configured: tuple[str, ...]
+    accepted: tuple[str, ...] | None
+
+    @property
+    def rejected(self) -> list[str]:
+        """Configured models the CLI does not accept (compared case-insensitively, as ``offers`` does)."""
+        if self.accepted is None:
+            return []
+        known = {m.lower() for m in self.accepted}
+        return [m for m in self.configured if m.lower() not in known]
+
+    def describe(self) -> str:
+        if self.accepted is None:
+            return f"models: {self.account}'s CLI cannot list the models it accepts; not checked"
+        accepted = ", ".join(self.accepted)
+        if self.rejected:
+            return (
+                f"models: {self.account} lists {', '.join(self.rejected)}, which its CLI does not accept "
+                f"(it accepts: {accepted}); remove them from the registry and run `farm registry sync`"
+            )
+        if not self.configured:
+            return f"models: none configured for {self.account}; its CLI accepts: {accepted}"
+        return f"models: its CLI accepts every model {self.account} lists ({', '.join(self.configured)})"
+
+
 _ACCOUNTS_SQL = """
 select c.id, c.provider_id, c.label, c.status, c.priority, c.concurrency, c.scope, c.meta,
        coalesce(h.circuit, 'closed'), h.cooldown_until, h.last_error, coalesce(h.success_count, 0),
        u.next_reset_at, p.enabled, p.config,
        coalesce((select min(r.position) from public.capability_routes r
-                 where r.capability = %(cap)s and r.provider_id = p.id and r.enabled), %(unrouted)s)
+                 where r.capability = %(cap)s and r.provider_id = p.id and r.enabled), %(unrouted)s),
+       h.last_error_kind, h.last_error_at
 from public.connections c
 join public.providers p on p.id = c.provider_id and p.kind = 'ai'
 left join public.connection_health h on h.connection_id = c.id
@@ -165,6 +229,8 @@ async def load_accounts(pool: DbPool, *, ids: Sequence[str] | None = None) -> li
             route_rank=int(r[15]),
             active=active.get(r[0], 0),
             queued=queued.get(r[0], 0),
+            last_error_kind=r[16],
+            last_error_at=r[17],
         )
         for r in rows
     ]
@@ -346,14 +412,68 @@ def plan_accounts(
 # --- the report behind list_ais / farm ai list -----------------------------------------------------------
 
 
+ERROR_CHARS: Final = 160
+_LINK = re.compile(r"https?://\S+")
+
+
+def _utc(at: datetime) -> str:
+    """``2026-10-24T06:16:03Z``: UTC to the second (the database answers in its session time zone)."""
+    return at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def short_error(text: str, limit: int = ERROR_CHARS) -> str:
+    """One line of at most ``limit`` characters; links (long, one-time sign-in URLs) become ``<link>``."""
+    line = " ".join(_LINK.sub("<link>", text).split())
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def account_report(account: AccountInfo, now: datetime, calls_today: int) -> dict[str, Any]:
+    """One account of ``list_ais``. Always: who it is, the picking rule's verdict (``usable``) and its load.
+    Only when they apply: why it is unusable and until when (``unusable``, ``back_at``), a limit reset still
+    ahead (``reset_at``), a circuit that is not closed, and the last error (kind, time, one short line)."""
+    reason = account.unusable_reason(now)
+    entry: dict[str, Any] = {
+        "id": account.id,
+        "ai": account.ai,
+        "label": account.label,
+        "status": account.status,
+        "usable": reason is None,
+    }
+    if reason is not None:
+        entry["unusable"] = reason
+        back = account.retry_at(now)
+        if back is not None:
+            entry["back_at"] = _utc(back)
+    entry.update(
+        login_state=account.login_state,
+        models=list(account.models),
+        efforts=list(account.efforts),
+        max_parallel=account.max_parallel,
+        active_jobs=account.active,
+        queued_jobs=account.queued,
+        todays_calls=calls_today,
+    )
+    reset = account.next_reset_at or account.cooldown_until
+    if reset is not None and reset > now:
+        entry["reset_at"] = _utc(reset)
+    if account.circuit != "closed":
+        entry["circuit"] = account.circuit
+    if account.last_error:
+        entry["last_error"] = {
+            "kind": account.last_error_kind,
+            "at": _utc(account.last_error_at) if account.last_error_at else None,
+            "message": short_error(account.last_error),
+        }
+    return entry
+
+
 async def list_ai_accounts(pool: DbPool, now: datetime) -> dict[str, Any]:
-    """All AI pools and their accounts: status, login, models, reset times, today's calls, job load."""
+    """Every AI pool (``ais``: usable / total accounts and job load) and every account once (``accounts``)."""
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     accounts = await load_accounts(pool)
     async with tenant_connection(pool) as conn:
         cur = await conn.execute(
-            "select id, name, enabled, default_strategy, config from public.providers "
-            "where kind = 'ai' order by id"
+            "select id, name, enabled, config from public.providers where kind = 'ai' order by id"
         )
         providers = await cur.fetchall()
         cur = await conn.execute(
@@ -363,41 +483,71 @@ async def list_ai_accounts(pool: DbPool, now: datetime) -> dict[str, Any]:
         )
         call_counts: dict[str, int] = {str(c): int(n) for c, n in await cur.fetchall()}
 
-    report: dict[str, list[dict[str, Any]]] = {}
-    for a in accounts:
-        reset = a.next_reset_at or a.cooldown_until
-        report.setdefault(a.ai, []).append(
-            {
-                "id": a.id,
-                "provider_id": a.ai,
-                "label": a.label,
-                "status": a.status,
-                "login_state": a.login_state,
-                "models": list(a.models),
-                "circuit": a.circuit,
-                "cooldown_until": a.cooldown_until.isoformat() if a.cooldown_until else None,
-                "reset_at": reset.isoformat() if reset else None,
-                "next_reset_at": reset.isoformat() if reset else None,
-                "todays_calls": call_counts.get(a.id, 0),
-                "last_error": a.last_error,
-                "max_parallel": a.max_parallel,
-                "active_jobs": a.active,
-                "queued_jobs": a.queued,
-            }
-        )
+    entries = [
+        account_report(a, now, call_counts.get(a.id, 0))
+        for a in sorted(accounts, key=lambda a: (a.ai, a.priority, a.id))
+    ]
     ais: list[dict[str, Any]] = []
-    for provider_id, name, enabled, strategy, config in providers:
-        pool_accounts = report.get(provider_id, [])
+    for provider_id, name, enabled, config in providers:
+        own = [e for e in entries if e["ai"] == provider_id]
         ais.append(
             {
                 "id": provider_id,
                 "name": name,
                 "enabled": enabled,
-                "default_strategy": strategy,
+                "usable": sum(1 for e in own if e["usable"]),
+                "total": len(own),
                 "max_parallel": _pool_cap(config),
-                "active_jobs": sum(int(x["active_jobs"]) for x in pool_accounts),
-                "queued_jobs": sum(int(x["queued_jobs"]) for x in pool_accounts),
-                "accounts": pool_accounts,
+                "active_jobs": sum(int(e["active_jobs"]) for e in own),
+                "queued_jobs": sum(int(e["queued_jobs"]) for e in own),
             }
         )
-    return {"ais": ais, "accounts": [acc for provider_id in sorted(report) for acc in report[provider_id]]}
+    return {"ais": ais, "accounts": entries}
+
+
+# --- re-checking an account marked needs_login ------------------------------------------------------------
+
+
+async def recheck_login(
+    pool: DbPool, executor: Executor, account_id: str, *, now: datetime, timeout_s: float = 180.0
+) -> ExecResult:
+    """One tiny call on an account marked ``needs_login``, straight through its executor.
+
+    The router never routes to such an account, so before this only a registry sync brought it back: not
+    ``farm ai login``, and not a state an old classifier set wrongly (codex-01 kept the ``needs_login`` that a
+    misread Codex session error gave it, D4). An answer proves the login: the success is recorded and the
+    account is ``active`` again. A failure is recorded like any other (a login failure keeps ``needs_login``).
+    """
+    async with tenant_connection(pool) as conn:
+        cur = await conn.execute(
+            "select provider_id, auth_ref, meta, concurrency from public.connections where id = %s",
+            (account_id,),
+        )
+        row = await cur.fetchone()
+    if row is None:
+        raise AiRequestError("bad_request", f"account '{account_id}' does not exist", account=account_id)
+    view = ConnectionView(
+        id=account_id, provider_id=row[0], auth_ref=row[1], meta=row[2] or {}, concurrency=row[3] or 1
+    )
+    request = ExecRequest(
+        request_id=uuid4(), capability=ASK_AI, params=dict(PING), connection=view, timeout_s=timeout_s
+    )
+    result = await executor.execute(request)
+    if result.ok:
+        await health.record_success(pool, account_id, now=now)
+        async with tenant_connection(pool) as conn:
+            await conn.execute(
+                "update public.connections set status = 'active' where id = %s and status = 'needs_login'",
+                (account_id,),
+            )
+    else:
+        await health.record_failure(
+            pool,
+            account_id,
+            result.error_kind or ErrorKind.UNKNOWN,
+            result.error,
+            now=now,
+            retry_after_s=result.retry_after_s,
+            reset_at=result.reset_at,
+        )
+    return result

@@ -1196,29 +1196,27 @@ async def test_list_ais_shows_the_job_load_the_limits_and_the_login_state(
     assert busy["login_state"] == "unknown" and accounts["claude-03"]["login_state"] == "unknown"
     assert (pool["max_parallel"], pool["active_jobs"], pool["queued_jobs"]) == (2, 1, 1)
     assert after["claude-02"]["login_state"] == "ok" and after["claude-02"]["active_jobs"] == 0
-    # what list_ais showed before this round is still there
-    assert {"status", "models", "circuit", "reset_at", "next_reset_at", "todays_calls"} <= set(busy)
+    # what list_ais always shows of an account (the rest appears when it applies, e.g. reset_at, last_error)
+    assert {"status", "usable", "models", "efforts", "todays_calls", "max_parallel"} <= set(busy)
 
 
 def test_farm_ai_list_has_a_jobs_column() -> None:
     table = format_ai_list(
         {
-            "ais": [
-                {
-                    "id": "claude",
-                    "accounts": [
-                        {"id": "claude-02", "status": "active", "models": ["sonnet"], "todays_calls": 3,
-                         "active_jobs": 1, "queued_jobs": 2, "max_parallel": 1},
-                        {"id": "claude-03", "status": "active", "models": [], "active_jobs": 0, "queued_jobs": 0,
-                         "max_parallel": 2},
-                    ],
-                }
-            ]
+            "ais": [{"id": "claude"}],
+            "accounts": [
+                {"id": "claude-02", "ai": "claude", "status": "active", "usable": True, "models": ["sonnet"],
+                 "todays_calls": 3, "active_jobs": 1, "queued_jobs": 2, "max_parallel": 1},
+                {"id": "claude-03", "ai": "claude", "status": "exhausted", "usable": False, "unusable": "exhausted",
+                 "back_at": "2026-10-05T14:30:00Z", "models": [], "active_jobs": 0, "queued_jobs": 0,
+                 "max_parallel": 2},
+            ],
         }
     )
     lines = table.splitlines()
     assert lines[0].split()[-1] == "JOBS"
     assert lines[1].endswith("1/1 +2 queued") and lines[2].endswith("0/2")
+    assert "exhausted [until 2026-10-05 14:30Z]" in lines[2]
 
 
 def _seed_cli_database(url: str, tmp: Path) -> dict[str, str]:

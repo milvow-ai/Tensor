@@ -307,10 +307,10 @@ async def test_case_3_usage_limit_retries_and_sets_reset_at(
         assert ais_report is not None
         accounts = ais_report["accounts"]
         c2 = next(a for a in accounts if a["id"] == "claude-02")
-        assert c2["status"] == "exhausted"
-        assert c2["next_reset_at"] is not None
+        assert (c2["status"], c2["usable"], c2["unusable"]) == ("exhausted", False, "exhausted")
+        assert c2["reset_at"] == c2["back_at"]
         # the fake CLI says "resets at <time>": the Farm picks its next occurrence (within a day, in the future)
-        reset_at = datetime.fromisoformat(str(c2["next_reset_at"]))
+        reset_at = datetime.fromisoformat(str(c2["reset_at"]))
         assert timedelta(0) < reset_at - datetime.now(UTC) <= timedelta(hours=24)
 
     # Verify in DB: connection status is exhausted
