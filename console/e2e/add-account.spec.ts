@@ -94,7 +94,7 @@ test("the Farm refuses a duplicate id and no second row appears", async ({ page 
   await expect(page.getByTestId("adding-row")).toHaveCount(0);
 });
 
-test("adding an AI account asks for the CLI and models, and tells you the login command", async ({ page }) => {
+test("adding an AI account asks for the CLI and models, and opens its sign-in card", async ({ page }) => {
   await page.goto("/pools/ai");
   await page.getByRole("button", { name: "Add AI account" }).click();
   const dialog = page.getByRole("dialog");
@@ -102,15 +102,16 @@ test("adding an AI account asks for the CLI and models, and tells you the login 
   await expect(dialog.getByLabel("Models")).toHaveValue("gpt-5-codex, gpt-5");
   await dialog.getByLabel("Account id").fill("codex-02");
   await dialog.getByLabel("Label").fill("Codex (second seat)");
-  await expect(dialog.getByText("farm ai login codex-02")).toBeVisible();
   await dialog.getByLabel("Models").fill("gpt 5");
   await expect(dialog.getByText("Comma-separated model names")).toBeVisible();
   await dialog.getByLabel("Models").fill("gpt-5-codex");
   await dialog.getByRole("button", { name: "Queue account" }).click();
 
+  await expect(dialog.getByTestId("sign-in-card")).toBeVisible();
   await expect(toast(page, "Add AI account codex-02: done")).toBeVisible();
   await page.goto("/pools/ai/codex");
   const added = page.getByTestId("account-row").filter({ hasText: "codex-02" });
   await expect(added).toContainText("Codex (second seat)");
   await expect(added).toContainText("cli:codex-02");
+  await expect(added.getByTestId("account-signin-button")).toBeVisible();
 });

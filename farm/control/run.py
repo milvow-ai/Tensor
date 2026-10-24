@@ -23,6 +23,7 @@ import signal
 import time
 from collections.abc import Sequence
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -37,6 +38,8 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from farm.ai.jobs import JobManager
+from farm.connect.drivers.registry import driver_for
+from farm.connect.service import CheckResult, LoginService, set_login_service
 from farm.context import FarmContext, build_context
 from farm.control.commands import CommandConsumer
 from farm.control.heartbeat import HeartbeatWriter
@@ -317,6 +320,12 @@ async def create_farm_app(
     return FarmAuthMiddleware(base_app, ctx.pool, mcp_path=endpoint_path)
 
 
+
+async def _no_login_test(connection_id: str, home: Path) -> CheckResult:
+    # Every driver tests its own login (a one-shot prompt); a driver without one cannot finish a sign-in.
+    raise NotImplementedError("this sign-in driver has no test of its own")
+
+
 async def run_farm(
     host: str | None = None,
     port: int | None = None,
@@ -357,6 +366,9 @@ async def run_farm(
     # Start background components
     await heartbeat_writer.start()
     await command_consumer.start()
+    login_service = LoginService(ctx.pool, driver_factory=driver_for, test_job=_no_login_test)
+    set_login_service(login_service)
+    await login_service.start()
     await scheduler.start()
 
     # Trigger background MCP catalogue refresh
@@ -420,6 +432,8 @@ async def run_farm(
         await job_manager.shutdown()
 
         # Stop background workers
+        await login_service.stop()
+        set_login_service(None)
         await command_consumer.stop()
         await scheduler.stop()
         await heartbeat_writer.stop()

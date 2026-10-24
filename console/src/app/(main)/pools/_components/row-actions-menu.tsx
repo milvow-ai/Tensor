@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { Copy, EllipsisVertical, FlaskConical, Trash2 } from "lucide-react";
+import { Copy, EllipsisVertical, FlaskConical, KeyRound, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { useSharedCommands } from "@/components/farm/commands-provider";
@@ -25,9 +25,15 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { Connection } from "@/lib/farm/types";
 
+import { SignInDrawer } from "./sign-in-drawer";
+
 export function RowActionsMenu({ connection }: { connection: Connection }) {
   const { run } = useSharedCommands();
   const [confirming, setConfirming] = useState(false);
+  const [signInOpen, setSignInOpen] = useState(false);
+  const isAi =
+    connection.authRef?.startsWith("cli:") ||
+    ["claude", "codex", "gemini", "agy", "hermes"].includes(connection.providerId);
 
   async function copy(text: string, what: string) {
     try {
@@ -52,6 +58,12 @@ export function RowActionsMenu({ connection }: { connection: Connection }) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-52">
+          {isAi && (
+            <DropdownMenuItem onSelect={() => setSignInOpen(true)}>
+              <KeyRound aria-hidden="true" />
+              Sign in again
+            </DropdownMenuItem>
+          )}
           <DropdownMenuItem
             onSelect={() => {
               void run(
@@ -108,6 +120,14 @@ export function RowActionsMenu({ connection }: { connection: Connection }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {isAi && (
+        <SignInDrawer
+          open={signInOpen}
+          onOpenChange={setSignInOpen}
+          connectionId={connection.id}
+          title={`Sign in again: ${connection.label}`}
+        />
+      )}
     </>
   );
 }

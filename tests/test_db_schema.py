@@ -192,6 +192,7 @@ def test_every_table_has_tenant_id_default(db_url: str) -> None:
         "memberships",
         "budget_reservations",
         "api_tokens",
+        "login_sessions",
     }
     for table, data_type, nullable, default in rows:
         assert data_type == "uuid" and nullable == "NO", table

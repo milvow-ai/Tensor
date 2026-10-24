@@ -9,7 +9,9 @@ Effect of an outcome (``record_success`` / ``record_failure``):
 outcome                counters      state
 =====================  ============  ===================================================================
 success                success +1    consecutive failures reset, circuit closed, cooldown cleared,
-                                     ``exhausted`` -> ``active``
+                                     ``last_error`` (+ kind, time) cleared, ``exhausted`` -> ``active``;
+                                     a success that ends while a newer failure's cooldown runs changes
+                                     none of these (the failure still explains the cooldown)
 RATE_LIMITED           failure +1    cooldown until now + retry_after (default 60 s, jitter +-20%, cap 24 h)
 LIMIT_REACHED          failure +1    status ``exhausted``; cooldown until the provider's ``reset_at``, else
                                      the next period start of the connection's exhausted units, else 1 h
@@ -185,7 +187,11 @@ async def reactivate_due(pool: DbPool, now: datetime) -> int:
 
 
 async def record_success(pool: DbPool, connection_id: str, *, now: datetime) -> None:
-    """Record a successful outcome: closes circuit, resets consecutive failures, clears cooldown."""
+    """Record a successful outcome: closes circuit, resets consecutive failures, clears cooldown + last error.
+
+    ``last_error`` describes the failure the account is in, never a success (docs/QUALITY.md Q0): left in
+    place, an old error reads as the account's state long after the account recovered.
+    """
     async with tenant_connection(pool) as conn, conn.transaction():
         await conn.execute(
             "insert into public.connection_health (connection_id) values (%s) on conflict do nothing",
@@ -203,6 +209,12 @@ async def record_success(pool: DbPool, connection_id: str, *, now: datetime) -> 
                              else 'closed' end,
               open_seconds = case when circuit <> 'half_open' and cooldown_until > %(now)s
                                   then open_seconds else null end,
+              last_error = case when circuit <> 'half_open' and cooldown_until > %(now)s
+                                then last_error else null end,
+              last_error_kind = case when circuit <> 'half_open' and cooldown_until > %(now)s
+                                     then last_error_kind else null end,
+              last_error_at = case when circuit <> 'half_open' and cooldown_until > %(now)s
+                                   then last_error_at else null end,
               cooldown_until = case when circuit <> 'half_open' and cooldown_until > %(now)s
                                     then cooldown_until else null end
             where connection_id = %(id)s

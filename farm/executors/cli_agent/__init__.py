@@ -1,6 +1,8 @@
 """CLI agent executors for Harness Farm AI pool."""
 
-from farm.executors.base import ErrorKind, ExecRequest, ExecResult, Executor
+from collections.abc import Awaitable, Callable
+
+from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult, Executor
 from farm.executors.cli_agent.agy import AgyCliExecutor
 from farm.executors.cli_agent.base import (
     BaseCliAgentExecutor,
@@ -35,10 +37,12 @@ class CliAgentExecutor:
                 "hermes": HermesCliExecutor(),
             }
 
+    def _driver(self, connection: ConnectionView) -> tuple[str, Executor | None]:
+        cli_name = str((connection.meta or {}).get("cli") or connection.provider_id)
+        return cli_name, self.drivers.get(cli_name.lower())
+
     async def execute(self, req: ExecRequest) -> ExecResult:
-        meta = req.connection.meta or {}
-        cli_name = meta.get("cli") or req.connection.provider_id
-        driver = self.drivers.get(str(cli_name).lower())
+        cli_name, driver = self._driver(req.connection)
         if driver is None:
             return ExecResult(
                 ok=False,
@@ -46,6 +50,14 @@ class CliAgentExecutor:
                 error=f"unknown cli agent driver '{cli_name}'",
             )
         return await driver.execute(req)
+
+    async def list_models(self, connection: ConnectionView) -> list[str] | None:
+        """The model ids the account's CLI accepts, when that CLI can list them (agy); ``None`` otherwise."""
+        _, driver = self._driver(connection)
+        lister: Callable[[ConnectionView], Awaitable[list[str] | None]] | None = getattr(
+            driver, "list_models", None
+        )
+        return None if lister is None else await lister(connection)
 
     async def aclose(self) -> None:
         pass

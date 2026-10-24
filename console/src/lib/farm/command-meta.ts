@@ -5,13 +5,14 @@ import type { CommandKind, POOL_STRATEGIES } from "./types";
 
 export const PERIODS = ["minute", "hour", "day", "week", "month", "rolling_5h", "total", "none"] as const;
 export const CHARGED_ON = ["attempt", "success", "found"] as const;
-export const AI_CLIS = ["claude", "codex", "agy", "hermes"] as const;
+export const AI_CLIS = ["claude", "codex", "gemini", "agy", "hermes"] as const;
 export type AiCli = (typeof AI_CLIS)[number];
 
 /** Which provider pool an AI CLI belongs to, and sensible default models (editable in the dialog). */
 export const AI_CLI_INFO: Record<AiCli, { providerId: string; label: string; models: string[] }> = {
   claude: { providerId: "claude", label: "Claude Code", models: ["sonnet", "opus", "haiku"] },
   codex: { providerId: "codex", label: "Codex CLI", models: ["gpt-5-codex", "gpt-5"] },
+  gemini: { providerId: "gemini", label: "Gemini CLI", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
   agy: { providerId: "gemini", label: "Antigravity (agy)", models: ["gemini-3-pro", "gemini-3-flash"] },
   hermes: { providerId: "hermes", label: "Hermes", models: ["farm-agent"] },
 };
@@ -55,11 +56,16 @@ export const COMMAND_LABELS: Record<CommandKind, string> = {
   add_provider: "Add provider",
   update_provider: "Update provider",
   remove_provider: "Remove provider",
+  start_login: "Sign in",
+  submit_login_input: "Submit sign-in code",
+  cancel_login: "Cancel sign-in",
+  add_accounts: "Add accounts",
+  save_secret: "Save secret",
 };
 
 /** True when a command concerns this pool: its provider, one of its accounts, or an account being added to it. */
 export function commandConcernsPool(command: { payload: Record<string, unknown> }, poolId: string): boolean {
-  // add_connection is flat (Farm contract): its provider_id names the pool, so the first check covers it.
+  // add_connection and add_accounts are flat: provider_id names the pool.
   const { provider_id: provider, connection_id: connectionId } = command.payload;
   if (provider === poolId) return true;
   return typeof connectionId === "string" && connectionId.startsWith(`${poolId}-`);
@@ -69,6 +75,7 @@ export function commandConcernsPool(command: { payload: Record<string, unknown> 
 export function commandTarget(kind: CommandKind, payload: Record<string, unknown>): string {
   // add_connection carries the new account's own id at the top level (flat Farm contract).
   const created = kind === "add_connection" ? payload.id : undefined;
-  const value = payload.connection_id ?? created ?? payload.alert_id ?? payload.provider_id;
+  const value =
+    payload.connection_id ?? created ?? payload.alert_id ?? payload.provider_id ?? payload.name ?? payload.session_id;
   return typeof value === "string" ? value : kind;
 }

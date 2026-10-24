@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+
 import Link from "next/link";
+
 import {
   AlertCircle,
   AlertTriangle,
@@ -19,6 +21,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ApiKeyForm } from "@/app/(main)/pools/_components/api-key-form";
+import { SignInCard } from "@/app/(main)/pools/_components/sign-in-card";
 import { CopyCommand } from "@/components/farm/copy-command";
 import { EmptyState } from "@/components/farm/states";
 import { Badge } from "@/components/ui/badge";
@@ -62,6 +66,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
   const [submitting, setSubmitting] = useState(false);
   const [resultCommand, setResultCommand] = useState<string | null>(null);
   const [resultStatus, setResultStatus] = useState<string>("active");
+  const [resultAiAccountId, setResultAiAccountId] = useState<string | null>(null);
+  const [resultSecretEnv, setResultSecretEnv] = useState<string | null>(null);
+  const [resultConnId, setResultConnId] = useState<string | null>(null);
 
   // Form Fields - MCP
   const [mcpId, setMcpId] = useState("");
@@ -132,6 +139,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
     setDialogStep("what");
     setSubmitting(false);
     setResultCommand(null);
+    setResultAiAccountId(null);
+    setResultSecretEnv(null);
+    setResultConnId(null);
     setResultStatus("active");
     setSecretError(null);
 
@@ -172,7 +182,10 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
 
     try {
       if (addWhat === "mcp") {
-        const cleanId = mcpId.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-");
+        const cleanId = mcpId
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, "-");
         if (!cleanId) {
           toast.error("Please specify a provider ID");
           return;
@@ -189,7 +202,12 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
         if (mcpHeaders && !validateSecretInput(mcpHeaders)) return;
 
         const argsList = mcpArgs.trim() ? mcpArgs.trim().split(/\s+/) : [];
-        const envList = mcpEnvNames.trim() ? mcpEnvNames.trim().split(/[,\s]+/).filter(Boolean) : [];
+        const envList = mcpEnvNames.trim()
+          ? mcpEnvNames
+              .trim()
+              .split(/[,\s]+/)
+              .filter(Boolean)
+          : [];
         const headersDict: Record<string, string> = {};
         if (mcpHeaders.trim()) {
           for (const line of mcpHeaders.split(/[\n,]+/)) {
@@ -259,13 +277,19 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
         setIntegrations((prev) => [newItem, ...prev.filter((i) => i.id !== cleanId)]);
         toast.success(`MCP server "${cleanId}" registered.`);
       } else if (addWhat === "ai") {
-        const cleanAccId = aiAccountId.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-");
+        const cleanAccId = aiAccountId
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, "-");
         if (!cleanAccId) {
           toast.error("Please enter an account ID (e.g. claude-02)");
           return;
         }
 
-        const modelsList = aiModels.split(",").map((s) => s.trim()).filter(Boolean);
+        const modelsList = aiModels
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
         const providerId = aiCli;
 
         const payload: Record<string, unknown> = {
@@ -285,11 +309,11 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
         if (!res.ok) throw new Error(res.error || "Failed to add AI account");
 
         const cmdResult = res.data.result as Record<string, unknown> | undefined;
-        const nextStep =
-          typeof cmdResult?.next_step === "string" ? cmdResult.next_step : `farm ai login ${cleanAccId}`;
+        const nextStep = typeof cmdResult?.next_step === "string" ? cmdResult.next_step : `farm ai login ${cleanAccId}`;
 
         setResultCommand(nextStep);
         setResultStatus("needs_login");
+        setResultAiAccountId(cleanAccId);
         setDialogStep("result");
 
         // Optimistically add/update in list
@@ -339,7 +363,10 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
           toast.error("Please select a provider");
           return;
         }
-        const cleanConnId = existingConnId.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-");
+        const cleanConnId = existingConnId
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, "-");
         if (!cleanConnId) {
           toast.error("Please enter a connection ID");
           return;
@@ -379,6 +406,10 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
 
         setResultCommand(postCmd);
         setResultStatus(isTokenStore ? "needs_login" : "active");
+        if (!isTokenStore) {
+          setResultSecretEnv(authRef.replace(/^env:/, "").toUpperCase());
+          setResultConnId(cleanConnId);
+        }
         setDialogStep("result");
 
         // Optimistically update
@@ -406,7 +437,10 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
         );
         toast.success(`Account "${cleanConnId}" added.`);
       } else if (addWhat === "openapi") {
-        const cleanId = openApiId.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-");
+        const cleanId = openApiId
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, "-");
         if (!cleanId) {
           toast.error("Please enter a provider ID");
           return;
@@ -439,6 +473,10 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
 
         setResultCommand(nextStep);
         setResultStatus("active");
+        if (openApiAuthEnv) {
+          setResultSecretEnv(openApiAuthEnv);
+          setResultConnId(cleanId);
+        }
         setDialogStep("result");
 
         const newItem: IntegrationSummary = {
@@ -845,12 +883,7 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
             <>
               <DialogHeader>
                 <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 w-6 p-0"
-                    onClick={() => setDialogStep("what")}
-                  >
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setDialogStep("what")}>
                     <ArrowLeft className="size-3.5" />
                   </Button>
                   <DialogTitle className="font-semibold text-base">
@@ -882,7 +915,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                   <>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1">
-                        <Label htmlFor="mcp-id" className="text-xs">Provider Slug</Label>
+                        <Label htmlFor="mcp-id" className="text-xs">
+                          Provider Slug
+                        </Label>
                         <Input
                           id="mcp-id"
                           placeholder="e.g. sentry"
@@ -892,7 +927,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                         />
                       </div>
                       <div className="space-y-1">
-                        <Label htmlFor="mcp-name" className="text-xs">Display Name</Label>
+                        <Label htmlFor="mcp-name" className="text-xs">
+                          Display Name
+                        </Label>
                         <Input
                           id="mcp-name"
                           placeholder="e.g. Sentry Error Tracking"
@@ -916,9 +953,15 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="stdio" className="text-xs">stdio (CLI)</SelectItem>
-                            <SelectItem value="http" className="text-xs">http</SelectItem>
-                            <SelectItem value="sse" className="text-xs">sse</SelectItem>
+                            <SelectItem value="stdio" className="text-xs">
+                              stdio (CLI)
+                            </SelectItem>
+                            <SelectItem value="http" className="text-xs">
+                              http
+                            </SelectItem>
+                            <SelectItem value="sse" className="text-xs">
+                              sse
+                            </SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -935,9 +978,15 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="none" className="text-xs">None</SelectItem>
-                            <SelectItem value="env" className="text-xs">Env Var</SelectItem>
-                            <SelectItem value="oauth" className="text-xs">OAuth</SelectItem>
+                            <SelectItem value="none" className="text-xs">
+                              None
+                            </SelectItem>
+                            <SelectItem value="env" className="text-xs">
+                              Env Var
+                            </SelectItem>
+                            <SelectItem value="oauth" className="text-xs">
+                              OAuth
+                            </SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -954,9 +1003,15 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="auto" className="text-xs">Auto</SelectItem>
-                            <SelectItem value="direct" className="text-xs">Direct</SelectItem>
-                            <SelectItem value="discovery" className="text-xs">Discovery</SelectItem>
+                            <SelectItem value="auto" className="text-xs">
+                              Auto
+                            </SelectItem>
+                            <SelectItem value="direct" className="text-xs">
+                              Direct
+                            </SelectItem>
+                            <SelectItem value="discovery" className="text-xs">
+                              Discovery
+                            </SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -965,7 +1020,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                     {mcpTransport === "stdio" ? (
                       <>
                         <div className="space-y-1">
-                          <Label htmlFor="mcp-command" className="text-xs">Command</Label>
+                          <Label htmlFor="mcp-command" className="text-xs">
+                            Command
+                          </Label>
                           <Input
                             id="mcp-command"
                             placeholder="e.g. npx, python, uvx"
@@ -975,7 +1032,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                           />
                         </div>
                         <div className="space-y-1">
-                          <Label htmlFor="mcp-args" className="text-xs">Arguments</Label>
+                          <Label htmlFor="mcp-args" className="text-xs">
+                            Arguments
+                          </Label>
                           <Input
                             id="mcp-args"
                             placeholder="e.g. -y @modelcontextprotocol/server-filesystem"
@@ -1004,7 +1063,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                     ) : (
                       <>
                         <div className="space-y-1">
-                          <Label htmlFor="mcp-url" className="text-xs">Server URL</Label>
+                          <Label htmlFor="mcp-url" className="text-xs">
+                            Server URL
+                          </Label>
                           <Input
                             id="mcp-url"
                             placeholder="e.g. https://mcp.example.com/sse"
@@ -1056,16 +1117,26 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="claude" className="text-xs">Claude (Anthropic)</SelectItem>
-                            <SelectItem value="codex" className="text-xs">Codex (OpenAI)</SelectItem>
-                            <SelectItem value="gemini" className="text-xs">Gemini / AGY (Google)</SelectItem>
-                            <SelectItem value="hermes" className="text-xs">Hermes (Nous)</SelectItem>
+                            <SelectItem value="claude" className="text-xs">
+                              Claude (Anthropic)
+                            </SelectItem>
+                            <SelectItem value="codex" className="text-xs">
+                              Codex (OpenAI)
+                            </SelectItem>
+                            <SelectItem value="gemini" className="text-xs">
+                              Gemini / AGY (Google)
+                            </SelectItem>
+                            <SelectItem value="hermes" className="text-xs">
+                              Hermes (Nous)
+                            </SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
 
                       <div className="space-y-1">
-                        <Label htmlFor="ai-acc-id" className="text-xs">Account ID</Label>
+                        <Label htmlFor="ai-acc-id" className="text-xs">
+                          Account ID
+                        </Label>
                         <Input
                           id="ai-acc-id"
                           placeholder="e.g. claude-02"
@@ -1077,7 +1148,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                     </div>
 
                     <div className="space-y-1">
-                      <Label htmlFor="ai-label" className="text-xs">Account Label</Label>
+                      <Label htmlFor="ai-label" className="text-xs">
+                        Account Label
+                      </Label>
                       <Input
                         id="ai-label"
                         placeholder="e.g. Claude Work Account"
@@ -1089,7 +1162,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
 
                     <div className="grid grid-cols-3 gap-2">
                       <div className="col-span-2 space-y-1">
-                        <Label htmlFor="ai-models" className="text-xs">Allowed Models</Label>
+                        <Label htmlFor="ai-models" className="text-xs">
+                          Allowed Models
+                        </Label>
                         <Input
                           id="ai-models"
                           value={aiModels}
@@ -1098,7 +1173,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                         />
                       </div>
                       <div className="space-y-1">
-                        <Label htmlFor="ai-concurrency" className="text-xs">Max Parallel</Label>
+                        <Label htmlFor="ai-concurrency" className="text-xs">
+                          Max Parallel
+                        </Label>
                         <Input
                           id="ai-concurrency"
                           type="number"
@@ -1118,10 +1195,7 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                   <>
                     <div className="space-y-1">
                       <Label className="text-xs">Target Provider</Label>
-                      <Select
-                        value={existingProviderId}
-                        onValueChange={setExistingProviderId}
-                      >
+                      <Select value={existingProviderId} onValueChange={setExistingProviderId}>
                         <SelectTrigger className="text-xs">
                           <SelectValue placeholder="Select provider" />
                         </SelectTrigger>
@@ -1137,7 +1211,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
 
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1">
-                        <Label htmlFor="existing-conn-id" className="text-xs">Connection ID</Label>
+                        <Label htmlFor="existing-conn-id" className="text-xs">
+                          Connection ID
+                        </Label>
                         <Input
                           id="existing-conn-id"
                           placeholder="e.g. sentry-02"
@@ -1147,7 +1223,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                         />
                       </div>
                       <div className="space-y-1">
-                        <Label htmlFor="existing-label" className="text-xs">Label</Label>
+                        <Label htmlFor="existing-label" className="text-xs">
+                          Label
+                        </Label>
                         <Input
                           id="existing-label"
                           placeholder="e.g. Sentry Backup"
@@ -1182,7 +1260,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                   <>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1">
-                        <Label htmlFor="openapi-id" className="text-xs">Provider Slug</Label>
+                        <Label htmlFor="openapi-id" className="text-xs">
+                          Provider Slug
+                        </Label>
                         <Input
                           id="openapi-id"
                           placeholder="e.g. petstore"
@@ -1192,7 +1272,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                         />
                       </div>
                       <div className="space-y-1">
-                        <Label htmlFor="openapi-name" className="text-xs">Display Name</Label>
+                        <Label htmlFor="openapi-name" className="text-xs">
+                          Display Name
+                        </Label>
                         <Input
                           id="openapi-name"
                           placeholder="e.g. Swagger Petstore"
@@ -1204,7 +1286,9 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                     </div>
 
                     <div className="space-y-1">
-                      <Label htmlFor="openapi-spec" className="text-xs">Spec URL or Path</Label>
+                      <Label htmlFor="openapi-spec" className="text-xs">
+                        Spec URL or Path
+                      </Label>
                       <Input
                         id="openapi-spec"
                         placeholder="e.g. https://petstore.swagger.io/v2/swagger.json"
@@ -1238,11 +1322,7 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
                 <Button variant="outline" size="sm" onClick={() => setDialogStep("what")}>
                   Back
                 </Button>
-                <Button
-                  size="sm"
-                  onClick={handleSubmit}
-                  disabled={submitting || Boolean(secretError)}
-                >
+                <Button size="sm" onClick={handleSubmit} disabled={submitting || Boolean(secretError)}>
                   {submitting ? "Adding..." : "Add Integration"}
                 </Button>
               </DialogFooter>
@@ -1266,19 +1346,34 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
               </DialogHeader>
 
               <div className="space-y-3 py-3">
-                <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-                  <div className="font-medium text-emerald-700 text-xs dark:text-emerald-400">
-                    Next Step on Farm PC:
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    Complete authentication by running the following command in your terminal:
-                  </p>
-                  {resultCommand && (
-                    <div className="pt-1">
-                      <CopyCommand command={resultCommand} />
+                {resultAiAccountId && (
+                  <SignInCard connectionId={resultAiAccountId} onDone={() => setAddOpen(false)} />
+                )}
+                {!resultAiAccountId && resultSecretEnv && (
+                  <ApiKeyForm
+                    providerId={resultConnId ?? resultSecretEnv.split("_")[0]?.toLowerCase() ?? "env"}
+                    connectionId={resultConnId ?? undefined}
+                    existingNames={[resultSecretEnv]}
+                    onSuccess={() => {
+                      setTimeout(() => setAddOpen(false), 1500);
+                    }}
+                  />
+                )}
+                {!resultAiAccountId && !resultSecretEnv && (
+                  <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+                    <div className="font-medium text-emerald-700 text-xs dark:text-emerald-400">
+                      Next Step on Farm PC:
                     </div>
-                  )}
-                </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Complete authentication by running the following command in your terminal:
+                    </p>
+                    {resultCommand && (
+                      <div className="pt-1">
+                        <CopyCommand command={resultCommand} />
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <DialogFooter>
@@ -1300,8 +1395,8 @@ export function IntegrationsView({ initialIntegrations }: { initialIntegrations:
               <span>Remove Integration?</span>
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Are you sure you want to remove <strong>{deleteTarget?.name}</strong> ({deleteTarget?.id})?
-              All routes, capabilities, and accounts for this provider will be deleted.
+              Are you sure you want to remove <strong>{deleteTarget?.name}</strong> ({deleteTarget?.id})? All routes,
+              capabilities, and accounts for this provider will be deleted.
             </DialogDescription>
           </DialogHeader>
 

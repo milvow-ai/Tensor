@@ -18,7 +18,9 @@ import type { ProviderKind } from "@/lib/farm/types";
 import { type ListParams, toSearch } from "../_lib/list-params";
 import { AccountsTable } from "./accounts-table";
 import { AddAccountDialog } from "./add-account-dialog";
+import { AddAccountsDialog } from "./add-accounts-dialog";
 import { AddAiAccountDialog } from "./add-ai-account-dialog";
+import { ApiKeyForm } from "./api-key-form";
 import { PoolLive } from "./pool-live";
 import { StrategySelectLazy } from "./strategy-select-lazy";
 
@@ -67,6 +69,7 @@ export async function PoolDetailView({ id, kind, params }: { id: string; kind: P
   const cli = cliFor(pool.provider_id);
   const budget = spend?.budget_usd ?? null;
   const overBudget = budget !== null && budget > 0 && (spend?.forecast_usd ?? 0) > budget;
+  const usesEnvAuth = kind === "tool" || list.items.some((c) => c.authRef?.startsWith("env:"));
 
   return (
     <CommandsProvider>
@@ -84,7 +87,10 @@ export async function PoolDetailView({ id, kind, params }: { id: string; kind: P
           badge={<ToneBadge tone={health.tone}>{health.label}</ToneBadge>}
           actions={
             kind === "ai" ? (
-              <AddAiAccountDialog defaultCli={cli} />
+              <div className="flex items-center gap-2">
+                <AddAccountsDialog defaultProviderId={pool.provider_id} />
+                <AddAiAccountDialog defaultCli={cli} />
+              </div>
             ) : (
               <AddAccountDialog
                 providerId={pool.provider_id}
@@ -157,6 +163,13 @@ export async function PoolDetailView({ id, kind, params }: { id: string; kind: P
         </div>
 
         <AccountsTable items={list.items} total={list.total} params={params} variant={kind === "ai" ? "ai" : "tool"} />
+
+        {usesEnvAuth ? (
+          <ApiKeyForm
+            providerId={pool.provider_id}
+            existingNames={list.items.map((c) => c.authRef ?? "").filter(Boolean)}
+          />
+        ) : null}
 
         {commandsResult.ok ? (
           <CommandsFeed
