@@ -49,6 +49,12 @@ def pytest_asyncio_loop_factories(
 
 FIXTURE_REGISTRY = Path(__file__).parent / "fixtures" / "registry.yaml"
 
+_RESET_TENANTS = """
+delete from public.tenants where id <> '00000000-0000-0000-0000-000000000001';
+insert into public.tenants (id, slug, name) values ('00000000-0000-0000-0000-000000000001', 'milvow', 'Milvow')
+on conflict do nothing
+"""
+
 _RESET_SETTINGS = """
 update public.farm_settings
    set owner_email = null, global_monthly_budget_usd = null, alert_thresholds = '{50,80,100}', timezone = 'UTC'
@@ -107,15 +113,19 @@ def scratch_db(pg_admin_url: str) -> Iterator[Callable[[], str]]:
 
 
 async def truncate_all(pool: DbPool) -> None:
-    """Empty every public table except alembic_version and farm_settings; reset farm_settings."""
+    """Empty every public table except alembic_version, tenants and farm_settings; reset farm_settings.
+
+    Tenants are platform rows: only tenant #1 (Milvow) survives, so every test starts with exactly one tenant.
+    """
     async with pool.connection() as conn:
         cur = await conn.execute(
             "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables "
-            "where schemaname = 'public' and tablename not in ('alembic_version', 'farm_settings')"
+            "where schemaname = 'public' and tablename not in ('alembic_version', 'tenants', 'farm_settings')"
         )
         row = await cur.fetchone()
         if row and row[0]:
             await conn.execute(sql.SQL("truncate table {} restart identity cascade").format(sql.SQL(row[0])))
+        await conn.execute(_RESET_TENANTS)
         await conn.execute(_RESET_SETTINGS)
 
 
