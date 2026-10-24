@@ -7,8 +7,11 @@
 set -euo pipefail
 
 APP="${FARM_APP_DIR:-/opt/harness-farm}"
+SETTINGS="${FARM_SETTINGS_FILE:-/etc/harness-farm/farm.env}"
 FARM_UNIT="${FARM_UNIT:-harness-farm}"
-FARM_HTTP_PORT="${FARM_HTTP_PORT:-8787}"
+# The port the service listens on is the one in its settings file, not whatever this shell has.
+port=$(sed -n 's/^FARM_HTTP_PORT=//p' "$SETTINGS" 2>/dev/null | tail -n 1)
+FARM_HTTP_PORT="${port:-8787}"
 UV="${UV_BIN:-uv}"
 FARM="${FARM_WRAPPER:-/usr/local/bin/farm}"
 branch="" state_backup=1
