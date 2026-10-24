@@ -3,15 +3,16 @@
 import { useState } from "react";
 
 import { cn } from "cn";
+import { KeyRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { CommandChip } from "@/components/farm/command-chip";
 import { useSharedCommands } from "@/components/farm/commands-provider";
-import { CopyCommand } from "@/components/farm/copy-command";
 import { StateBadge, ToneBadge } from "@/components/farm/status";
 import { Countdown, RelativeTime, ResetTime } from "@/components/farm/time";
 import { UsageMeter } from "@/components/farm/usage-meter";
 import { useLazy } from "@/components/farm/use-lazy";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { PERIOD_LABELS } from "@/lib/farm/command-meta";
@@ -22,12 +23,12 @@ import type { Connection } from "@/lib/farm/types";
 import {
   exhaustedUnits,
   isInFlight,
-  loginCommand,
   nextReset,
   optimisticStatus,
   ordinalDay,
   successRate,
 } from "../_lib/account-model";
+import { SignInDrawer } from "./sign-in-drawer";
 
 export function AccountCell({ connection }: { connection: Connection }) {
   return (
@@ -48,6 +49,7 @@ export function AccountCell({ connection }: { connection: Connection }) {
 
 /** Effective state badge, what is in flight for this account, and what to do when it is blocked. */
 export function StatusCell({ connection, ai = false }: { connection: Connection; ai?: boolean }) {
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const { pending } = useSharedCommands();
   const tracked =
     pending[`state:${connection.id}`] ?? pending[`test:${connection.id}`] ?? pending[`remove:${connection.id}`];
@@ -62,9 +64,23 @@ export function StatusCell({ connection, ai = false }: { connection: Connection;
         <CommandChip command={tracked} />
       </div>
       {state === "needs_login" && ai ? (
-        <div className="flex flex-col gap-1">
-          <span className="text-muted-foreground text-xs">Sign in again on the Farm PC:</span>
-          <CopyCommand command={loginCommand(connection)} />
+        <div className="pt-0.5">
+          <Button
+            size="sm"
+            variant="outline"
+            data-testid="account-signin-button"
+            className="h-6 gap-1 px-2 font-medium text-xs"
+            onClick={() => setDrawerOpen(true)}
+          >
+            <KeyRound className="size-3" />
+            Sign in
+          </Button>
+          <SignInDrawer
+            open={drawerOpen}
+            onOpenChange={setDrawerOpen}
+            connectionId={connection.id}
+            title={`Sign in ${connection.label}`}
+          />
         </div>
       ) : null}
       {reason ? (

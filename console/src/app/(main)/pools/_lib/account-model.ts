@@ -47,8 +47,3 @@ export function ordinalDay(day: number | undefined): string {
   if (rest >= 11 && rest <= 13) return `${day}th`;
   return `${day}${({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[day % 10] ?? "th"}`;
 }
-
-/** The command a person runs on the Farm PC to sign an AI account in again. */
-export function loginCommand(connection: Connection): string {
-  return `farm ai login ${connection.id}`;
-}

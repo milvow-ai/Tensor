@@ -17,6 +17,7 @@ import type {
   Connection,
   ConnectionQuery,
   ConnectionStatusRow,
+  ConnectPublicKeyJwk,
   CostPerResultRow,
   EvidenceQuery,
   EvidenceRow,
@@ -27,6 +28,7 @@ import type {
   FarmOverview,
   IdlePaidRow,
   JsonObject,
+  LoginSession,
   Page,
   PoolDetail,
   PoolOverviewRow,
@@ -504,5 +506,43 @@ export class SupabaseFarmData implements FarmData {
       page,
       pageSize,
     };
+  }
+
+  async getLoginSession(id: string): Promise<LoginSession | null> {
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("v_login_sessions").select("*").eq("id", id).maybeSingle();
+    if (error) throw new FarmDataError("v_login_sessions select", error);
+    return data ? (data as LoginSession) : null;
+  }
+
+  async getActiveLoginSession(connectionId: string): Promise<LoginSession | null> {
+    const supabase = await createClient();
+    const { data: active, error: activeErr } = await supabase
+      .from("v_login_sessions")
+      .select("*")
+      .eq("connection_id", connectionId)
+      .in("state", ["queued", "starting", "waiting_for_user", "verifying"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (activeErr) throw new FarmDataError("v_login_sessions select active", activeErr);
+    if (active) return active as LoginSession;
+
+    const { data: latest, error: latestErr } = await supabase
+      .from("v_login_sessions")
+      .select("*")
+      .eq("connection_id", connectionId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latestErr) throw new FarmDataError("v_login_sessions select latest", latestErr);
+    return latest ? (latest as LoginSession) : null;
+  }
+
+  async getConnectPublicKey(): Promise<ConnectPublicKeyJwk | null> {
+    const supabase = await createClient();
+    const { data, error } = await supabase.from("farm_settings").select("connect_public_key").limit(1).maybeSingle();
+    if (error) throw new FarmDataError("farm_settings select connect_public_key", error);
+    return data?.connect_public_key ? (data.connect_public_key as ConnectPublicKeyJwk) : null;
   }
 }

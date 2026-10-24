@@ -11,6 +11,7 @@ const ENV_NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
 const SLUG = /^[a-z0-9][a-z0-9-]{1,39}$/;
 
 import { looksLikeSecret, SECRET_REFUSAL } from "./redact";
+
 export { looksLikeSecret, SECRET_REFUSAL };
 
 export const envNameSchema = z
@@ -96,6 +97,22 @@ export const addAiAccountFormSchema = z.object({
   planPrice: z.number("Enter 0 for free").min(0, "Cannot be negative").max(100000),
 });
 export type AddAiAccountFormValues = z.infer<typeof addAiAccountFormSchema>;
+
+// --- Sealed Envelope Schema ------------------------------------------------------------------------------------
+
+export const sealedEnvelopeSchema = z.object({
+  v: z.literal(1),
+  alg: z.literal("ECDH-ES+HKDF-SHA256+A256GCM"),
+  epk: z.object({
+    kty: z.literal("EC"),
+    crv: z.literal("P-256"),
+    x: z.string().min(1).max(100),
+    y: z.string().min(1).max(100),
+  }),
+  iv: z.string().min(1).max(50),
+  ct: z.string().min(1).max(65536),
+});
+export type SealedEnvelopePayload = z.infer<typeof sealedEnvelopeSchema>;
 
 // --- Command payloads (what is written into farm_commands.payload) -----------------------------------------------
 
@@ -232,9 +249,7 @@ export const commandPayloadSchemas = {
       provider_id: slugSchema,
       name: z.string().optional().nullable(),
       kind: z.enum(["tool", "ai"]).default("tool"),
-      executor: z
-        .enum(["api", "mcp", "llm", "cli_agent", "agent", "browser", "local", "human"])
-        .default("mcp"),
+      executor: z.enum(["api", "mcp", "llm", "cli_agent", "agent", "browser", "local", "human"]).default("mcp"),
       default_strategy: z.enum([...POOL_STRATEGIES, "pin"] as const).default("failover"),
       enabled: z.boolean().default(true),
       config: z.record(z.string(), z.unknown()).default({}),
@@ -271,13 +286,48 @@ export const commandPayloadSchemas = {
     provider_id: slugSchema,
     name: z.string().optional().nullable(),
     enabled: z.boolean().optional().nullable(),
-    default_strategy: z.enum([...POOL_STRATEGIES, "pin"] as const).optional().nullable(),
+    default_strategy: z
+      .enum([...POOL_STRATEGIES, "pin"] as const)
+      .optional()
+      .nullable(),
     config: z.record(z.string(), z.unknown()).optional().nullable(),
     mcp: z.record(z.string(), z.unknown()).optional().nullable(),
   }),
   remove_provider: z.object({
     provider_id: slugSchema,
     force: z.boolean().default(false),
+  }),
+
+  // L3: Connect & Sign-in command schemas
+  start_login: z.object({
+    connection_id: connectionId,
+    method: z
+      .enum(["device_code", "paste_code", "loopback", "oauth_redirect", "api_key", "token"])
+      .nullable()
+      .optional(),
+  }),
+  submit_login_input: z.object({
+    session_id: z.string().uuid(),
+    sealed: sealedEnvelopeSchema,
+  }),
+  cancel_login: z.object({
+    session_id: z.string().uuid(),
+  }),
+  add_accounts: z.object({
+    provider_id: connectionId,
+    count: z.number().int().min(1).max(10),
+    cli: z.enum(["claude", "codex", "gemini", "agy", "hermes"]).nullable().optional(),
+    plan: z.string().max(40).nullable().optional(),
+    emails: z.array(z.string()).max(10).default([]),
+    max_parallel: z.number().int().min(1).max(4).default(1),
+  }),
+  save_secret: z.object({
+    name: z
+      .string()
+      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/)
+      .max(100),
+    sealed: sealedEnvelopeSchema,
+    connection_id: connectionId.nullable().optional(),
   }),
 } satisfies Record<CommandKind, z.ZodType>;
 
@@ -526,6 +576,76 @@ export function buildSyncMcpToolsPayload(args: SyncMcpToolsArgs) {
   };
 }
 
+// L3: Connect & Sign-in payload builders
+
+export interface StartLoginArgs {
+  connection_id: string;
+  method?: "device_code" | "paste_code" | "loopback" | "oauth_redirect" | "api_key" | "token" | null;
+}
+
+export function buildStartLoginPayload(args: StartLoginArgs) {
+  return {
+    connection_id: args.connection_id,
+    ...(args.method ? { method: args.method } : {}),
+  };
+}
+
+export interface SubmitLoginInputArgs {
+  session_id: string;
+  sealed: z.infer<typeof sealedEnvelopeSchema>;
+}
+
+export function buildSubmitLoginInputPayload(args: SubmitLoginInputArgs) {
+  return {
+    session_id: args.session_id,
+    sealed: args.sealed,
+  };
+}
+
+export interface CancelLoginArgs {
+  session_id: string;
+}
+
+export function buildCancelLoginPayload(args: CancelLoginArgs) {
+  return {
+    session_id: args.session_id,
+  };
+}
+
+export interface AddAccountsArgs {
+  provider_id: string;
+  count: number;
+  cli?: "claude" | "codex" | "gemini" | "agy" | "hermes" | null;
+  plan?: string | null;
+  emails?: string[];
+  max_parallel?: number;
+}
+
+export function buildAddAccountsPayload(args: AddAccountsArgs) {
+  return {
+    provider_id: args.provider_id,
+    count: args.count,
+    ...(args.cli ? { cli: args.cli } : {}),
+    ...(args.plan ? { plan: args.plan } : {}),
+    emails: args.emails ?? [],
+    max_parallel: args.max_parallel ?? 1,
+  };
+}
+
+export interface SaveSecretArgs {
+  name: string;
+  sealed: z.infer<typeof sealedEnvelopeSchema>;
+  connection_id?: string | null;
+}
+
+export function buildSaveSecretPayload(args: SaveSecretArgs) {
+  return {
+    name: args.name,
+    sealed: args.sealed,
+    ...(args.connection_id ? { connection_id: args.connection_id } : {}),
+  };
+}
+
 export const commandBuilders = {
   pause: buildPausePayload,
   resume: buildResumePayload,
@@ -542,6 +662,11 @@ export const commandBuilders = {
   set_max_parallel: buildSetMaxParallelPayload,
   set_mcp_tool_access: buildSetMcpToolAccessPayload,
   sync_mcp_tools: buildSyncMcpToolsPayload,
+  start_login: buildStartLoginPayload,
+  submit_login_input: buildSubmitLoginInputPayload,
+  cancel_login: buildCancelLoginPayload,
+  add_accounts: buildAddAccountsPayload,
+  save_secret: buildSaveSecretPayload,
 };
 
 export function createContractExamplePayloads(): Record<CommandKind, Record<string, unknown>> {
@@ -647,5 +772,51 @@ export function createContractExamplePayloads(): Record<CommandKind, Record<stri
       provider_id: "p_contract",
       force: true,
     },
+    start_login: buildStartLoginPayload({
+      connection_id: "c_contract",
+      method: "device_code",
+    }),
+    submit_login_input: buildSubmitLoginInputPayload({
+      session_id: "00000000-0000-0000-0000-000000000001",
+      sealed: {
+        v: 1,
+        alg: "ECDH-ES+HKDF-SHA256+A256GCM",
+        epk: {
+          kty: "EC",
+          crv: "P-256",
+          x: "cXxgxV4xvObAhEEbVU6yU04FN5BbgSnKqnqmKzWVOcw",
+          y: "AOOGWOxlh6MyXWNMvNkNOXt5WQ21wOabhV1iQk6_uJY",
+        },
+        iv: "p2E2_VNNXhKZenZT",
+        ct: "uXdkoFGv0zCd6KFmMnSaoDDFf-tuVPsdYtmCUMV8hvVRUP9n",
+      },
+    }),
+    cancel_login: buildCancelLoginPayload({
+      session_id: "00000000-0000-0000-0000-000000000001",
+    }),
+    add_accounts: buildAddAccountsPayload({
+      provider_id: "claude",
+      count: 2,
+      cli: "claude",
+      plan: "Pro",
+      emails: ["test1@example.com", "test2@example.com"],
+      max_parallel: 2,
+    }),
+    save_secret: buildSaveSecretPayload({
+      name: "OPENAI_API_KEY",
+      sealed: {
+        v: 1,
+        alg: "ECDH-ES+HKDF-SHA256+A256GCM",
+        epk: {
+          kty: "EC",
+          crv: "P-256",
+          x: "cXxgxV4xvObAhEEbVU6yU04FN5BbgSnKqnqmKzWVOcw",
+          y: "AOOGWOxlh6MyXWNMvNkNOXt5WQ21wOabhV1iQk6_uJY",
+        },
+        iv: "QgER70awFVd9hNUh",
+        ct: "UyC_uQ184pB_cZEBDcLMGrxv2DYBEFgPtfPOycBLw8mS2dCQHrmSRXk",
+      },
+      connection_id: "c_contract",
+    }),
   };
 }

@@ -6,7 +6,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 
 import { useSharedCommands } from "@/components/farm/commands-provider";
-import { CopyCommand } from "@/components/farm/copy-command";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +23,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { AI_CLI_INFO, AI_CLIS, type AiCli } from "@/lib/farm/command-meta";
 import { type AddAiAccountFormValues, addAiAccountFormSchema, buildAddConnectionPayload } from "@/lib/farm/commands";
 
+import { SignInCard } from "./sign-in-card";
+
 export function AddAiAccountForm({
   defaultCli = "claude",
   suggestedId,
@@ -36,6 +37,7 @@ export function AddAiAccountForm({
   onOpenChange: (open: boolean) => void;
 }) {
   const [formError, setFormError] = useState<string | null>(null);
+  const [addedAccountId, setAddedAccountId] = useState<string | null>(null);
   const { run } = useSharedCommands();
   const uid = useId();
   const idFor = (name: string) => `${uid}-${name}`;
@@ -54,7 +56,7 @@ export function AddAiAccountForm({
   });
   const { errors, isSubmitting } = form.formState;
   const cli = form.watch("cli");
-  const id = form.watch("id");
+  const _id = form.watch("id");
 
   async function onSubmit(values: AddAiAccountFormValues) {
     setFormError(null);
@@ -86,8 +88,7 @@ export function AddAiAccountForm({
       },
     );
     if (accepted) {
-      onOpenChange(false);
-      form.reset();
+      setAddedAccountId(values.id);
     }
   }
 
@@ -96,7 +97,11 @@ export function AddAiAccountForm({
       open={open}
       onOpenChange={(next) => {
         onOpenChange(next);
-        if (!next) setFormError(null);
+        if (!next) {
+          setFormError(null);
+          setAddedAccountId(null);
+          form.reset();
+        }
       }}
     >
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
@@ -107,122 +112,136 @@ export function AddAiAccountForm({
             sign in once on the PC.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={form.handleSubmit(onSubmit)} noValidate className="grid gap-4" aria-label="Add AI account">
-          {formError ? (
-            <Alert variant="destructive" role="alert">
-              <AlertDescription>{formError}</AlertDescription>
-            </Alert>
-          ) : null}
+        {addedAccountId ? (
+          <div className="space-y-4 py-2">
+            <SignInCard
+              connectionId={addedAccountId}
+              onDone={() => {
+                onOpenChange(false);
+                setAddedAccountId(null);
+                form.reset();
+              }}
+              onCancelled={() => {
+                onOpenChange(false);
+                setAddedAccountId(null);
+                form.reset();
+              }}
+            />
+          </div>
+        ) : (
+          <form onSubmit={form.handleSubmit(onSubmit)} noValidate className="grid gap-4" aria-label="Add AI account">
+            {formError ? (
+              <Alert variant="destructive" role="alert">
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            ) : null}
 
-          <Field>
-            <FieldLabel htmlFor={idFor("cli")}>CLI type</FieldLabel>
-            <NativeSelect
-              id={idFor("cli")}
-              className="w-full"
-              {...form.register("cli", {
-                onChange: (event) =>
-                  form.setValue("models", AI_CLI_INFO[event.target.value as AiCli].models.join(", "), {
-                    shouldValidate: true,
-                  }),
-              })}
-            >
-              {AI_CLIS.map((value) => (
-                <NativeSelectOption key={value} value={value}>
-                  {AI_CLI_INFO[value].label} ({value})
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            <FieldDescription>Joins the {AI_CLI_INFO[cli].providerId} pool.</FieldDescription>
-          </Field>
+            <Field>
+              <FieldLabel htmlFor={idFor("cli")}>CLI type</FieldLabel>
+              <NativeSelect
+                id={idFor("cli")}
+                className="w-full"
+                {...form.register("cli", {
+                  onChange: (event) =>
+                    form.setValue("models", AI_CLI_INFO[event.target.value as AiCli].models.join(", "), {
+                      shouldValidate: true,
+                    }),
+                })}
+              >
+                {AI_CLIS.map((value) => (
+                  <NativeSelectOption key={value} value={value}>
+                    {AI_CLI_INFO[value].label} ({value})
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+              <FieldDescription>Joins the {AI_CLI_INFO[cli].providerId} pool.</FieldDescription>
+            </Field>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field data-invalid={Boolean(errors.id)}>
-              <FieldLabel htmlFor={idFor("id")}>Account id</FieldLabel>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field data-invalid={Boolean(errors.id)}>
+                <FieldLabel htmlFor={idFor("id")}>Account id</FieldLabel>
+                <Input
+                  id={idFor("id")}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={`${AI_CLI_INFO[cli].providerId}-04`}
+                  aria-invalid={Boolean(errors.id)}
+                  {...form.register("id")}
+                />
+                {errors.id ? <FieldError>{errors.id.message}</FieldError> : null}
+              </Field>
+              <Field data-invalid={Boolean(errors.label)}>
+                <FieldLabel htmlFor={idFor("label")}>Label</FieldLabel>
+                <Input
+                  id={idFor("label")}
+                  autoComplete="off"
+                  aria-invalid={Boolean(errors.label)}
+                  {...form.register("label")}
+                />
+                {errors.label ? <FieldError>{errors.label.message}</FieldError> : null}
+              </Field>
+            </div>
+
+            <Field data-invalid={Boolean(errors.models)}>
+              <FieldLabel htmlFor={idFor("models")}>Models</FieldLabel>
               <Input
-                id={idFor("id")}
+                id={idFor("models")}
                 autoComplete="off"
                 spellCheck={false}
-                placeholder={`${AI_CLI_INFO[cli].providerId}-04`}
-                aria-invalid={Boolean(errors.id)}
-                {...form.register("id")}
+                className="font-mono"
+                aria-invalid={Boolean(errors.models)}
+                {...form.register("models")}
               />
-              {errors.id ? <FieldError>{errors.id.message}</FieldError> : null}
+              {errors.models ? (
+                <FieldError>{errors.models.message}</FieldError>
+              ) : (
+                <FieldDescription>
+                  Comma-separated. A task for a model only goes to accounts that list it.
+                </FieldDescription>
+              )}
             </Field>
-            <Field data-invalid={Boolean(errors.label)}>
-              <FieldLabel htmlFor={idFor("label")}>Label</FieldLabel>
-              <Input
-                id={idFor("label")}
-                autoComplete="off"
-                aria-invalid={Boolean(errors.label)}
-                {...form.register("label")}
-              />
-              {errors.label ? <FieldError>{errors.label.message}</FieldError> : null}
-            </Field>
-          </div>
 
-          <Field data-invalid={Boolean(errors.models)}>
-            <FieldLabel htmlFor={idFor("models")}>Models</FieldLabel>
-            <Input
-              id={idFor("models")}
-              autoComplete="off"
-              spellCheck={false}
-              className="font-mono"
-              aria-invalid={Boolean(errors.models)}
-              {...form.register("models")}
-            />
-            {errors.models ? (
-              <FieldError>{errors.models.message}</FieldError>
-            ) : (
-              <FieldDescription>
-                Comma-separated. A task for a model only goes to accounts that list it.
-              </FieldDescription>
-            )}
-          </Field>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field data-invalid={Boolean(errors.planName)}>
+                <FieldLabel htmlFor={idFor("plan")}>Plan (optional)</FieldLabel>
+                <Input
+                  id={idFor("plan")}
+                  autoComplete="off"
+                  placeholder="Max 5x"
+                  aria-invalid={Boolean(errors.planName)}
+                  {...form.register("planName")}
+                />
+              </Field>
+              <Field data-invalid={Boolean(errors.planPrice)}>
+                <FieldLabel htmlFor={idFor("price")}>Price / month (USD)</FieldLabel>
+                <Input
+                  id={idFor("price")}
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  min={0}
+                  aria-invalid={Boolean(errors.planPrice)}
+                  {...form.register("planPrice", { valueAsNumber: true })}
+                />
+                {errors.planPrice ? <FieldError>{errors.planPrice.message}</FieldError> : null}
+              </Field>
+            </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field data-invalid={Boolean(errors.planName)}>
-              <FieldLabel htmlFor={idFor("plan")}>Plan (optional)</FieldLabel>
-              <Input
-                id={idFor("plan")}
-                autoComplete="off"
-                placeholder="Max 5x"
-                aria-invalid={Boolean(errors.planName)}
-                {...form.register("planName")}
-              />
-            </Field>
-            <Field data-invalid={Boolean(errors.planPrice)}>
-              <FieldLabel htmlFor={idFor("price")}>Price / month (USD)</FieldLabel>
-              <Input
-                id={idFor("price")}
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                min={0}
-                aria-invalid={Boolean(errors.planPrice)}
-                {...form.register("planPrice", { valueAsNumber: true })}
-              />
-              {errors.planPrice ? <FieldError>{errors.planPrice.message}</FieldError> : null}
-            </Field>
-          </div>
-
-          <div className="rounded-lg border bg-muted/40 p-3 text-xs">
-            <p className="mb-1.5 text-muted-foreground">After it is added, sign in once on the Farm PC:</p>
-            <CopyCommand command={`farm ai login ${id || `${AI_CLI_INFO[cli].providerId}-04`}`} />
-            <p className="mt-2 text-muted-foreground">
+            <p className="text-muted-foreground text-xs">
               Usage limits are detected when the CLI reports them; no key is stored.
             </p>
-          </div>
 
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? <Spinner data-icon="inline-start" /> : null}
-              Queue account
-            </Button>
-          </DialogFooter>
-        </form>
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? <Spinner data-icon="inline-start" /> : null}
+                Queue account
+              </Button>
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

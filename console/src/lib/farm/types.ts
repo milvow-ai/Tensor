@@ -5,6 +5,10 @@
 // `alerts` / `farm_commands` tables of briefs/CONTEXT.md section 3. The fixtures source builds rows of exactly
 // these shapes, so the UI cannot tell the two sources apart.
 
+import type { ConnectPublicKeyJwk, SealedEnvelope } from "./seal";
+
+export type { ConnectPublicKeyJwk, SealedEnvelope };
+
 export type ProviderKind = "tool" | "ai";
 
 export type ProviderExecutor = "api" | "mcp" | "llm" | "cli_agent" | "agent" | "browser" | "local" | "human";
@@ -55,7 +59,12 @@ export type CommandKind =
   | "sync_mcp_tools"
   | "add_provider"
   | "update_provider"
-  | "remove_provider";
+  | "remove_provider"
+  | "start_login"
+  | "submit_login_input"
+  | "cancel_login"
+  | "add_accounts"
+  | "save_secret";
 
 export type CommandStatus = "queued" | "running" | "done" | "rejected" | "failed";
 
@@ -480,6 +489,11 @@ export interface FarmData {
   listEvidence(query?: EvidenceQuery): Promise<Page<EvidenceRow>>;
   getEvidence(id: string): Promise<EvidenceRow | null>;
   listAuditEvents(query?: AuditQuery): Promise<Page<AuditEventRow>>;
+
+  // L3: Connect & Sign-in
+  getLoginSession(id: string): Promise<LoginSession | null>;
+  getActiveLoginSession(connectionId: string): Promise<LoginSession | null>;
+  getConnectPublicKey(): Promise<ConnectPublicKeyJwk | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -565,4 +579,58 @@ export interface AuditQuery {
   pageSize?: number;
   actor?: string;
   action?: string;
+}
+
+// ---------------------------------------------------------------------------
+// L3: Connect & Sign-in types
+// ---------------------------------------------------------------------------
+
+export type LoginSessionState =
+  | "queued"
+  | "starting"
+  | "waiting_for_user"
+  | "verifying"
+  | "done"
+  | "failed"
+  | "expired"
+  | "cancelled"
+  | "duplicate"
+  | "needs_verification";
+
+export type LoginMethod = "device_code" | "paste_code" | "loopback" | "oauth_redirect" | "api_key" | "token";
+
+export interface LoginSessionIdentity {
+  account_hash?: string;
+  email_masked?: string;
+  plan?: string;
+  org?: string;
+  [key: string]: unknown;
+}
+
+export interface LoginSessionEvidence {
+  test_run_id?: string;
+  models?: string[];
+  [key: string]: unknown;
+}
+
+export interface LoginSession {
+  id: string;
+  connection_id: string;
+  provider_id: string;
+  method: LoginMethod;
+  state: LoginSessionState;
+  auth_url: string | null;
+  user_code: string | null;
+  verification_uri: string | null;
+  needs_input: boolean;
+  input_hint: string | null;
+  expires_at: string | null;
+  identity: LoginSessionIdentity;
+  evidence: LoginSessionEvidence;
+  error_kind: string | null;
+  error_excerpt: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
 }
