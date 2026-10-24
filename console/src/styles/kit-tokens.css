@@ -1,0 +1,151 @@
+/* Design tokens for Harness Farm UI Kit — scoped to kit and gallery only */
+
+/* Scoped font and base classes */
+.kit-theme {
+  --kit-bg-canvas: #f4f5f7;
+  --kit-bg-card: #ffffff;
+  --kit-bg-subtle: #f3f4f6;
+  --kit-border: #e6e8ec;
+  --kit-accent: #1f6feb;
+  --kit-accent-hover: #195ac0;
+  --kit-accent-soft: rgba(31, 111, 235, 0.1);
+  --kit-text-primary: #111827;
+  --kit-text-secondary: #6b7280;
+  --kit-text-muted: #9ca3af;
+
+  /* Semantic status colors */
+  --kit-positive: #16a34a;
+  --kit-positive-soft: #dcfce7;
+  --kit-positive-text: #15803d;
+
+  --kit-negative: #dc2626;
+  --kit-negative-soft: #fee2e2;
+  --kit-negative-text: #b91c1c;
+
+  --kit-warning: #d97706;
+  --kit-warning-soft: #fef3c7;
+  --kit-warning-text: #b45309;
+
+  --kit-info: #0284c7;
+  --kit-info-soft: #e0f2fe;
+  --kit-info-text: #0369a1;
+
+  --kit-neutral: #6b7280;
+  --kit-neutral-soft: #f3f4f6;
+  --kit-neutral-text: #374151;
+
+  /* Category colors for charts and breakdown bars (colour-blind-checked order) */
+  --kit-category-1: #2563eb; /* blue */
+  --kit-category-2: #0284c7; /* sky */
+  --kit-category-3: #9333ea; /* purple */
+  --kit-category-4: #ea580c; /* orange */
+  --kit-category-5: #16a34a; /* green */
+  --kit-category-6: #d97706; /* amber */
+
+  /* Radius tokens */
+  --kit-radius-card: 12px;
+  --kit-radius-control: 8px;
+  --kit-radius-pill: 9999px;
+
+  /* Shadows */
+  --kit-shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+  --kit-shadow-popover: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+
+  background-color: var(--kit-bg-canvas);
+  color: var(--kit-text-primary);
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+[data-kit-theme="light"] {
+  --kit-bg-canvas: #f4f5f7;
+  --kit-bg-card: #ffffff;
+  --kit-bg-subtle: #f3f4f6;
+  --kit-border: #e6e8ec;
+  --kit-accent: #1f6feb;
+  --kit-accent-hover: #195ac0;
+  --kit-accent-soft: rgba(31, 111, 235, 0.1);
+  --kit-text-primary: #111827;
+  --kit-text-secondary: #6b7280;
+  --kit-text-muted: #9ca3af;
+  --kit-positive: #16a34a;
+  --kit-positive-soft: #dcfce7;
+  --kit-positive-text: #15803d;
+  --kit-negative: #dc2626;
+  --kit-negative-soft: #fee2e2;
+  --kit-negative-text: #b91c1c;
+  --kit-warning: #d97706;
+  --kit-warning-soft: #fef3c7;
+  --kit-warning-text: #b45309;
+  --kit-info: #0284c7;
+  --kit-info-soft: #e0f2fe;
+  --kit-info-text: #0369a1;
+  --kit-neutral: #6b7280;
+  --kit-neutral-soft: #f3f4f6;
+  --kit-neutral-text: #374151;
+  --kit-category-1: #2563eb;
+  --kit-category-2: #0284c7;
+  --kit-category-3: #9333ea;
+  --kit-category-4: #ea580c;
+  --kit-category-5: #16a34a;
+  --kit-category-6: #d97706;
+}
+
+[data-kit-theme="dark"],
+.dark[data-kit-theme="dark"],
+.dark .kit-theme,
+.kit-theme.dark {
+  --kit-bg-canvas: #0d1117;
+  --kit-bg-card: #161b22;
+  --kit-bg-subtle: #21262d;
+  --kit-border: #30363d;
+  --kit-accent: #388bfd;
+  --kit-accent-hover: #58a6ff;
+  --kit-accent-soft: rgba(56, 139, 253, 0.15);
+  --kit-text-primary: #f0f6fc;
+  --kit-text-secondary: #8b949e;
+  --kit-text-muted: #6e7681;
+
+  /* Semantic status colors */
+  --kit-positive: #3fb950;
+  --kit-positive-soft: rgba(63, 185, 80, 0.15);
+  --kit-positive-text: #56d364;
+
+  --kit-negative: #f85149;
+  --kit-negative-soft: rgba(248, 81, 73, 0.15);
+  --kit-negative-text: #ff7b72;
+
+  --kit-warning: #d29922;
+  --kit-warning-soft: rgba(210, 153, 34, 0.15);
+  --kit-warning-text: #e3b341;
+
+  --kit-info: #38bdf8;
+  --kit-info-soft: rgba(56, 189, 248, 0.15);
+  --kit-info-text: #7dd3fc;
+
+  --kit-neutral: #8b949e;
+  --kit-neutral-soft: #21262d;
+  --kit-neutral-text: #c9d1d9;
+
+  /* Category colors for dark theme */
+  --kit-category-1: #388bfd;
+  --kit-category-2: #38bdf8;
+  --kit-category-3: #bc8cff;
+  --kit-category-4: #f0883e;
+  --kit-category-5: #3fb950;
+  --kit-category-6: #d29922;
+
+  /* Shadows */
+  --kit-shadow-card: 0 1px 3px 0 rgba(0, 0, 0, 0.3);
+  --kit-shadow-popover: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
+}
+
+.kit-theme code,
+.kit-theme .font-mono {
+  font-family: var(--font-geist-mono), monospace;
+}
+
+.kit-tabular,
+.tabular-nums {
+  font-feature-settings: "tnum";
+  font-variant-numeric: tabular-nums;
+}
