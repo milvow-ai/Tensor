@@ -79,6 +79,7 @@ export function StatusCell({ connection, ai = false }: { connection: Connection;
             open={drawerOpen}
             onOpenChange={setDrawerOpen}
             connectionId={connection.id}
+            providerId={connection.providerId}
             title={`Sign in ${connection.label}`}
           />
         </div>

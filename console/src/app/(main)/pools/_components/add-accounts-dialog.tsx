@@ -302,11 +302,12 @@ export function AddAccountsDialog({ defaultProviderId = "claude", trigger, onAdd
             </div>
 
             <div className="space-y-4">
-              {createdSessionIds.map((sessionId, index) => (
+              {createdConnectionIds.map((connId, index) => (
                 <SignInCard
-                  key={sessionId}
-                  sessionId={sessionId}
-                  connectionId={createdConnectionIds[index]}
+                  key={connId}
+                  sessionId={createdSessionIds[index]}
+                  connectionId={connId}
+                  providerId={providerId}
                   onRemoveSlot={handleRemoveSlot}
                 />
               ))}

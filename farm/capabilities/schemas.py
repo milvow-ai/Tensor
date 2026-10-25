@@ -469,7 +469,7 @@ class ClassifyOut(Sourced):
 
 AiEffort = Literal["low", "medium", "high", "xhigh", "max"]
 AI_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
-AiProvider = Literal["claude", "codex", "gemini", "hermes", "any"]
+AiProvider = Literal["claude", "codex", "gemini", "hermes", "perplexity", "any"]
 AiMode = Literal["answer", "edit"]
 
 
@@ -561,7 +561,7 @@ class AiJobSpec(_Input):
     task: str = Field(min_length=1, max_length=MAX_TASK_CHARS, description="What the worker must do.")
     ai: AiProvider = Field(
         default="any",
-        description="claude, codex, gemini, hermes, or any (the first AI with a usable account).",
+        description="claude, codex, gemini, hermes, perplexity, or any (the first AI with a usable account).",
     )
     account: str | None = Field(
         default=None,

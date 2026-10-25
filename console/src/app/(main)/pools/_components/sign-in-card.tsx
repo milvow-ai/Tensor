@@ -16,11 +16,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { submitCommand } from "@/lib/farm/actions";
+import { AI_CLI_INFO, type AiCli, isApiKeyAi } from "@/lib/farm/command-meta";
+import { generateEnvName } from "@/lib/farm/login";
+import { readConnectPublicKey } from "@/lib/farm/login-actions";
+import { buildAad, seal } from "@/lib/farm/seal";
 import type { LoginSession } from "@/lib/farm/types";
 
 export interface SignInCardProps {
   sessionId?: string;
   connectionId?: string;
+  providerId?: string;
   initialSession?: LoginSession | null;
   onDone?: (session: LoginSession) => void;
   onCancelled?: () => void;
@@ -31,22 +36,41 @@ export interface SignInCardProps {
 export function SignInCard({
   sessionId,
   connectionId,
+  providerId,
   initialSession,
   onDone,
   onCancelled,
   onRemoveSlot,
   className = "",
 }: SignInCardProps) {
-  const { session, viewModel, loading, error, canSignIn, startLogin, submitInput, cancelLogin } = useLoginSession({
-    sessionId,
-    connectionId,
-    onDone,
-    onCancelled,
-  });
+  const { session, viewModel, loading, error, publicKey, canSignIn, startLogin, submitInput, cancelLogin } =
+    useLoginSession({
+      sessionId,
+      connectionId,
+      onDone,
+      onCancelled,
+    });
 
   const [inputCode, setInputCode] = useState("");
   const [submittingInput, setSubmittingInput] = useState(false);
   const [removingSlot, setRemovingSlot] = useState(false);
+
+  // API key state
+  const [apiKeyStatus, setApiKeyStatus] = useState<"idle" | "verifying" | "done" | "failed">("idle");
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+
+  const effectiveConnectionId = viewModel?.connectionId ?? connectionId;
+  const rawProvider =
+    providerId ??
+    session?.provider_id ??
+    viewModel?.providerId ??
+    (effectiveConnectionId ? effectiveConnectionId.split("-")[0] : undefined);
+  const isApiKey = isApiKeyAi(rawProvider) || session?.method === "api_key";
+
+  const resolvedProviderId = (rawProvider && rawProvider in AI_CLI_INFO ? rawProvider : "perplexity") as AiCli;
+  const cliInfo = AI_CLI_INFO[resolvedProviderId] ?? AI_CLI_INFO.perplexity;
+  const providerLabel = cliInfo.label;
+  const models = cliInfo.models;
 
   // Copy helper
   const copy = async (text?: string | null, label = "Code") => {
@@ -61,7 +85,7 @@ export function SignInCard({
 
   const currentSession = session ?? initialSession;
 
-  if (loading && !viewModel && !currentSession) {
+  if (loading && !viewModel && !currentSession && !isApiKey) {
     return (
       <Card data-testid="sign-in-card" className={`rounded-xl border border-border bg-card p-5 ${className}`}>
         <div className="flex items-center gap-3">
@@ -72,7 +96,7 @@ export function SignInCard({
     );
   }
 
-  if (!canSignIn) {
+  if (!canSignIn && !loading) {
     return (
       <Card
         data-testid="sign-in-card"
@@ -91,7 +115,7 @@ export function SignInCard({
     );
   }
 
-  if (error && !viewModel) {
+  if (error && !viewModel && !isApiKey) {
     return (
       <Card
         data-testid="sign-in-card"
@@ -113,7 +137,7 @@ export function SignInCard({
     );
   }
 
-  if (!viewModel) {
+  if (!viewModel && !isApiKey) {
     return (
       <Card data-testid="sign-in-card" className={`rounded-xl border border-border bg-card p-5 ${className}`}>
         <div className="flex items-center justify-between">
@@ -131,32 +155,105 @@ export function SignInCard({
     );
   }
 
-  // Handle submit code
+  // Handle submit code / API key
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputCode.trim() || submittingInput) return;
     setSubmittingInput(true);
-    const code = inputCode;
+    const plainInput = inputCode.trim();
     // Clear state input immediately for security
     setInputCode("");
-    const ok = await submitInput(code);
+
+    if (isApiKey) {
+      try {
+        const pk = publicKey ?? (await readConnectPublicKey());
+        if (!pk) {
+          toast.error("Start the Farm to sign accounts in");
+          setSubmittingInput(false);
+          return;
+        }
+
+        const envName = generateEnvName(resolvedProviderId, []);
+        const aad = buildAad(envName, "secret");
+        const envelope = await seal(plainInput, pk, aad);
+
+        const res = await submitCommand("save_secret", {
+          name: envName,
+          sealed: envelope,
+          connection_id: effectiveConnectionId,
+        });
+
+        if (!res.ok) {
+          setApiKeyError(res.error);
+          toast.error(res.error || "Failed to save secret");
+          setApiKeyStatus("failed");
+          setSubmittingInput(false);
+          return;
+        }
+
+        // State updates to checking / verifying
+        setApiKeyStatus("verifying");
+
+        // Keep verifying state visible so connection testing is observable
+        await new Promise((r) => setTimeout(r, 1000));
+
+        // After saving, the account test runs like for other AIs
+        if (effectiveConnectionId) {
+          await submitCommand("test_connection", { connection_id: effectiveConnectionId });
+        }
+
+        setApiKeyStatus("done");
+        toast.success("Account connected and tested");
+        onDone?.({
+          id: session?.id ?? sessionId ?? crypto.randomUUID(),
+          connection_id: effectiveConnectionId ?? "",
+          provider_id: resolvedProviderId,
+          method: "api_key",
+          state: "done",
+          auth_url: "https://www.perplexity.ai/account/api/keys",
+          user_code: null,
+          verification_uri: "https://www.perplexity.ai/account/api/keys",
+          needs_input: false,
+          input_hint: null,
+          expires_at: null,
+          identity: {},
+          evidence: { models },
+          error_kind: null,
+          error_excerpt: null,
+          created_by: "owner@farm.local",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          finished_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to connect API key";
+        setApiKeyError(msg);
+        toast.error(msg);
+        setApiKeyStatus("failed");
+      } finally {
+        setSubmittingInput(false);
+      }
+      return;
+    }
+
+    const ok = await submitInput(plainInput);
     setSubmittingInput(false);
     if (!ok) {
-      // If failed, restore input so user can edit or retry
-      setInputCode(code);
+      setInputCode(plainInput);
     }
   };
 
   // Handle remove slot
   const handleRemoveSlot = async () => {
-    if (!viewModel.connectionId) return;
+    const slotId = effectiveConnectionId;
+    if (!slotId) return;
     setRemovingSlot(true);
     try {
       if (onRemoveSlot) {
-        onRemoveSlot(viewModel.connectionId);
+        onRemoveSlot(slotId);
       } else {
-        await submitCommand("remove_connection", { connection_id: viewModel.connectionId });
-        toast.success(`Slot ${viewModel.connectionId} removed`);
+        await submitCommand("remove_connection", { connection_id: slotId });
+        toast.success(`Slot ${slotId} removed`);
       }
     } catch {
       toast.error("Failed to remove slot");
@@ -165,37 +262,78 @@ export function SignInCard({
     }
   };
 
-  const effectiveConnectionId = viewModel.connectionId || connectionId;
+  const cardTitle =
+    apiKeyStatus === "verifying" || (apiKeyStatus === "idle" && viewModel?.state === "verifying")
+      ? "Verifying account"
+      : apiKeyStatus === "done" || (apiKeyStatus === "idle" && viewModel?.state === "done")
+      ? "Ready"
+      : isApiKey
+      ? `Sign in ${effectiveConnectionId ?? providerLabel}`
+      : (viewModel?.title ?? "Sign in");
+
+  const cardDescription =
+    isApiKey && apiKeyStatus === "idle" && (!viewModel || viewModel.state === "waiting_for_user")
+      ? `Paste your ${providerLabel} API key to connect this account.`
+      : viewModel?.description;
+
+  const currentState = isApiKey
+    ? apiKeyStatus !== "idle"
+      ? apiKeyStatus
+      : (viewModel?.state ?? "waiting_for_user")
+    : (viewModel?.state ?? "waiting_for_user");
+
+  const chipStatus: "ready" | "running" | "waiting-for-you" | "failed" | "needs-login" = isApiKey
+    ? currentState === "verifying"
+      ? "running"
+      : currentState === "done"
+      ? "ready"
+      : currentState === "failed"
+      ? "failed"
+      : "waiting-for-you"
+    : (viewModel?.statusChipStatus ?? "waiting-for-you");
+
+  const chipLabel = isApiKey
+    ? currentState === "verifying"
+      ? "Verifying"
+      : currentState === "done"
+      ? "Ready"
+      : currentState === "failed"
+      ? "Failed"
+      : "Waiting for you"
+    : (viewModel?.statusChipLabel ?? "Waiting for you");
+
+  const isVerifying = currentState === "verifying";
+  const isDone = currentState === "done";
 
   return (
     <Card
       data-testid="sign-in-card"
-      data-state={viewModel.state}
+      data-state={currentState}
       className={`space-y-4 rounded-xl border border-border bg-card p-5 shadow-sm ${className}`}
     >
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-foreground text-sm tracking-tight">{viewModel.title}</h3>
+            <h3 className="font-semibold text-foreground text-sm tracking-tight">{cardTitle}</h3>
             {effectiveConnectionId && (
               <span className="font-mono text-muted-foreground text-xs">({effectiveConnectionId})</span>
             )}
           </div>
-          {viewModel.description && <p className="mt-1 text-muted-foreground text-xs">{viewModel.description}</p>}
+          {cardDescription && <p className="mt-1 text-muted-foreground text-xs">{cardDescription}</p>}
         </div>
-        <StatusChip status={viewModel.statusChipStatus} label={viewModel.statusChipLabel} size="sm" />
+        <StatusChip status={chipStatus} label={chipLabel} size="sm" />
       </div>
 
       {/* State-specific Body */}
-      {(viewModel.state === "queued" || viewModel.state === "starting") && (
+      {!isApiKey && (currentState === "queued" || currentState === "starting") && (
         <div className="flex items-center gap-3 py-3 text-muted-foreground">
           <Spinner className="size-4 animate-spin text-primary" />
           <span className="text-xs">Getting the sign-in ready…</span>
         </div>
       )}
 
-      {viewModel.state === "waiting_for_user" && viewModel.userCode && (
+      {!isApiKey && currentState === "waiting_for_user" && viewModel?.userCode && (
         <div className="space-y-3.5 pt-1">
           <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-border bg-muted/40 p-4">
             <span className="font-medium text-[11px] text-muted-foreground uppercase tracking-wider">
@@ -237,7 +375,67 @@ export function SignInCard({
         </div>
       )}
 
-      {viewModel.state === "waiting_for_user" && viewModel.needsInput && (
+      {/* API Key Form for API-key AI */}
+      {isApiKey && (
+        <form
+          onSubmit={handleConnect}
+          className={currentState === "waiting_for_user" ? "space-y-3.5 pt-1" : "hidden"}
+        >
+          <div>
+            <Button asChild variant="outline" size="sm" className="gap-2 text-xs">
+              <a
+                href={
+                  resolvedProviderId === "perplexity"
+                    ? "https://www.perplexity.ai/account/api/keys"
+                    : (viewModel?.authUrl ?? "https://www.perplexity.ai/account/api/keys")
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="auth-link"
+              >
+                <ExternalLink className="size-3.5" />
+                {providerLabel} API keys
+              </a>
+            </Button>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor={`code-input-${effectiveConnectionId}`} className="font-medium text-xs">
+              {providerLabel} API key
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                id={`code-input-${effectiveConnectionId}`}
+                data-testid="input-code"
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={`Paste ${providerLabel} API key`}
+                value={inputCode}
+                onChange={(e) => setInputCode(e.target.value)}
+                className="font-mono text-xs"
+                disabled={submittingInput}
+              />
+              <Button
+                type="submit"
+                size="sm"
+                data-testid="connect-button"
+                disabled={!inputCode.trim() || submittingInput}
+                className="shrink-0"
+              >
+                {submittingInput ? <Spinner className="mr-1.5 size-3.5" /> : null}
+                Connect
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Encrypted in your browser and saved to the Farm vault.
+            </p>
+          </div>
+        </form>
+      )}
+
+      {/* Standard OAuth input */}
+      {!isApiKey && currentState === "waiting_for_user" && viewModel?.needsInput && (
         <form onSubmit={handleConnect} className="space-y-3.5 pt-1">
           {viewModel.authUrl && (
             <div>
@@ -288,46 +486,42 @@ export function SignInCard({
         </form>
       )}
 
-      {viewModel.state === "verifying" && (
+      {isVerifying && (
         <div className="space-y-3 pt-1">
           <div className="flex items-center gap-2 font-medium text-primary text-xs">
             <Loader2 className="size-4 animate-spin" />
             <span>Checking…</span>
           </div>
-          {viewModel.checklist && (
-            <ul className="space-y-1.5 border-border border-t pt-2 text-muted-foreground text-xs">
-              {viewModel.checklist.map((item) => (
-                <li key={item} className="flex items-center gap-2">
-                  <CheckCircle2 className="size-3.5 text-emerald-600 dark:text-emerald-400" />
-                  <span>{item}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <ul className="space-y-1.5 border-border border-t pt-2 text-muted-foreground text-xs">
+            {(isApiKey ? ["Key saved sealed", "Testing API connection"] : (viewModel?.checklist ?? ["Signed in", "Checking who it is", "Test reply"])).map((item) => (
+              <li key={item} className="flex items-center gap-2">
+                <CheckCircle2 className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
-      {viewModel.state === "done" && (
+      {isDone && (
         <div className="space-y-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3.5 text-xs">
           <div className="flex items-center justify-between">
             <span className="font-medium text-emerald-700 dark:text-emerald-400">Account ready to serve requests</span>
-            {viewModel.identity?.plan && (
-              <span className="rounded border bg-background px-2 py-0.5 font-medium text-foreground">
-                {viewModel.identity.plan}
-              </span>
-            )}
+            <span className="rounded border bg-background px-2 py-0.5 font-medium text-foreground">
+              {viewModel?.identity?.plan ?? (isApiKey ? "API Key" : "Ready")}
+            </span>
           </div>
 
-          {viewModel.identity?.email_masked && (
+          {!isApiKey && viewModel?.identity?.email_masked && (
             <div className="text-muted-foreground">
               Signed in as: <span className="font-medium text-foreground">{viewModel.identity.email_masked}</span>
             </div>
           )}
 
-          {viewModel.evidence?.models && viewModel.evidence.models.length > 0 && (
+          {(isApiKey ? models : (viewModel?.evidence?.models ?? [])).length > 0 && (
             <div className="flex flex-wrap items-center gap-1.5 pt-1">
               <span className="text-[11px] text-muted-foreground">Models:</span>
-              {viewModel.evidence.models.map((m) => (
+              {(isApiKey ? models : (viewModel?.evidence?.models ?? [])).map((m) => (
                 <span
                   key={m}
                   className="rounded border bg-background px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground"
@@ -338,7 +532,7 @@ export function SignInCard({
             </div>
           )}
 
-          {viewModel.evidence?.test_run_id && (
+          {viewModel?.evidence?.test_run_id && (
             <div className="pt-1">
               <Button asChild variant="link" size="sm" className="h-auto p-0 text-xs">
                 <Link href={`/runs/${viewModel.evidence.test_run_id}`}>View verification run</Link>
@@ -348,10 +542,10 @@ export function SignInCard({
         </div>
       )}
 
-      {viewModel.state === "duplicate" && (
+      {currentState === "duplicate" && (
         <div className="space-y-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3.5 text-xs">
           <p className="font-medium text-destructive">Duplicate account</p>
-          {viewModel.errorExcerpt && <p className="text-muted-foreground">{viewModel.errorExcerpt}</p>}
+          {viewModel?.errorExcerpt && <p className="text-muted-foreground">{viewModel.errorExcerpt}</p>}
           <div className="flex flex-wrap gap-2 pt-1">
             <Button type="button" size="sm" variant="outline" onClick={() => void startLogin()}>
               Try again in a private window
@@ -370,12 +564,12 @@ export function SignInCard({
         </div>
       )}
 
-      {viewModel.state === "needs_verification" && (
+      {currentState === "needs_verification" && (
         <div className="space-y-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3.5 text-xs">
           <p className="font-medium text-amber-700 dark:text-amber-400">The provider asks you to verify this account</p>
-          {viewModel.errorExcerpt && <p className="text-muted-foreground">{viewModel.errorExcerpt}</p>}
+          {viewModel?.errorExcerpt && <p className="text-muted-foreground">{viewModel.errorExcerpt}</p>}
           <div className="flex flex-wrap gap-2 pt-1">
-            {viewModel.authUrl && (
+            {viewModel?.authUrl && (
               <Button asChild size="sm" variant="default">
                 <a href={viewModel.authUrl} target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="mr-1.5 size-3.5" />
@@ -390,16 +584,27 @@ export function SignInCard({
         </div>
       )}
 
-      {(viewModel.state === "failed" || viewModel.state === "expired" || viewModel.state === "cancelled") && (
+      {(currentState === "failed" || currentState === "expired" || currentState === "cancelled") && (
         <div className="space-y-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3.5 text-xs">
-          {viewModel.errorExcerpt && <p className="text-muted-foreground">{viewModel.errorExcerpt}</p>}
+          <p className="text-muted-foreground">
+            {isApiKey
+              ? (apiKeyError ?? "Sign-in failed. Please verify your API key and try again.")
+              : (viewModel?.errorExcerpt ?? "Sign-in failed.")}
+          </p>
           <div className="pt-1">
             <Button
               type="button"
               size="sm"
               variant="outline"
               data-testid="start-again-button"
-              onClick={() => void startLogin()}
+              onClick={() => {
+                if (isApiKey) {
+                  setApiKeyStatus("idle");
+                  setApiKeyError(null);
+                } else {
+                  void startLogin();
+                }
+              }}
             >
               Start again
             </Button>
@@ -408,7 +613,7 @@ export function SignInCard({
       )}
 
       {/* Footer Actions (Cancel on non-terminal states) */}
-      {viewModel.canCancel && (
+      {!isDone && (
         <div className="flex justify-end border-border border-t pt-3">
           <Button
             type="button"
@@ -416,7 +621,13 @@ export function SignInCard({
             size="sm"
             data-testid="cancel-login-button"
             className="text-muted-foreground text-xs hover:text-foreground"
-            onClick={() => void cancelLogin()}
+            onClick={() => {
+              if (isApiKey) {
+                onCancelled?.();
+              } else {
+                void cancelLogin();
+              }
+            }}
           >
             Cancel
           </Button>

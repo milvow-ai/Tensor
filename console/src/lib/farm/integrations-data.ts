@@ -8,6 +8,8 @@
 // Build against fixtures now; the lead reconciles table names with OPEN1/AIP2 migrations at merge.
 // =====================================================================================================================
 
+import { createClient } from "@/lib/supabase/server";
+
 import { getFarmData } from "./data";
 import type { ConnectionStatus, JsonObject, PoolHealth, ProviderExecutor } from "./types";
 
@@ -31,7 +33,8 @@ export interface IntegrationSummary {
   namespace: string;
   exposeMode: "direct" | "discovery" | "auto" | "n/a";
   health: PoolHealth;
-  toolCount: number;
+  /** Tools in the synced catalogue (`mcp_tools`); null when it is unknown (not synced yet, or not readable). */
+  toolCount: number | null;
   accountsCount: number;
   accounts: IntegrationAccount[];
   lastSyncAt: string | null;
@@ -102,6 +105,26 @@ export interface AiConversationItem {
 // Reads
 // ---------------------------------------------------------------------------
 
+/**
+ * Tools per provider in `mcp_tools` (written by `farm mcp sync`; owner-readable under RLS). Returns null when the
+ * table cannot be read, so the cards show "—" instead of a false 0. A provider missing from the map has no rows.
+ */
+async function countSyncedTools(): Promise<Map<string, number> | null> {
+  try {
+    const supabase = await createClient();
+    const result = await supabase.from("mcp_tools").select("provider").limit(10000);
+    if (result.error) return null;
+    const counts = new Map<string, number>();
+    for (const row of result.data ?? []) {
+      const provider = (row as { provider: string }).provider;
+      counts.set(provider, (counts.get(provider) ?? 0) + 1);
+    }
+    return counts;
+  } catch {
+    return null;
+  }
+}
+
 export async function getIntegrationsList(filter?: {
   kind?: "all" | "mcp" | "openapi" | "ai";
   health?: "all" | "healthy" | "degraded" | "down";
@@ -114,6 +137,7 @@ export async function getIntegrationsList(filter?: {
   const { FixturesFarmData } = await import("./fixtures/source");
   const isFixtures = farmData instanceof FixturesFarmData;
 
+  const syncedTools = isFixtures ? null : await countSyncedTools();
   const results: IntegrationSummary[] = [];
 
   for (const pool of pools) {
@@ -140,7 +164,12 @@ export async function getIntegrationsList(filter?: {
       planName: acc.plan.name,
     }));
 
-    let toolCount = 0;
+    // Fixtures count the fixture world below. Live: the synced catalogue, or null (unknown) when there is none yet.
+    let toolCount: number | null = isFixtures ? 0 : null;
+    if (!isFixtures && isMcp) {
+      const synced = syncedTools?.get(pool.provider_id) ?? 0;
+      toolCount = synced > 0 ? synced : null;
+    }
     let transport = "stdio";
     const namespace = pool.provider_id;
     let exposeMode: "direct" | "discovery" | "auto" | "n/a" = "direct";
@@ -383,4 +412,3 @@ export async function getAiConversationsList(filter?: { ai?: string; search?: st
 
   return convs;
 }
-

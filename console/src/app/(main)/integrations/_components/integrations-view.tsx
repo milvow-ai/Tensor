@@ -21,11 +21,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { MeterBar, StatusChip } from "@/components/kit";
 import { ApiKeyForm } from "@/app/(main)/pools/_components/api-key-form";
 import { SignInCard } from "@/app/(main)/pools/_components/sign-in-card";
 import { CopyCommand } from "@/components/farm/copy-command";
 import { EmptyState } from "@/components/farm/states";
+import { EvidencePopover, type FarmStatus, MeterBar, StatusChip } from "@/components/kit";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,13 +40,45 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { type AccountTruth, describeAccount, SHARE_TONE_COLOR, usableShareTone } from "@/lib/farm/account-error";
 import { submitCommand } from "@/lib/farm/actions";
-import type { IntegrationSummary } from "@/lib/farm/integrations-data";
+import type { IntegrationAccount, IntegrationSummary } from "@/lib/farm/integrations-data";
 import { looksLikeSecret, SECRET_REFUSAL } from "@/lib/farm/redact";
 import type { Connection, ConnectionStatus } from "@/lib/farm/types";
 
 type AddWhat = "mcp" | "ai" | "existing" | "openapi";
 type DialogStep = "what" | "form" | "result";
+
+/** The row's own status (it may have been updated optimistically) refined by the Farm's health data. */
+function accountTruthOf(acc: IntegrationAccount, connection: Connection | undefined): AccountTruth {
+  const fresh = connection !== undefined && connection.status === acc.status;
+  return describeAccount({
+    status: acc.status,
+    effectiveState: fresh ? connection.effectiveState : undefined,
+    circuit: fresh ? connection.health.circuit : undefined,
+    cooldownUntil: fresh ? connection.health.cooldownUntil : undefined,
+    lastErrorKind: connection?.health.lastErrorKind,
+    lastError: connection?.health.lastError,
+    lastErrorAt: connection?.health.lastErrorAt,
+    lastSuccessAt: acc.lastSuccessAt ?? connection?.health.lastSuccessAt,
+  });
+}
+
+function accountChip(
+  status: ConnectionStatus,
+  truth: AccountTruth,
+  connection: Connection | undefined,
+): { status: FarmStatus; label: string } {
+  if (truth.needsSignIn) return { status: "waiting-for-you", label: "Needs sign-in" };
+  if (truth.usable) return { status: "ready", label: "Active" };
+  if (status === "exhausted") return { status: "limited", label: "Exhausted" };
+  if (status === "active") {
+    return connection?.effectiveState === "circuit_open"
+      ? { status: "failed", label: "Circuit open" }
+      : { status: "limited", label: "Cooling down" };
+  }
+  return { status: "waiting-for-you", label: status.replaceAll("_", " ") };
+}
 
 function renderIntegrationIcon(kind: string) {
   if (kind === "ai") return <Bot className="size-4 text-purple-600" />;
@@ -54,7 +86,13 @@ function renderIntegrationIcon(kind: string) {
   return <Server className="size-4 text-primary" />;
 }
 
-export function IntegrationsView({ initialIntegrations, connections }: { initialIntegrations: IntegrationSummary[]; connections: Connection[] }) {
+export function IntegrationsView({
+  initialIntegrations,
+  connections,
+}: {
+  initialIntegrations: IntegrationSummary[];
+  connections: Connection[];
+}) {
   const [integrations, setIntegrations] = useState<IntegrationSummary[]>(initialIntegrations);
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState<string>("all");
@@ -243,7 +281,7 @@ export function IntegrationsView({ initialIntegrations, connections }: { initial
         if (typeof cmdResult?.status === "string") {
           status = cmdResult.status;
         }
-        const toolsCount = typeof cmdResult?.tools_count === "number" ? cmdResult.tools_count : 1;
+        const toolsCount = typeof cmdResult?.tools_count === "number" ? cmdResult.tools_count : null;
 
         setResultCommand(nextStep);
         setResultStatus(status);
@@ -350,7 +388,7 @@ export function IntegrationsView({ initialIntegrations, connections }: { initial
             namespace: providerId,
             exposeMode: "direct",
             health: "healthy",
-            toolCount: 0,
+            toolCount: null,
             accountsCount: 1,
             accounts: [newAcc],
             lastSyncAt: new Date().toISOString(),
@@ -489,7 +527,7 @@ export function IntegrationsView({ initialIntegrations, connections }: { initial
           namespace: cleanId,
           exposeMode: "direct",
           health: "healthy",
-          toolCount: 0,
+          toolCount: null,
           accountsCount: 1,
           accounts: [
             {
@@ -534,7 +572,9 @@ export function IntegrationsView({ initialIntegrations, connections }: { initial
             ? {
                 ...i,
                 health: "healthy",
-                accounts: i.accounts.map((a) => (a.id === acc.id ? { ...a, status: "active" } : a)),
+                accounts: i.accounts.map((a) =>
+                  a.id === acc.id ? { ...a, status: "active", lastSuccessAt: new Date().toISOString() } : a,
+                ),
               }
             : i,
         ),
@@ -668,6 +708,13 @@ export function IntegrationsView({ initialIntegrations, connections }: { initial
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((item) => {
             const isMcp = item.kind === "mcp";
+            const truths = item.accounts.map((acc) =>
+              accountTruthOf(
+                acc,
+                connections.find((candidate) => candidate.id === acc.id),
+              ),
+            );
+            const usableCount = truths.filter((truth) => truth.usable).length;
             return (
               <Card key={item.id} className="flex flex-col justify-between transition-colors hover:border-primary/40">
                 <CardHeader className="p-4 pb-2">
@@ -684,7 +731,15 @@ export function IntegrationsView({ initialIntegrations, connections }: { initial
 
                     <StatusChip
                       status={item.health === "healthy" ? "ready" : item.health === "disabled" ? "limited" : "failed"}
-                      label={item.health === "healthy" ? "Ready" : item.health === "disabled" ? "Disabled" : item.health === "degraded" ? "Degraded" : "Down"}
+                      label={
+                        item.health === "healthy"
+                          ? "Ready"
+                          : item.health === "disabled"
+                            ? "Disabled"
+                            : item.health === "degraded"
+                              ? "Degraded"
+                              : "Down"
+                      }
                       size="sm"
                     />
                   </div>
@@ -706,7 +761,16 @@ export function IntegrationsView({ initialIntegrations, connections }: { initial
                     </div>
                     <div>
                       <span className="text-muted-foreground">Tools: </span>
-                      <span className="font-semibold text-primary">{item.toolCount}</span>
+                      {item.toolCount === null ? (
+                        <span
+                          className="font-semibold text-muted-foreground"
+                          title={isMcp ? "Catalogue not loaded yet" : "This kind has no tool catalogue"}
+                        >
+                          —
+                        </span>
+                      ) : (
+                        <span className="font-semibold text-primary">{item.toolCount}</span>
+                      )}
                     </div>
                   </div>
 
@@ -716,37 +780,64 @@ export function IntegrationsView({ initialIntegrations, connections }: { initial
                       Accounts ({item.accounts.length}):
                     </span>
                     <div className="space-y-1">
-                      {item.accounts.map((acc) => (
-                        (() => {
-                          const connection = connections.find((candidate) => candidate.id === acc.id);
-                          const usage = connection?.units.find((unit) => unit.limit !== null);
-                          const failed = Boolean(connection?.health.lastError);
-                          return (
-                        <div
-                          key={acc.id}
-                          className="space-y-1.5 rounded border bg-background px-2 py-1.5 text-xs"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="max-w-[140px] truncate font-medium text-[11px]">{acc.label}</span>
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-mono text-[10px] text-muted-foreground">{acc.authRef}</span>
-                              <StatusChip status={acc.status === "active" ? "ready" : acc.status === "needs_login" ? "needs-login" : acc.status === "exhausted" ? "limited" : "waiting-for-you"} label={acc.status.replaceAll("_", " ")} size="sm" />
+                      {item.accounts.map((acc, index) => {
+                        const connection = connections.find((candidate) => candidate.id === acc.id);
+                        const usage = connection?.units.find((unit) => unit.limit !== null);
+                        const truth = truths[index];
+                        const chip = accountChip(acc.status, truth, connection);
+                        return (
+                          <div key={acc.id} className="space-y-1.5 rounded border bg-background px-2 py-1.5 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="max-w-[140px] truncate font-medium text-[11px]">{acc.label}</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-[10px] text-muted-foreground">{acc.authRef}</span>
+                                <StatusChip status={chip.status} label={chip.label} size="sm" />
+                              </div>
                             </div>
+                            {usage ? (
+                              <MeterBar
+                                value={usage.used + usage.reserved}
+                                max={usage.limit ?? 1}
+                                label={`${usage.unit} used`}
+                                showValue
+                                caption={`${usage.used + usage.reserved} / ${usage.limit} ${usage.unit}`}
+                              />
+                            ) : connection ? (
+                              <p className="text-[10px] text-muted-foreground">{connection.callsToday} calls today</p>
+                            ) : null}
+                            {truth.summary && (
+                              <p className="flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400">
+                                <span className="min-w-0 flex-1 truncate" title={truth.summary}>
+                                  {truth.summary}
+                                </span>
+                                {truth.raw && (
+                                  <EvidencePopover
+                                    observedExcerpt={truth.raw}
+                                    checkedAt={connection?.health.lastErrorAt ?? new Date()}
+                                    state={truth.needsSignIn ? "needs sign-in" : "last error"}
+                                  >
+                                    <button
+                                      type="button"
+                                      className="shrink-0 cursor-pointer text-[var(--kit-accent,#1a63d6)] hover:underline dark:text-[#58a6ff]"
+                                    >
+                                      Details
+                                    </button>
+                                  </EvidencePopover>
+                                )}
+                              </p>
+                            )}
                           </div>
-                          {usage ? <MeterBar value={usage.used + usage.reserved} max={usage.limit ?? 1} label={`${usage.unit} used`} showValue caption={`${usage.used + usage.reserved} / ${usage.limit} ${usage.unit}`} /> : connection ? <p className="text-[10px] text-muted-foreground">{connection.callsToday} calls today</p> : null}
-                          {failed && <p className="text-xs text-destructive">{connection?.health.lastError}</p>}
-                        </div>
-                          );
-                        })()
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                   <MeterBar
-                    value={item.accounts.filter((account) => account.status === "active").length}
+                    value={usableCount}
                     max={item.accounts.length}
+                    color={SHARE_TONE_COLOR[usableShareTone(usableCount, item.accounts.length)]}
                     label="Active accounts"
                     showValue
-                    caption={`${item.accounts.filter((account) => account.status === "active").length} of ${item.accounts.length} accounts active`}
+                    caption={`${usableCount} of ${item.accounts.length} accounts active`}
                   />
                 </CardContent>
 
@@ -767,7 +858,7 @@ export function IntegrationsView({ initialIntegrations, connections }: { initial
                     {isMcp && (
                       <Button size="sm" variant="default" className="h-7 gap-1 text-xs" asChild>
                         <Link href={`/integrations/${item.id}`}>
-                          <span>Tools ({item.toolCount})</span>
+                          <span>Tools ({item.toolCount ?? "—"})</span>
                           <ChevronRight className="size-3" />
                         </Link>
                       </Button>
@@ -1359,9 +1450,7 @@ export function IntegrationsView({ initialIntegrations, connections }: { initial
               </DialogHeader>
 
               <div className="space-y-3 py-3">
-                {resultAiAccountId && (
-                  <SignInCard connectionId={resultAiAccountId} onDone={() => setAddOpen(false)} />
-                )}
+                {resultAiAccountId && <SignInCard connectionId={resultAiAccountId} onDone={() => setAddOpen(false)} />}
                 {!resultAiAccountId && resultSecretEnv && (
                   <ApiKeyForm
                     providerId={resultConnId ?? resultSecretEnv.split("_")[0]?.toLowerCase() ?? "env"}

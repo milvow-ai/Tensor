@@ -534,7 +534,7 @@ async def result_of(record: JobRecord, now: datetime, *, include_text: bool = Tr
                     text = stored
     effort_applied: bool | None = None
     if record.effort is not None:
-        effort_applied = record.ai not in ("gemini", "hermes", "agy")
+        effort_applied = record.ai not in ("gemini", "hermes", "agy", "perplexity")
     return AiJobResult.model_validate(
         {
             **status_of(record, now).model_dump(),

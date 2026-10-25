@@ -703,7 +703,7 @@ class BaseCliAgentExecutor:
         effective_effort = effort if effort is not None else _current_effort.get()
         effective_effort_applied = effort_applied
         if effective_effort is not None and effective_effort_applied is None:
-            effective_effort_applied = False if ai in ("gemini", "agy", "hermes") else True
+            effective_effort_applied = False if ai in ("gemini", "agy", "hermes", "perplexity") else True
 
         data: dict[str, Any] | None = None
         if ok or text:

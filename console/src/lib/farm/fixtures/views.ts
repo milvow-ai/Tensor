@@ -268,6 +268,7 @@ export function spendDailyRows(world: World, days = 90, now: number = Date.now()
     hermes: 35,
     gemini: 20,
     codex: 20,
+    perplexity: 20,
   };
 
   for (let offset = days - 1; offset >= 0; offset--) {

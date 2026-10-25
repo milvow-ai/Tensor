@@ -48,6 +48,8 @@ log = structlog.get_logger(__name__)
 
 METHODS = ("device_code", "paste_code", "loopback", "oauth_redirect", "api_key", "token")
 EXCERPT_MAX = 500
+API_KEY_CLIS = frozenset({"perplexity"})
+"""AIs with no sign-in session: the account is an API key saved with ``save_secret``."""
 
 
 class LoginError(Exception):
@@ -164,6 +166,12 @@ class LoginService:
             if existing is not None:
                 return UUID(str(existing["id"]))
             provider_id, meta = await self._connection(connection_id)
+            cli = str(meta.get("cli") or provider_id)
+            if cli in API_KEY_CLIS:
+                raise LoginError(
+                    f"{connection_id} is a {cli.title()} account: it has no sign-in. "
+                    "Paste an API key for it (save_secret with this account) instead."
+                )
             driver: LoginDriver | None
             failure: str | None = None
             try:
