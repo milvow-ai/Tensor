@@ -18,10 +18,12 @@ def b64(data: dict[str, object]) -> str:
 home = Path(os.environ["CODEX_HOME"])
 args = sys.argv[1:]
 if args[:2] == ["login", "--device-auth"]:
-    print("\nWelcome to Codex [v0.160.0]\nOpenAI's command-line coding agent\n")
+    # Real codex 0.160 colours its output even when stdout is a pipe (captured 2026-10-25): keep the escapes.
+    grey, blue, end = "\x1b[90m", "\x1b[94m", "\x1b[0m"
+    print(f"\nWelcome to Codex [v{grey}0.160.0{end}]\n{grey}OpenAI's command-line coding agent{end}\n")
     print("Follow these steps to sign in with ChatGPT using device code authorization:\n")
-    print("1. Open this link in your browser and sign in to your account\n   https://auth.openai.com/codex/device\n")
-    print("2. Enter this one-time code (expires in 15 minutes)\n   F91M-9W7OM\n", flush=True)
+    print(f"1. Open this link in your browser and sign in to your account\n   {blue}https://auth.openai.com/codex/device{end}\n")
+    print(f"2. Enter this one-time code {grey}(expires in 15 minutes){end}\n   {blue}F91M-9W7OM{end}\n", flush=True)
     time.sleep(float(os.environ.get("FAKE_CODEX_DELAY", "1")))
     if os.environ.get("FAKE_CODEX_MODE", "approve") == "timeout":
         print("Error logging in with device code: device auth timed out after 15 minutes", file=sys.stderr)

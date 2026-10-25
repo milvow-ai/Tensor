@@ -19,6 +19,7 @@ from farm.connect.homes import promote as swap_home
 from farm.connect.service import CheckResult
 from farm.secrets import redact
 
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")  # codex 0.160 colours the link and the code even on a pipe
 URL = re.compile(r"https://\S+")
 CODE = re.compile(r"^\s*([A-Z0-9]{4}-[A-Z0-9]{4,6})\s*$")
 FILE_STORE = 'cli_auth_credentials_store = "file"'  # the login lives in CODEX_HOME, never in a keyring
@@ -88,14 +89,17 @@ class CodexDeviceDriver:
         ensure_file_store(home / "config.toml")
         self._home = home
         self._proc = CliProcess(
-            [*self._cli(), "login", "--device-auth"], child_env({"CODEX_HOME": str(home)}), cwd=home
+            [*self._cli(), "login", "--device-auth"],
+            child_env({"CODEX_HOME": str(home), "NO_COLOR": "1"}),
+            cwd=home,
         )
         await self._proc.start()
 
     async def events(self) -> AsyncIterator[Any]:
         assert self._proc is not None and self._home is not None
         link: str | None = None
-        async for line in self._proc.lines():
+        async for raw in self._proc.lines():
+            line = ANSI.sub("", raw)
             found = URL.search(line)
             if link is None and found:
                 link = found.group(0).rstrip(".,)")
