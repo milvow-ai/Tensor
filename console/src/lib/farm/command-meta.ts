@@ -5,17 +5,34 @@ import type { CommandKind, POOL_STRATEGIES } from "./types";
 
 export const PERIODS = ["minute", "hour", "day", "week", "month", "rolling_5h", "total", "none"] as const;
 export const CHARGED_ON = ["attempt", "success", "found"] as const;
-export const AI_CLIS = ["claude", "codex", "gemini", "agy", "hermes"] as const;
+export const AI_CLIS = ["claude", "codex", "gemini", "agy", "hermes", "perplexity"] as const;
 export type AiCli = (typeof AI_CLIS)[number];
 
+export type AiSignInMethod = "cli" | "api_key";
+
 /** Which provider pool an AI CLI belongs to, and sensible default models (editable in the dialog). */
-export const AI_CLI_INFO: Record<AiCli, { providerId: string; label: string; models: string[] }> = {
+export const AI_CLI_INFO: Record<
+  AiCli,
+  { providerId: string; label: string; models: string[]; signIn?: AiSignInMethod }
+> = {
   claude: { providerId: "claude", label: "Claude Code", models: ["sonnet", "opus", "haiku"] },
   codex: { providerId: "codex", label: "Codex CLI", models: ["gpt-5-codex", "gpt-5"] },
   gemini: { providerId: "gemini", label: "Gemini CLI", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
   agy: { providerId: "gemini", label: "Antigravity (agy)", models: ["gemini-3-pro", "gemini-3-flash"] },
   hermes: { providerId: "hermes", label: "Hermes", models: ["farm-agent"] },
+  perplexity: {
+    providerId: "perplexity",
+    label: "Perplexity",
+    models: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
+    signIn: "api_key",
+  },
 };
+
+export function isApiKeyAi(providerIdOrCli?: string | null): boolean {
+  if (!providerIdOrCli) return false;
+  const match = AI_CLIS.find((c) => c === providerIdOrCli || AI_CLI_INFO[c].providerId === providerIdOrCli);
+  return match ? AI_CLI_INFO[match].signIn === "api_key" : false;
+}
 
 export const PERIOD_LABELS: Record<(typeof PERIODS)[number], string> = {
   minute: "per minute",

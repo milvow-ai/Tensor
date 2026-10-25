@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { AI_CLIS, CHARGED_ON, PERIODS } from "./command-meta";
+import { AI_CLIS, type AiCli, CHARGED_ON, PERIODS } from "./command-meta";
 import { type CommandKind, POOL_STRATEGIES, type PoolStrategy } from "./types";
 
 // Command contract between the Console and the Farm's command consumer (`farm_commands`).
@@ -316,7 +316,7 @@ export const commandPayloadSchemas = {
   add_accounts: z.object({
     provider_id: connectionId,
     count: z.number().int().min(1).max(10),
-    cli: z.enum(["claude", "codex", "gemini", "agy", "hermes"]).nullable().optional(),
+    cli: z.enum(AI_CLIS).nullable().optional(),
     plan: z.string().max(40).nullable().optional(),
     emails: z.array(z.string()).max(10).default([]),
     max_parallel: z.number().int().min(1).max(4).default(1),
@@ -615,7 +615,7 @@ export function buildCancelLoginPayload(args: CancelLoginArgs) {
 export interface AddAccountsArgs {
   provider_id: string;
   count: number;
-  cli?: "claude" | "codex" | "gemini" | "agy" | "hermes" | null;
+  cli?: AiCli | null;
   plan?: string | null;
   emails?: string[];
   max_parallel?: number;

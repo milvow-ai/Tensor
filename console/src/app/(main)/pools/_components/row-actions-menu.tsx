@@ -23,6 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { AI_CLI_INFO, AI_CLIS, type AiCli } from "@/lib/farm/command-meta";
 import type { Connection } from "@/lib/farm/types";
 
 import { SignInDrawer } from "./sign-in-drawer";
@@ -33,7 +34,7 @@ export function RowActionsMenu({ connection }: { connection: Connection }) {
   const [signInOpen, setSignInOpen] = useState(false);
   const isAi =
     connection.authRef?.startsWith("cli:") ||
-    ["claude", "codex", "gemini", "agy", "hermes"].includes(connection.providerId);
+    AI_CLIS.some((cli) => AI_CLI_INFO[cli].providerId === connection.providerId);
 
   async function copy(text: string, what: string) {
     try {
@@ -125,6 +126,7 @@ export function RowActionsMenu({ connection }: { connection: Connection }) {
           open={signInOpen}
           onOpenChange={setSignInOpen}
           connectionId={connection.id}
+          providerId={connection.providerId}
           title={`Sign in again: ${connection.label}`}
         />
       )}

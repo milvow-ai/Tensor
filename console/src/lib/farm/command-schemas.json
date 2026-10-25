@@ -916,7 +916,7 @@
       "cli": {
         "anyOf": [
           {
-            "enum": ["claude", "codex", "gemini", "agy", "hermes"],
+            "enum": ["claude", "codex", "gemini", "agy", "hermes", "perplexity"],
             "type": "string"
           },
           {
@@ -1313,7 +1313,7 @@
       "cli": {
         "anyOf": [
           {
-            "enum": ["claude", "codex", "gemini", "agy", "hermes"],
+            "enum": ["claude", "codex", "gemini", "agy", "hermes", "perplexity"],
             "type": "string"
           },
           {

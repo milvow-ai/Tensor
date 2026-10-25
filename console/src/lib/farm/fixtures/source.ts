@@ -445,12 +445,13 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
         const email = spec.emails?.[i];
         const label = email ? `${prov.name} (${email})` : `${prov.name} ${connId}`;
         const planName = spec.plan ?? "Default";
+        const isApiKey = spec.provider_id === "perplexity";
 
         w.connections.push({
           id: connId,
           providerId: spec.provider_id,
           label,
-          authRef: `cli:${connId}`,
+          authRef: isApiKey ? "" : `cli:${connId}`,
           scope: ["internal"],
           priority: 100,
           strategy: null,
@@ -458,7 +459,10 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
           ratePerMin: null,
           status: "needs_login",
           plan: { name: planName, price_usd: 0 },
-          meta: { cli: spec.cli ?? spec.provider_id },
+          meta: {
+            cli: spec.cli ?? spec.provider_id,
+            ...(isApiKey ? { models: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"] } : {}),
+          },
           health: {
             circuit: "closed",
             consecutiveFailures: 0,
@@ -483,15 +487,25 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
           id: sessionId,
           connection_id: connId,
           provider_id: spec.provider_id,
-          method: isDeviceCode ? "device_code" : "paste_code",
+          method: isApiKey ? "api_key" : isDeviceCode ? "device_code" : "paste_code",
           state: "waiting_for_user",
-          auth_url: isDeviceCode
+          auth_url: isApiKey
+            ? "https://www.perplexity.ai/account/api/keys"
+            : isDeviceCode
             ? "https://auth.openai.com/codex/device"
             : `https://${spec.provider_id}.ai/oauth/authorize`,
           user_code: isDeviceCode ? "WDJB-MJGN" : null,
-          verification_uri: isDeviceCode ? "https://auth.openai.com/codex/device" : null,
-          needs_input: !isDeviceCode,
-          input_hint: isDeviceCode ? null : "Paste the code the page shows you",
+          verification_uri: isApiKey
+            ? "https://www.perplexity.ai/account/api/keys"
+            : isDeviceCode
+            ? "https://auth.openai.com/codex/device"
+            : null,
+          needs_input: true,
+          input_hint: isApiKey
+            ? "Paste your Perplexity API key"
+            : isDeviceCode
+            ? null
+            : "Paste the code the page shows you",
           expires_at: new Date(now + 10 * 60 * 1000).toISOString(),
           identity: email ? { email_masked: email, plan: planName } : {},
           evidence: {},
@@ -515,6 +529,9 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
     case "start_login": {
       const spec = commandPayloadSchemas.start_login.parse(rawPayload);
       const conn = findConnection(w, spec.connection_id);
+      if (conn.providerId === "perplexity") {
+        throw new Rejection("Perplexity accounts use API keys; paste an API key to sign in.");
+      }
       const isDeviceCode = spec.method === "device_code" || conn.providerId === "codex";
       const sessionId = crypto.randomUUID();
       const session: LoginSession = {
@@ -568,6 +585,16 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
         if (conn) {
           conn.authRef = `env:${spec.name}`;
           conn.status = "active";
+        }
+        const session = w.loginSessions.find((s) => s.connection_id === spec.connection_id && !s.finished_at);
+        if (session) {
+          session.state = "done";
+          session.finished_at = new Date(now).toISOString();
+          session.updated_at = new Date(now).toISOString();
+          session.evidence = {
+            models: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
+            test_run_id: "run-pplx-test",
+          };
         }
       }
       return { ok: true, saved: spec.name };

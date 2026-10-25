@@ -116,6 +116,7 @@ export function AddAiAccountForm({
           <div className="space-y-4 py-2">
             <SignInCard
               connectionId={addedAccountId}
+              providerId={AI_CLI_INFO[form.getValues("cli")].providerId}
               onDone={() => {
                 onOpenChange(false);
                 setAddedAccountId(null);

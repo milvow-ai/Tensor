@@ -18,15 +18,21 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from farm.connect.sealed import SealedEnvelope, SealedError
-from farm.connect.service import LoginError, get_login_service, write_audit
+from farm.connect.service import API_KEY_CLIS, LoginError, get_login_service, write_audit
 from farm.db.pool import DbPool, tenant_connection
 from farm.secrets import set_secret
 from farm.tenancy import require_tenant
 
 _ID = r"^[a-z0-9][a-z0-9_-]{0,62}$"
 _ENV_NAME = r"^[A-Za-z_][A-Za-z0-9_]*$"
-_CLIS = ("claude", "codex", "gemini", "agy", "hermes")
-_NAMES = {"claude": "Claude", "codex": "Codex", "gemini": "Gemini", "hermes": "Hermes"}
+_CLIS = ("claude", "codex", "gemini", "agy", "hermes", "perplexity")
+_NAMES = {
+    "claude": "Claude",
+    "codex": "Codex",
+    "gemini": "Gemini",
+    "hermes": "Hermes",
+    "perplexity": "Perplexity",
+}
 _TEMPLATE_KEYS = ("allow_edit", "edit_roots", "timeout_s", "default_model")
 
 Method = Literal["device_code", "paste_code", "loopback", "oauth_redirect", "api_key", "token"]
@@ -53,7 +59,7 @@ class AddAccountsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     provider_id: str = Field(pattern=_ID)
     count: int = Field(ge=1, le=10)
-    cli: Literal["claude", "codex", "gemini", "agy", "hermes"] | None = None
+    cli: Literal["claude", "codex", "gemini", "agy", "hermes", "perplexity"] | None = None
     plan: str | None = Field(default=None, max_length=40)
     emails: list[str] = Field(default_factory=list, max_length=10)
     max_parallel: int = Field(default=1, ge=1, le=4)
@@ -175,7 +181,8 @@ async def _add_accounts(
                 "session_ids": session_ids,
             }
         created.append(account_id)
-        session_ids.append(str(await service.start_login(tenant_id, account_id, actor)))
+        if cli not in API_KEY_CLIS:  # an API-key account signs in by saving its key (save_secret)
+            session_ids.append(str(await service.start_login(tenant_id, account_id, actor)))
     return "done", {"connection_ids": created, "session_ids": session_ids}
 
 

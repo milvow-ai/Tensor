@@ -111,6 +111,25 @@ export function getLoginCardViewModel(session: LoginSession): LoginCardViewModel
           actions: ["copy_code", "open_verification_uri", "cancel"],
         };
       }
+      if (session.method === "api_key") {
+        return {
+          sessionId,
+          connectionId,
+          providerId,
+          state,
+          isTerminal: false,
+          canCancel: true,
+          title: "Sign in with API key",
+          description: "Paste your API key to connect this account",
+          statusChipStatus: "waiting-for-you",
+          statusChipLabel: "Waiting for you",
+          authUrl: session.auth_url ?? "https://www.perplexity.ai/account/api/keys",
+          needsInput: true,
+          inputHint: session.input_hint ?? "Paste your API key",
+          expiresAt: session.expires_at,
+          actions: ["open_auth_url", "submit_input", "cancel"],
+        };
+      }
       if (session.needs_input) {
         return {
           sessionId,

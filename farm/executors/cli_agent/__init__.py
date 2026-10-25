@@ -19,6 +19,7 @@ from farm.executors.cli_agent.claude import ClaudeCliExecutor
 from farm.executors.cli_agent.codex import CodexCliExecutor
 from farm.executors.cli_agent.gemini_cli import GeminiCliExecutor
 from farm.executors.cli_agent.hermes import HermesCliExecutor
+from farm.executors.cli_agent.perplexity import PerplexityApiExecutor
 
 
 class CliAgentExecutor:
@@ -35,6 +36,7 @@ class CliAgentExecutor:
                 "gemini": AgyCliExecutor(),
                 "gemini-cli": GeminiCliExecutor(),
                 "hermes": HermesCliExecutor(),
+                "perplexity": PerplexityApiExecutor(),
             }
 
     def _driver(self, connection: ConnectionView) -> tuple[str, Executor | None]:
@@ -71,6 +73,7 @@ __all__ = [
     "CodexCliExecutor",
     "GeminiCliExecutor",
     "HermesCliExecutor",
+    "PerplexityApiExecutor",
     "SubprocessOutput",
     "clean_cli_text",
     "extract_cost_usd",

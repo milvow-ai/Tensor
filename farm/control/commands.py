@@ -35,6 +35,7 @@ from pydantic import (
 from farm.connect.commands import CONNECT_PAYLOADS, consumed_payload, execute_connect_command
 from farm.db.pool import DbPool, system_connection, tenant_connection
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest
+from farm.executors.cli_agent.perplexity import PERPLEXITY_MODELS
 from farm.registry.models import (
     ExecutorKind,
     McpAuth,
@@ -308,7 +309,7 @@ class AddProviderPayload(BaseModel):
     timeout_s: float | None = None
 
     # AI CLI options
-    cli: Literal["claude", "codex", "gemini", "agy", "hermes"] | None = None
+    cli: Literal["claude", "codex", "gemini", "agy", "hermes", "perplexity"] | None = None
     account_id: Slug | None = None
     label: str | None = None
     models: list[str] = Field(default_factory=list)
@@ -532,6 +533,9 @@ async def execute_provider_command(
                 meta.setdefault("home", str(ai_data_dir))
             elif driver == "hermes":
                 meta.setdefault("profile", f"farm-{account_id}")
+            elif driver == "perplexity":
+                meta.setdefault("models", list(PERPLEXITY_MODELS))
+                meta.setdefault("model", "sonar")
 
             status = cmd.status or "needs_login"
             auth_ref = cmd.auth_ref or f"cli:{account_id}"
@@ -1390,7 +1394,26 @@ async def execute_command(
                 auth_ok = False
                 auth_err = None
 
-                if auth_ref.startswith("env:"):
+                if meta.get("cli") == "perplexity":
+                    # API-key account: one tiny Sonar call proves the saved key (no key: not signed in).
+                    if auth_ref.startswith("env:"):
+                        from farm.ai.accounts import PING
+                        from farm.executors.cli_agent import CliAgentExecutor
+
+                        ping = await CliAgentExecutor().execute(
+                            ExecRequest(
+                                request_id=uuid4(),
+                                capability=payload.capability or "ask_ai",
+                                params={"model": "sonar", **PING},
+                                connection=conn_view,
+                                timeout_s=60.0,
+                            )
+                        )
+                        auth_ok = ping.ok
+                        auth_err = None if ping.ok else ping.error
+                    else:
+                        auth_err = "No Perplexity API key is saved for this account; paste one first."
+                elif auth_ref.startswith("env:"):
                     try:
                         resolve_auth(conn_view.auth_ref)
                         auth_ok = True

@@ -842,6 +842,11 @@ def ai_login(
     conn_info = _run_farm(get_conn_info())
     meta = conn_info["meta"]
     cli_name = str(meta.get("cli") or conn_info["provider_id"]).lower()
+    if cli_name == "perplexity":
+        raise _fail(
+            f"{connection} is a Perplexity account: it has no login. Paste its API key in the dashboard, or "
+            "save it with `farm set-secret <NAME>` and point the account's auth_ref at env:<NAME>."
+        )
 
     config_dir_str = meta.get("home") or meta.get("config_dir")
     if not config_dir_str:
@@ -908,8 +913,8 @@ def ai_add(
     from farm.control.commands import execute_provider_command
 
     driver_clean = driver.lower().strip()
-    if driver_clean not in ("claude", "codex", "gemini", "agy", "hermes"):
-        raise _fail(f"Unknown AI driver '{driver}': choose claude, codex, gemini, or hermes.")
+    if driver_clean not in ("claude", "codex", "gemini", "agy", "hermes", "perplexity"):
+        raise _fail(f"Unknown AI driver '{driver}': choose claude, codex, gemini, hermes, or perplexity.")
 
     provider_id = "gemini" if driver_clean == "agy" else driver_clean
     payload = {

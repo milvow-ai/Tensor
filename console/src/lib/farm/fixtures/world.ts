@@ -354,6 +354,7 @@ const PROVIDERS: WorldProvider[] = [
   { id: "gemini", name: "Gemini", kind: "ai", executor: "cli_agent", defaultStrategy: "failover", enabled: true },
   { id: "codex", name: "Codex", kind: "ai", executor: "cli_agent", defaultStrategy: "failover", enabled: true },
   { id: "hermes", name: "Hermes", kind: "ai", executor: "agent", defaultStrategy: "failover", enabled: true },
+  { id: "perplexity", name: "Perplexity", kind: "ai", executor: "cli_agent", defaultStrategy: "failover", enabled: true },
   { id: "notion", name: "Notion", kind: "tool", executor: "mcp", defaultStrategy: "failover", enabled: true },
   { id: "github", name: "GitHub", kind: "tool", executor: "mcp", defaultStrategy: "round_robin", enabled: true },
   { id: "linear", name: "Linear", kind: "tool", executor: "mcp", defaultStrategy: "failover", enabled: true },
@@ -405,7 +406,7 @@ const ROUTES: [string, string[]][] = [
   ["find_email", ["hunter", "apollo"]],
   ["find_person", ["apollo", "clay"]],
   ["enrich_company", ["apollo", "clay"]],
-  ["ask_ai", ["claude", "codex", "gemini", "hermes"]],
+  ["ask_ai", ["claude", "codex", "gemini", "hermes", "perplexity"]],
   ["agent_task", ["hermes", "claude"]],
 ];
 
@@ -889,6 +890,52 @@ function connectionSeeds(now: number): ConnSeed[] {
       lastSuccessMinAgo: 52,
       sessions: 21,
       callsToday: 6,
+    },
+    {
+      id: "perplexity-01",
+      providerId: "perplexity",
+      label: "Perplexity Pro (primary)",
+      authRef: "env:PERPLEXITY_KEY_01",
+      priority: 1,
+      status: "active",
+      plan: { name: "Pro", price: 20, day: 1 },
+      meta: {
+        cli: "perplexity",
+        max_parallel: 1,
+        models: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
+      },
+      units: [{ unit: "requests", period: "month", limit: 10000, used: 1420, anchor: 1, chargedOn: "attempt", cost: 0.005 }],
+      success: 512,
+      failure: 3,
+      p50: 1200,
+      lastSuccessMinAgo: 15,
+      sessions: 8,
+      callsToday: 34,
+    },
+    {
+      id: "perplexity-02",
+      providerId: "perplexity",
+      label: "Perplexity Pro (standby)",
+      authRef: "",
+      priority: 2,
+      status: "needs_login",
+      plan: { name: "Pro", price: 20, day: 1 },
+      meta: {
+        cli: "perplexity",
+        max_parallel: 1,
+        models: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
+      },
+      units: [{ unit: "requests", period: "month", limit: 10000, used: 0, anchor: 1, chargedOn: "attempt", cost: 0.005 }],
+      success: 0,
+      failure: 0,
+      p50: null,
+      lastSuccessMinAgo: null,
+      sessions: 0,
+      callsToday: 0,
+      health: {
+        lastErrorKind: "needs_login",
+        lastError: "API key not configured",
+      },
     },
     // --- MCP Providers: Notion, GitHub, Linear, Local Tools ---
     {
@@ -1433,6 +1480,27 @@ export function buildScriptedLoginSessions(now: number): LoginSession[] {
       updated_at: iso(now - 410 * MINUTE),
       finished_at: iso(now - 410 * MINUTE),
     },
+    {
+      id: "00000000-0000-4000-8000-000000000009",
+      connection_id: "perplexity-02",
+      provider_id: "perplexity",
+      method: "api_key",
+      state: "waiting_for_user",
+      auth_url: "https://www.perplexity.ai/account/api/keys",
+      user_code: null,
+      verification_uri: "https://www.perplexity.ai/account/api/keys",
+      needs_input: true,
+      input_hint: "Paste your Perplexity API key",
+      expires_at: iso(now + 10 * MINUTE),
+      identity: {},
+      evidence: {},
+      error_kind: null,
+      error_excerpt: null,
+      created_by: "owner@farm.local",
+      created_at: iso(now - 45_000),
+      updated_at: iso(now - 45_000),
+      finished_at: null,
+    },
   ];
 }
 
@@ -1446,7 +1514,7 @@ export function buildWorld(now: number = Date.now()): World {
   const startOfMonth = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1);
   const nextMonth = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth() + 1, 1);
   const fraction = Math.max((now - startOfMonth) / (nextMonth - startOfMonth), 1 / 31);
-  const variableMonthly: Record<string, number> = { clay: 40, apollo: 12, zerobounce: 6, hermes: 24 };
+  const variableMonthly: Record<string, number> = { clay: 40, apollo: 12, zerobounce: 6, hermes: 24, perplexity: 15 };
   const spend: Record<string, WorldSpend | undefined> = {};
   for (const provider of PROVIDERS) {
     const plans = connections
@@ -1468,6 +1536,7 @@ export function buildWorld(now: number = Date.now()): World {
     gemini: 25,
     codex: 25,
     hermes: 40,
+    perplexity: 60,
     notion: 50,
     github: 30,
     linear: 20,
