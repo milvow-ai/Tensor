@@ -13,6 +13,7 @@ thread (``asyncio.to_thread(subprocess.run, ...)``).
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager
@@ -20,8 +21,11 @@ from typing import Any
 
 import structlog
 from psycopg import AsyncConnection
+from psycopg.abc import Buffer
 from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import TupleRow
+from psycopg.types.json import set_json_dumps
+from psycopg.types.string import StrDumperUnknown
 from psycopg_pool import AsyncConnectionPool
 
 from farm.settings import load_env
@@ -113,6 +117,23 @@ SYSTEM_ROLE = "farm_system"
 _RESET_SESSION = "reset role; reset app.tenant_id"
 
 
+class _NulFreeStrDumper(StrDumperUnknown):
+    """CLI output sometimes carries NUL bytes (codex-01, 2026-10-25); PostgreSQL text rejects them and the
+    whole bookkeeping write failed, so a finished job was recorded as a crash. NUL is dropped instead."""
+
+    def dump(self, obj: str) -> Buffer | None:
+        return super().dump(obj.replace("\x00", ""))
+
+
+def _nul_free_json(obj: object) -> str:
+    return json.dumps(obj).replace("\\u0000", "")  # jsonb rejects \u0000 too
+
+
+async def _configure(conn: Conn) -> None:
+    conn.adapters.register_dumper(str, _NulFreeStrDumper)
+    set_json_dumps(_nul_free_json, conn)
+
+
 async def reset_session(conn: Conn) -> None:
     """Drop the role and the tenant a checkout set. The pool runs it on every return (second guard)."""
     await conn.execute(_RESET_SESSION)
@@ -175,6 +196,7 @@ async def open_pool(db_url: str | None = None) -> DbPool:
         # prepare_threshold=None: stay compatible with transaction-mode poolers (Supabase Supavisor).
         kwargs={"autocommit": True, "prepare_threshold": None},
         reset=reset_session,
+        configure=_configure,
         open=False,
     )
     await pool.open(wait=True, timeout=30)

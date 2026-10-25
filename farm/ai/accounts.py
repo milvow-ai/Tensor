@@ -533,6 +533,11 @@ async def recheck_login(
         request_id=uuid4(), capability=ASK_AI, params=dict(PING), connection=view, timeout_s=timeout_s
     )
     result = await executor.execute(request)
+    if result.ok and not str((result.data or {}).get("text", "")).strip():
+        # A CLI that exits cleanly but says nothing is not a working account (agy did this on 2026-10-25).
+        result = result.model_copy(
+            update={"ok": False, "error_kind": ErrorKind.UNKNOWN, "error": "empty answer to the test prompt"}
+        )
     if result.ok:
         await health.record_success(pool, account_id, now=now)
         async with tenant_connection(pool) as conn:
