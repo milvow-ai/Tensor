@@ -187,7 +187,7 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
     // 1440px Desktop
     await page.setViewportSize({ width: 1440, height: 900 });
 
-    await page.goto("/billing");
+    await page.goto("/usage"); // /billing redirects here; measuring mid-redirect races
     await settle(page);
     expect((await scrollsHorizontally(page)).scrolls).toBe(false);
     await page.screenshot({ path: c2Shot("billing", 1440), fullPage: true });
@@ -205,7 +205,7 @@ test.describe("C2 — Billing & Runs acceptance tests", () => {
     // 390px Mobile
     await page.setViewportSize({ width: 390, height: 844 });
 
-    await page.goto("/billing");
+    await page.goto("/usage"); // /billing redirects here; measuring mid-redirect races
     await settle(page);
     expect((await scrollsHorizontally(page)).scrolls).toBe(false);
     await page.screenshot({ path: c2Shot("billing", 390), fullPage: true });
