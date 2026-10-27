@@ -74,9 +74,8 @@ export function AddAiAccountForm({
         scope: ["internal"],
         priority: 100,
         concurrency: 1,
-        plan: values.planName
-          ? { name: values.planName, price_usd: values.planPrice }
-          : { price_usd: values.planPrice },
+        // The Farm's PlanSpec requires a name; a nameless plan made the whole registry fail to load.
+        plan: { name: values.planName || "Default", price_usd: values.planPrice },
         meta: { cli: values.cli, models },
         units: {},
       }),

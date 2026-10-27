@@ -41,6 +41,7 @@ from farm.registry.models import (
     McpAuth,
     McpExpose,
     McpProviderSpec,
+    PlanSpec,
     ProviderKind,
     Strategy,
     looks_like_secret,
@@ -110,6 +111,13 @@ def validate_auth_ref(val: str) -> str:
             raise ValueError(f"Invalid environment variable name in auth_ref: '{rest}'")
 
     return text
+
+
+def validate_plan(val: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A non-empty plan must be a valid ``PlanSpec`` (name required), or the registry can no longer load."""
+    if val:
+        PlanSpec.model_validate(val)
+    return val
 
 
 def _assert_no_raw_secrets(obj: Any) -> None:
@@ -199,6 +207,11 @@ class AddConnectionPayload(BaseModel):
     def check_auth_ref(cls, v: str) -> str:
         return validate_auth_ref(v)
 
+    @field_validator("plan")
+    @classmethod
+    def check_plan(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        return validate_plan(v)
+
 
 class UpdateConnectionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -220,6 +233,11 @@ class UpdateConnectionPayload(BaseModel):
         if v is not None:
             return validate_auth_ref(v)
         return v
+
+    @field_validator("plan")
+    @classmethod
+    def check_plan(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        return validate_plan(v)
 
 
 class RemoveConnectionPayload(BaseModel):
@@ -334,6 +352,11 @@ class AddProviderPayload(BaseModel):
     def validate_no_secrets(self) -> AddProviderPayload:
         _assert_no_raw_secrets(self.model_dump())
         return self
+
+    @field_validator("plan")
+    @classmethod
+    def check_plan(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        return validate_plan(v)
 
 
 class UpdateProviderPayload(BaseModel):

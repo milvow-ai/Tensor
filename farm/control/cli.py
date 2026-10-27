@@ -814,6 +814,16 @@ def ai_cancel(
         typer.echo(f"job {ident} had already finished ({state})")
 
 
+def _resolve_cli(argv: list[str]) -> list[str]:
+    """Full path for argv[0]: on Windows npm installs `codex.cmd`, which CreateProcess cannot find by name."""
+    import shutil
+
+    found = shutil.which(argv[0])
+    if found is None:
+        raise _fail(f"'{argv[0]}' is not installed or not on PATH")
+    return [found, *argv[1:]]
+
+
 @ai_app.command(name="login")
 def ai_login(
     connection: Annotated[str, typer.Argument(help="Connection ID to log in, e.g. claude-02, codex-01.")],
@@ -862,7 +872,7 @@ def ai_login(
         typer.echo(f"Config directory: {config_dir}")
         typer.echo(f"Command: CLAUDE_CONFIG_DIR={config_dir} claude")
         typer.echo("Starting interactive Claude Code... type /login to complete authentication.")
-        subprocess.run(["claude"], env=env)
+        subprocess.run(_resolve_cli(["claude"]), env=env)
     elif cli_name == "codex":
         env["CODEX_HOME"] = str(config_dir)
         config_toml = config_dir / "config.toml"
@@ -873,7 +883,7 @@ def ai_login(
         typer.echo(f"Account: {connection} (Codex)")
         typer.echo(f"Config directory: {config_dir}")
         typer.echo(f"Command: CODEX_HOME={config_dir} {' '.join(argv)}")
-        subprocess.run(argv, env=env)
+        subprocess.run(_resolve_cli(argv), env=env)
     elif cli_name in ("agy", "gemini"):
         typer.echo(f"Account: {connection} (Antigravity)")
         # Without a D-Bus session agy (Linux) keeps the login in $HOME/.gemini/..., which is where the Farm's
@@ -889,13 +899,13 @@ def ai_login(
         else:
             typer.echo("No meta.home on this connection: Antigravity uses the global login on this machine.")
             typer.echo("Command: agy")
-        subprocess.run(["agy"], env=env)
+        subprocess.run(_resolve_cli(["agy"]), env=env)
     elif cli_name == "hermes":
         profile = meta.get("profile", "farm-agent")
         typer.echo(f"Account: {connection} (Hermes)")
         typer.echo(f"Profile: {profile}")
         typer.echo(f"Command: hermes -p {profile}")
-        subprocess.run(["hermes", "-p", str(profile)], env=env)
+        subprocess.run(_resolve_cli(["hermes", "-p", str(profile)]), env=env)
     else:
         typer.echo(f"Unknown CLI driver '{cli_name}' for connection {connection}")
 
