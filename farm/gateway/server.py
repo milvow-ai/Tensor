@@ -46,6 +46,7 @@ from farm.gateway.middleware import (
     TrajectoryMiddleware,
     current_caller,
 )
+from farm.gateway.usage_tools import register_usage_tools
 from farm.registry.models import MCP_CAPABILITY_PREFIX, STRATEGIES
 from farm.resources import reports
 from farm.resources.router import RouteOutcome, route
@@ -60,6 +61,7 @@ INFRA_TOOLS = (
     "list_resources",
     "get_run",
     "get_usage",
+    "get_ai_usage",
     "request_integration",
     "list_integration_requests",
 )
@@ -269,6 +271,7 @@ async def build_server(
             continue
         server.add_tool(CapabilityTool.create(ctx, name, description or name, *models))
     _register_infra_tools(server, ctx)
+    register_usage_tools(server, ctx)
     await register_ai_tools(server, ctx, routing_argument=ROUTING_ARGUMENT)
     await register_mcp_tools(server, ctx, direct_limit=mcp_direct_limit, pinned=mcp_pinned)
     return server

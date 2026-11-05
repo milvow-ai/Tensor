@@ -16,6 +16,7 @@ from typing import Any
 import structlog
 
 from farm.db.pool import DbPool, tenant_connection
+from farm.manager.ai_usage import poll_provider_allowances
 from farm.manager.balance import sync_all_balances
 from farm.manager.budgets import check_budget_thresholds
 from farm.manager.renewals import check_renewal_reminders
@@ -130,6 +131,7 @@ async def run_maintenance_tick(
     now: datetime | None = None,
     *,
     sync_balances: bool = False,
+    include_usage: bool = False,
 ) -> dict[str, Any]:
     """Execute a single maintenance pass across all manager tasks (ideal for testing)."""
     current = now or datetime.now(UTC)
@@ -140,6 +142,18 @@ async def run_maintenance_tick(
     # The rest is tenant work: it runs once for every active tenant, inside that tenant's context.
     # 2. Reactivate due connections
     reactivated = await _everywhere(pool, lambda: reactivate_due_connections(pool, current), "reactivate")
+
+    usage_probes: list[dict[str, int]] = []
+    if include_usage:
+        try:
+            usage_probes = await asyncio.wait_for(
+                for_each_tenant(pool, lambda: poll_provider_allowances(pool, current), task="ai_usage"),
+                timeout=60,
+            )
+        except TimeoutError:
+            log.error("manager_scheduler.ai_usage_timeout")
+        except Exception as exc:
+            log.error("manager_scheduler.ai_usage_failed", error=type(exc).__name__)
 
     # 3. Budget thresholds
     budget_alerts = await _everywhere(pool, lambda: check_budget_thresholds(pool, current), "budgets")
@@ -155,6 +169,7 @@ async def run_maintenance_tick(
                 balance_syncs.setdefault(provider, []).extend(entries)
 
     return {
+        "ai_usage_probes": usage_probes,
         "expired_reservations": expired,
         "reactivated_connections": reactivated,
         "budget_alerts": budget_alerts,
@@ -170,12 +185,14 @@ class ManagerScheduler:
         self.pool = pool
         self._running = False
         self._task: asyncio.Task[None] | None = None
+        self._usage_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         if self._running:
             return
         self._running = True
         self._task = asyncio.create_task(self._loop())
+        self._usage_task = asyncio.create_task(self._usage_loop())
         log.info("manager_scheduler.started")
 
     async def stop(self) -> None:
@@ -187,6 +204,13 @@ class ManagerScheduler:
             except asyncio.CancelledError:
                 pass
             self._task = None
+        if self._usage_task is not None:
+            self._usage_task.cancel()
+            try:
+                await self._usage_task
+            except asyncio.CancelledError:
+                pass
+            self._usage_task = None
         log.info("manager_scheduler.stopped")
 
     async def _loop(self) -> None:
@@ -198,7 +222,6 @@ class ManagerScheduler:
                 # 5-min tasks: expire reservations, reactivate exhausted
                 await ledger.expire(self.pool)
                 await _everywhere(self.pool, lambda: reactivate_due_connections(self.pool), "reactivate")
-
                 tick_1h += 1
                 if tick_1h >= 12:  # 12 * 5m = 60m
                     tick_1h = 0
@@ -217,5 +240,27 @@ class ManagerScheduler:
 
             try:
                 await asyncio.sleep(300)  # 5 minutes
+            except asyncio.CancelledError:
+                break
+
+    async def _usage_loop(self) -> None:
+        while self._running:
+            try:
+                await asyncio.wait_for(
+                    for_each_tenant(
+                        self.pool,
+                        lambda: poll_provider_allowances(self.pool, datetime.now(UTC)),
+                        task="ai_usage",
+                    ),
+                    timeout=60,
+                )
+            except asyncio.CancelledError:
+                break
+            except TimeoutError:
+                log.error("manager_scheduler.ai_usage_timeout")
+            except Exception as exc:
+                log.error("manager_scheduler.ai_usage_failed", error=type(exc).__name__)
+            try:
+                await asyncio.sleep(300)
             except asyncio.CancelledError:
                 break
