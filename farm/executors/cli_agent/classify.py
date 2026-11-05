@@ -112,6 +112,7 @@ _QUOTA_COMMON = (
     r"(?:credits?|credit balance) (?:are |is )?exhausted",
     r"\b(?:hit|reached|exceeded) (?:your |the )?(?:(?:account|plan|subscription) )?usage limit\b",
     r"individual quota reached",
+    r"\busage limit (?:reached|exceeded)\b",
     r"(?:account|plan|subscription|project|organization) usage limit (?:reached|exceeded)",
 )
 
@@ -122,7 +123,7 @@ _RATE_COMMON = (
     r"rate limited",
     r"too many requests",
     r"\bhttp 429\b",
-    r"\b429\b",
+    r"\b(?:http(?:/\d(?:\.\d)?)?|status(?: code)?|error(?: code)?)[:= ]+429\b",
 )
 
 _ALL_CLIS = ("claude", "codex", "agy", "gemini", "hermes")

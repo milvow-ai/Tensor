@@ -379,3 +379,24 @@ def test_r1_codex_actual_quota_after_success_still_exhausts() -> None:
     assert verdict.kind == ErrorKind.LIMIT_REACHED
     assert verdict.reset_at is not None
     assert "Connection dropped" not in (verdict.message or "")
+
+
+def test_explicit_claude_usage_limit_reached_keeps_provider_reset() -> None:
+    payload = json.dumps({
+        "result": "Usage limit reached. Your limit will reset at 2026-11-06T00:00:00Z",
+        "is_error": True,
+    })
+    verdict = classify_claude(payload, "", 1)
+    assert verdict.kind == ErrorKind.LIMIT_REACHED
+    assert verdict.reset_at is not None
+    assert verdict.reset_at.isoformat() == "2026-11-06T00:00:00+00:00"
+
+
+@pytest.mark.parametrize("stderr", ["error at line 429 of foo.py", "processed 429 records"])
+def test_bare_429_is_not_account_throttling(stderr: str) -> None:
+    assert classify_claude("", stderr, 1).kind == ErrorKind.UNKNOWN
+
+
+@pytest.mark.parametrize("stderr", ["HTTP 429", "HTTP/1.1 429", "status code: 429", "error 429"])
+def test_explicit_http_429_remains_rate_limited(stderr: str) -> None:
+    assert classify_claude("", stderr, 1).kind == ErrorKind.RATE_LIMITED
