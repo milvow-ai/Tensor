@@ -12,7 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 import tests.test_ai_jobs as ai_jobs
-from farm.ai import recovery
+from farm.ai import recovery, selection
 from farm.ai.failures import Failure
 from farm.ai.jobs import Attempt, Finish, JobManager, JobRecord, JobStore
 from farm.db.pool import tenant_connection
@@ -221,7 +221,7 @@ async def test_the_gateway_turns_failover_on_for_answers_by_default(aip: Aip) ->
         crashed("claude-02"), lambda job, task: answered(job.account, "from the next account")
     )
     async with aip.client() as client:
-        started = await call(client, "ai_start", task="question", ai="claude", account="claude-02")
+        started = await call(client, "ai_start", task="question", ai="claude", account="claude-02", model="sonnet", effort="high")
         assert started["ok"] is True, started
         (done,) = await finish(client, [started["job_id"]])
         assert done["ok"] is True and done["account"] != "claude-02"
@@ -397,6 +397,7 @@ async def test_the_orphan_sweep_alerts_each_job_for_its_own_tenant(aip: Aip) -> 
     store = JobStore(aip.pool)
     orphan = await store.create(
         conversation=None,
+        choice=selection.Choice("sonnet", "high", "high", "explicit"),
         ai="claude",
         account="claude-02",
         spec=spec(task="edit task", ai="claude", account="claude-02", mode="edit"),
@@ -425,7 +426,7 @@ async def test_ai_attention_lists_failed_jobs_with_their_action_and_acks_nothing
     aip.manager.transport = ScriptedTransport(crashed("claude-02"))
     async with aip.client() as client:
         started = await call(
-            client, "ai_start", task="question", ai="claude", account="claude-02", retry_other_account=False
+            client, "ai_start", task="question", ai="claude", account="claude-02", model="sonnet", effort="high", retry_other_account=False
         )
         (done,) = await finish(client, [started["job_id"]])
         assert done["ok"] is False

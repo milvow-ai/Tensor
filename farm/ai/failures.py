@@ -28,6 +28,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from farm.capabilities.schemas import FailureKind, RequestErrorKind
 from farm.resources.router import RouteError
@@ -61,6 +62,7 @@ class AiRequestError(Exception):
         ai: str | None = None,
         account: str | None = None,
         retry_at: datetime | None = None,
+        choices: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(message)
         self.kind: RequestErrorKind = kind
@@ -68,6 +70,8 @@ class AiRequestError(Exception):
         self.ai = ai
         self.account = account
         self.retry_at = retry_at
+        self.choices = choices
+        """``selection_required`` / ``invalid_selection``: per job, what is missing and the accounts' menus."""
 
 
 @dataclass(frozen=True)
@@ -99,7 +103,7 @@ def classify(error: RouteError, *, account: str, replying: bool) -> Failure | Bu
         quota = [a for a in error.attempts if a.outcome == "reserve_failed"]
         if quota:
             kind, cause, message = "limit", "quota", f"{quota[0].message} (the account's quota is used up)"
-        elif any(a.kind == "model_not_offered" for a in skips):
+        elif any(a.kind in ("model_not_offered", "selection_required", "invalid_selection") for a in skips):
             kind = "bad_request"
         else:
             kind = "account_unavailable"

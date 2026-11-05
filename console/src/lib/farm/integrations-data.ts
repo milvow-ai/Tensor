@@ -11,6 +11,7 @@
 import { createClient } from "@/lib/supabase/server";
 
 import { getFarmData } from "./data";
+import { getTenantId } from "./seal";
 import type { ConnectionStatus, JsonObject, PoolHealth, ProviderExecutor } from "./types";
 
 export interface IntegrationAccount {
@@ -69,21 +70,30 @@ export interface McpDetail {
 
 export interface AiJobItem {
   id: string;
-  task: string;
+  /** Null when read from `v_ai_jobs`, which keeps task input, cwd, schema, session id and error text out of the Console. */
+  task: string | null;
   ai: string;
   account: string;
-  model: string;
+  /** The requested model; null when the job named none. */
+  model: string | null;
+  /** The exact model the worker reported; null = unknown. */
+  resolvedModel: string | null;
+  requestedEffort: string | null;
+  /** What the driver applied (e.g. Codex caps xhigh/max at high); null = unknown. */
+  effectiveEffort: string | null;
+  /** How the choice was made; null on older jobs = unknown. */
+  selectionSource: "explicit" | "account_defaults" | "inherited" | null;
   mode: "answer" | "edit";
   cwd: string | null;
   conversationId: string | null;
   jsonSchema: JsonObject | null;
-  timeoutS: number;
+  timeoutS: number | null;
   state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   elapsedS: number;
   tokens: number;
   costUsd: number;
   nativeSessionId: string | null;
-  error: { kind: string; message: string; retry_at?: string } | null;
+  error: { kind: string; message?: string; retry_at?: string } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -222,7 +232,7 @@ export async function getIntegrationsList(filter?: {
         } else if (isAi) {
           transport = "cli";
           exposeMode = "n/a";
-          config = { cli: pool.provider_id, models: accounts[0]?.id ? ["default"] : [] };
+          config = { cli: pool.provider_id, models: [] };
         }
       }
     }
@@ -319,24 +329,82 @@ export async function getMcpServerDetail(providerId: string): Promise<McpDetail 
 // AIP2: AI Jobs & Conversations
 // ---------------------------------------------------------------------------
 
-export async function getAiJobsList(filter?: { state?: string; ai?: string; search?: string }): Promise<AiJobItem[]> {
-  const farmData = await getFarmData();
-  const { FixturesFarmData } = await import("./fixtures/source");
-  if (!(farmData instanceof FixturesFarmData)) {
-    return [];
-  }
+const AI_JOB_COLUMNS =
+  "id, conversation_id, ai, account, model, resolved_model, requested_effort, effective_effort, selection_source, " +
+  "mode, state, tokens, cost_usd, duration_s, error_kind, created_at, updated_at";
 
+interface AiJobRow {
+  id: string;
+  conversation_id: string | null;
+  ai: string;
+  account: string;
+  model: string | null;
+  resolved_model: string | null;
+  requested_effort: string | null;
+  effective_effort: string | null;
+  selection_source: AiJobItem["selectionSource"];
+  mode: AiJobItem["mode"];
+  state: AiJobItem["state"];
+  tokens: number | null;
+  cost_usd: number | string;
+  duration_s: number | string | null;
+  error_kind: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Latest jobs through the signed-in user's client: the invoker view applies their RLS, the server picks the tenant. */
+async function readAiJobs(): Promise<AiJobItem[]> {
+  const supabase = await createClient();
+  const result = await supabase
+    .from("v_ai_jobs")
+    .select(AI_JOB_COLUMNS)
+    .eq("tenant_id", getTenantId())
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (result.error) throw new Error(`Could not read AI jobs: ${result.error.message}`);
+  return ((result.data ?? []) as unknown as AiJobRow[]).map((row) => ({
+    id: row.id,
+    task: null,
+    ai: row.ai,
+    account: row.account,
+    model: row.model,
+    resolvedModel: row.resolved_model,
+    requestedEffort: row.requested_effort,
+    effectiveEffort: row.effective_effort,
+    selectionSource: row.selection_source,
+    mode: row.mode,
+    cwd: null,
+    conversationId: row.conversation_id,
+    jsonSchema: null,
+    timeoutS: null,
+    state: row.state,
+    elapsedS: Number(row.duration_s ?? 0),
+    tokens: Number(row.tokens ?? 0),
+    costUsd: Number(row.cost_usd),
+    nativeSessionId: null,
+    error: row.error_kind ? { kind: row.error_kind } : null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+}
+
+async function readFixtureAiJobs(): Promise<AiJobItem[]> {
   const { buildWorld } = await import("./fixtures/world");
   const store = globalThis as unknown as { __farmFixtureWorld?: ReturnType<typeof buildWorld> };
   const w = store.__farmFixtureWorld;
   if (!w) return [];
 
-  let jobs = w.aiJobs.map((j) => ({
+  return w.aiJobs.map((j) => ({
     id: j.id,
     task: j.task,
     ai: j.ai,
     account: j.account,
     model: j.model,
+    resolvedModel: null,
+    requestedEffort: null,
+    effectiveEffort: null,
+    selectionSource: null,
     mode: j.mode,
     cwd: j.cwd,
     conversationId: j.conversationId,
@@ -351,6 +419,12 @@ export async function getAiJobsList(filter?: { state?: string; ai?: string; sear
     createdAt: j.createdAt,
     updatedAt: j.updatedAt,
   }));
+}
+
+export async function getAiJobsList(filter?: { state?: string; ai?: string; search?: string }): Promise<AiJobItem[]> {
+  const farmData = await getFarmData();
+  const { FixturesFarmData } = await import("./fixtures/source");
+  let jobs = farmData instanceof FixturesFarmData ? await readFixtureAiJobs() : await readAiJobs();
 
   if (filter?.state && filter.state !== "all") {
     jobs = jobs.filter((j) => j.state === filter.state);
@@ -362,10 +436,11 @@ export async function getAiJobsList(filter?: { state?: string; ai?: string; sear
     const q = filter.search.toLowerCase();
     jobs = jobs.filter(
       (j) =>
-        j.task.toLowerCase().includes(q) ||
+        j.task?.toLowerCase().includes(q) ||
         j.id.toLowerCase().includes(q) ||
         j.account.toLowerCase().includes(q) ||
-        j.model.toLowerCase().includes(q),
+        j.model?.toLowerCase().includes(q) ||
+        j.resolvedModel?.toLowerCase().includes(q),
     );
   }
 

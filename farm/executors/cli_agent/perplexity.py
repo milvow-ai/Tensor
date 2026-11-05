@@ -104,7 +104,8 @@ class PerplexityApiExecutor(BaseCliAgentExecutor):
     async def execute(self, req: ExecRequest) -> ExecResult:
         meta = req.connection.meta or {}
         task = req.params.get("task") or req.params.get("prompt", "")
-        model = req.params.get("model") or meta.get("model") or meta.get("default_model") or DEFAULT_MODEL
+        # The request's explicit choice; DEFAULT_MODEL only for the unrouted login ping (the API needs a model).
+        model = req.params.get("model") or DEFAULT_MODEL
         mode = req.params.get("mode", "answer")
         timeout_s = float(req.params.get("timeout_s", req.timeout_s))
         json_schema = req.params.get("json_schema")

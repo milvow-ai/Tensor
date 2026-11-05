@@ -373,9 +373,28 @@ async def call(client: Client[Any], tool: str, **arguments: Any) -> dict[str, An
     return dict(reply.structured_content)
 
 
+CHOICES: dict[str, dict[str, str]] = {
+    "any": {"model": "sonnet", "effort": "high"},
+    "claude": {"model": "sonnet", "effort": "high"},
+    "gemini": {"model": "gemini-3.8-flash-high"},
+    "agy": {"model": "gemini-3.8-flash-high"},
+    "codex": {"model": "gpt-5", "effort": "high"},
+    "hermes": {"model": "deepseek"},
+}
+"""A valid explicit choice per AI of ``ai_registry``, for tests about something else."""
+
+
+def with_choice(fields: dict[str, Any]) -> dict[str, Any]:
+    """``fields`` with the AI's explicit choice filled in; a continuation inherits its own instead."""
+    if fields.get("conversation_id") or fields.get("use_defaults"):
+        return fields
+    ai = fields.get("ai") or str(fields.get("account") or "any").split("-")[0]
+    return {**CHOICES.get(ai, {}), **fields}
+
+
 async def start(client: Client[Any], **arguments: Any) -> dict[str, Any]:
     arguments.setdefault("task", "do the work")
-    reply = await call(client, "ai_start", **arguments)
+    reply = await call(client, "ai_start", **with_choice(arguments))
     assert reply["ok"] is True, reply
     return reply
 
@@ -423,7 +442,7 @@ async def all_gone(*pids: int) -> None:
 
 def spec(**fields: Any) -> AiJobSpec:
     fields.setdefault("task", "do the work")
-    return AiJobSpec(**fields)
+    return AiJobSpec(**with_choice(fields))
 
 
 # --- exact results: the answer is the worker's, byte for byte, and only a file ------------------------------------

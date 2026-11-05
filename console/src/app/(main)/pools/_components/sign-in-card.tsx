@@ -70,7 +70,7 @@ export function SignInCard({
   const resolvedProviderId = (rawProvider && rawProvider in AI_CLI_INFO ? rawProvider : "perplexity") as AiCli;
   const cliInfo = AI_CLI_INFO[resolvedProviderId] ?? AI_CLI_INFO.perplexity;
   const providerLabel = cliInfo.label;
-  const models = cliInfo.models;
+  const models: string[] = viewModel?.evidence?.models ?? [];
 
   // Copy helper
   const copy = async (text?: string | null, label = "Code") => {

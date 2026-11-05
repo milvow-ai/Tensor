@@ -44,6 +44,8 @@ class ExecRequest(BaseModel):
     params: dict[str, Any]
     connection: ConnectionView
     timeout_s: float = 30
+    selection_exempt: bool = False
+    """``ask_ai`` only: an operator's login or account ping on the CLI's own model, never a client's work."""
 
 
 class ExecResult(BaseModel):

@@ -8,6 +8,7 @@ import { useForm } from "react-hook-form";
 import { useSharedCommands } from "@/components/farm/commands-provider";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -20,8 +21,14 @@ import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Spinner } from "@/components/ui/spinner";
-import { AI_CLI_INFO, AI_CLIS, type AiCli } from "@/lib/farm/command-meta";
-import { type AddAiAccountFormValues, addAiAccountFormSchema, buildAddConnectionPayload } from "@/lib/farm/commands";
+import { AI_CLI_INFO, AI_CLIS, AI_EFFORTS, type AiCli } from "@/lib/farm/command-meta";
+import {
+  type AddAiAccountFormValues,
+  addAiAccountFormSchema,
+  buildAddConnectionPayload,
+  buildSelectionDefaults,
+  parseModels,
+} from "@/lib/farm/commands";
 
 import { SignInCard } from "./sign-in-card";
 
@@ -49,7 +56,10 @@ export function AddAiAccountForm({
       cli: defaultCli,
       id: suggestedId ?? "",
       label: "",
-      models: AI_CLI_INFO[defaultCli].models.join(", "),
+      models: "",
+      defaultsEnabled: false,
+      defaultModel: "",
+      defaultEffort: "",
       planName: "",
       planPrice: 0,
     },
@@ -57,17 +67,24 @@ export function AddAiAccountForm({
   const { errors, isSubmitting } = form.formState;
   const cli = form.watch("cli");
   const _id = form.watch("id");
+  const defaultsEnabled = form.watch("defaultsEnabled");
+  const defaultModel = form.watch("defaultModel");
+  const defaultEffort = form.watch("defaultEffort");
+  const modelOptions = [...new Set(parseModels(form.watch("models")))];
+  const efforts = AI_EFFORTS[AI_CLI_INFO[cli].providerId];
 
   async function onSubmit(values: AddAiAccountFormValues) {
     setFormError(null);
-    const models = values.models
-      .split(",")
-      .map((model) => model.trim())
-      .filter(Boolean);
+    const providerId = AI_CLI_INFO[values.cli].providerId;
+    const selectionDefaults = buildSelectionDefaults(providerId, {
+      enabled: values.defaultsEnabled,
+      model: values.defaultModel,
+      effort: values.defaultEffort,
+    });
     const accepted = await run(
       "add_connection",
       buildAddConnectionPayload({
-        provider_id: AI_CLI_INFO[values.cli].providerId,
+        provider_id: providerId,
         id: values.id,
         label: values.label,
         auth_ref: `cli:${values.id}`,
@@ -76,7 +93,7 @@ export function AddAiAccountForm({
         concurrency: 1,
         // The Farm's PlanSpec requires a name; a nameless plan made the whole registry fail to load.
         plan: { name: values.planName || "Default", price_usd: values.planPrice },
-        meta: { cli: values.cli, models },
+        meta: { cli: values.cli, models: parseModels(values.models), selection_defaults: selectionDefaults },
         units: {},
       }),
       {
@@ -142,10 +159,7 @@ export function AddAiAccountForm({
                 id={idFor("cli")}
                 className="w-full"
                 {...form.register("cli", {
-                  onChange: (event) =>
-                    form.setValue("models", AI_CLI_INFO[event.target.value as AiCli].models.join(", "), {
-                      shouldValidate: true,
-                    }),
+                  onChange: () => form.setValue("defaultEffort", "", { shouldValidate: true }),
                 })}
               >
                 {AI_CLIS.map((value) => (
@@ -200,6 +214,60 @@ export function AddAiAccountForm({
                 </FieldDescription>
               )}
             </Field>
+
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id={idFor("defaults")}
+                checked={defaultsEnabled}
+                onCheckedChange={(checked) =>
+                  form.setValue("defaultsEnabled", checked === true, { shouldValidate: true })
+                }
+              />
+              <FieldLabel htmlFor={idFor("defaults")}>Use account defaults when a request names none</FieldLabel>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field data-invalid={Boolean(errors.defaultModel)}>
+                <FieldLabel htmlFor={idFor("default-model")}>Default model</FieldLabel>
+                <NativeSelect
+                  id={idFor("default-model")}
+                  className="w-full"
+                  disabled={!defaultsEnabled || modelOptions.length === 0}
+                  aria-invalid={Boolean(errors.defaultModel)}
+                  value={modelOptions.includes(defaultModel) ? defaultModel : ""}
+                  onChange={(event) => form.setValue("defaultModel", event.target.value, { shouldValidate: true })}
+                >
+                  <NativeSelectOption value="">Choose a model</NativeSelectOption>
+                  {modelOptions.map((model) => (
+                    <NativeSelectOption key={model} value={model}>
+                      {model}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                {errors.defaultModel ? <FieldError>{errors.defaultModel.message}</FieldError> : null}
+              </Field>
+              {efforts ? (
+                <Field data-invalid={Boolean(errors.defaultEffort)}>
+                  <FieldLabel htmlFor={idFor("default-effort")}>Default effort</FieldLabel>
+                  <NativeSelect
+                    id={idFor("default-effort")}
+                    className="w-full"
+                    disabled={!defaultsEnabled}
+                    aria-invalid={Boolean(errors.defaultEffort)}
+                    value={defaultEffort}
+                    onChange={(event) => form.setValue("defaultEffort", event.target.value, { shouldValidate: true })}
+                  >
+                    <NativeSelectOption value="">Choose an effort</NativeSelectOption>
+                    {efforts.map((effort) => (
+                      <NativeSelectOption key={effort} value={effort}>
+                        {effort}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                  {errors.defaultEffort ? <FieldError>{errors.defaultEffort.message}</FieldError> : null}
+                </Field>
+              ) : null}
+            </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <Field data-invalid={Boolean(errors.planName)}>

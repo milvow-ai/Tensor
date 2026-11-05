@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { AI_CLIS, type AiCli, CHARGED_ON, PERIODS } from "./command-meta";
+import { AI_CLI_INFO, AI_CLIS, AI_EFFORTS, type AiCli, CHARGED_ON, PERIODS } from "./command-meta";
 import { type CommandKind, POOL_STRATEGIES, type PoolStrategy } from "./types";
 
 // Command contract between the Console and the Farm's command consumer (`farm_commands`).
@@ -76,26 +76,76 @@ export const addAccountFormSchema = z
   });
 export type AddAccountFormValues = z.infer<typeof addAccountFormSchema>;
 
-export const addAiAccountFormSchema = z.object({
-  cli: z.enum(AI_CLIS),
-  id: slugSchema,
-  label: z.string().trim().min(1, "Give the account a label").max(60),
-  models: z
-    .string()
-    .trim()
-    .min(1, "List at least one model")
-    .refine(
-      (value) =>
-        value
-          .split(",")
-          .map((model) => model.trim())
-          .filter(Boolean)
-          .every((model) => /^[a-z0-9][a-z0-9._:-]{0,63}$/i.test(model)),
-      "Comma-separated model names, e.g. sonnet, opus.",
-    ),
-  planName: z.string().trim().max(40),
-  planPrice: z.number("Enter 0 for free").min(0, "Cannot be negative").max(100000),
-});
+export function parseModels(models: string): string[] {
+  return models
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+}
+
+export interface SelectionDefaultsInput {
+  enabled: boolean;
+  model: string;
+  effort: string;
+}
+
+/** Why these opt-in defaults cannot be saved for this provider (mirrors farm/ai/selection.py); null when fine. */
+export function selectionDefaultsProblem(
+  providerId: string,
+  models: string[],
+  defaults: SelectionDefaultsInput,
+): { field: "model" | "effort"; message: string } | null {
+  if (!defaults.enabled) return null;
+  const model = defaults.model.trim().toLowerCase();
+  if (!model) return { field: "model", message: "Choose the default model" };
+  if (!models.some((name) => name.toLowerCase() === model)) {
+    return { field: "model", message: "The default model must be one of the models listed above" };
+  }
+  const efforts = AI_EFFORTS[providerId];
+  if (efforts && !efforts.includes(defaults.effort)) return { field: "effort", message: "Choose the default effort" };
+  return null;
+}
+
+/** `meta.selection_defaults`: off unless the operator opted in, and then only the values the provider takes. */
+export function buildSelectionDefaults(providerId: string, defaults: SelectionDefaultsInput) {
+  if (!defaults.enabled) return { enabled: false };
+  return {
+    enabled: true,
+    model: defaults.model.trim(),
+    ...(AI_EFFORTS[providerId] ? { effort: defaults.effort } : {}),
+  };
+}
+
+export const addAiAccountFormSchema = z
+  .object({
+    cli: z.enum(AI_CLIS),
+    id: slugSchema,
+    label: z.string().trim().min(1, "Give the account a label").max(60),
+    models: z
+      .string()
+      .trim()
+      .min(1, "List at least one model")
+      .refine(
+        (value) => parseModels(value).every((model) => /^[a-z0-9][a-z0-9._:-]{0,63}$/i.test(model)),
+        "Comma-separated model names, e.g. sonnet, opus.",
+      ),
+    defaultsEnabled: z.boolean(),
+    defaultModel: z.string(),
+    defaultEffort: z.string(),
+    planName: z.string().trim().max(40),
+    planPrice: z.number("Enter 0 for free").min(0, "Cannot be negative").max(100000),
+  })
+  .superRefine((form, ctx) => {
+    const problem = selectionDefaultsProblem(AI_CLI_INFO[form.cli].providerId, parseModels(form.models), {
+      enabled: form.defaultsEnabled,
+      model: form.defaultModel,
+      effort: form.defaultEffort,
+    });
+    if (problem) {
+      const path = [problem.field === "model" ? "defaultModel" : "defaultEffort"];
+      ctx.addIssue({ code: "custom", path, message: problem.message });
+    }
+  });
 export type AddAiAccountFormValues = z.infer<typeof addAiAccountFormSchema>;
 
 // --- Sealed Envelope Schema ------------------------------------------------------------------------------------

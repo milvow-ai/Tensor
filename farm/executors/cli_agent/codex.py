@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from farm.ai import selection
 from farm.executors.base import ErrorKind, ExecRequest, ExecResult
 from farm.executors.cli_agent.base import (
     BaseCliAgentExecutor,
@@ -34,8 +35,9 @@ class CodexCliExecutor(BaseCliAgentExecutor):
         config_dir = meta.get("home") or meta.get("config_dir")  # one CODEX_HOME per connection
 
         task = str(req.params.get("task") or req.params.get("prompt", ""))
-        model = req.params.get("model") or meta.get("model") or meta.get("default_model")
-        effort = req.params.get("effort") or meta.get("effort") or meta.get("default_effort")
+        # Only the request's explicit choice (farm.ai.selection resolved it): legacy meta defaults never apply.
+        model = req.params.get("model")
+        effort = req.params.get("effort")
         mode = req.params.get("mode", "answer")
         session_id = req.params.get("session_id")
         cwd = req.params.get("cwd")
@@ -85,8 +87,7 @@ class CodexCliExecutor(BaseCliAgentExecutor):
             argv.extend(["-m", str(model)])
 
         if effort:
-            effort_str = str(effort).lower()
-            mapped_effort = "high" if effort_str in ("xhigh", "max") else effort_str
+            mapped_effort = selection.effective_effort("codex", str(effort).lower())
             argv.extend(["-c", f"model_reasoning_effort={mapped_effort}"])
 
         if mode == "edit":

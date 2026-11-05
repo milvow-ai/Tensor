@@ -16,10 +16,22 @@ from decimal import Decimal
 from pathlib import Path
 from typing import IO, Any
 
+from farm.ai import selection
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult
 from farm.settings import data_dir_path
 
 _current_effort: ContextVar[str | None] = ContextVar("_current_effort", default=None)
+
+
+def reported_model(raw_data: dict[str, Any] | None) -> str | None:
+    """The exact model a CLI says it ran on, when its output names exactly one (Claude's ``modelUsage``).
+
+    ``None`` means unknown: a requested alias such as ``opus`` is never taken for the resolved model."""
+    usage = raw_data.get("modelUsage") if isinstance(raw_data, dict) else None
+    if isinstance(usage, dict) and len(usage) == 1:
+        (name,) = usage
+        return str(name) if str(name).strip() else None
+    return None
 
 
 @dataclass
@@ -714,7 +726,9 @@ class BaseCliAgentExecutor:
                 "json": parsed_json,
                 "ai": ai,
                 "model": model,
+                "resolved_model": reported_model(raw_data),
                 "effort": effective_effort,
+                "effective_effort": selection.effective_effort(ai, effective_effort),
                 "effort_applied": effective_effort_applied,
                 "connection_id": connection.id,
                 "session_id": session_id,

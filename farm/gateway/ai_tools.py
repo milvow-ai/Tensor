@@ -31,14 +31,19 @@ from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools import ToolResult
 from pydantic import Field, ValidationError
 
-from farm.ai.accounts import list_ai_accounts
+from farm.ai import selection
+from farm.ai.accounts import ai_options as options_of
+from farm.ai.accounts import list_ai_accounts, load_accounts, options_menu
 from farm.ai.failures import AiRequestError
 from farm.ai.jobs import JobManager
 from farm.capabilities.schemas import (
     ACCOUNT_SLUG,
+    EFFORT_DESCRIPTION,
     MAX_BATCH_JOBS,
     MAX_JOB_TIMEOUT_S,
     MAX_TASK_CHARS,
+    MODEL_DESCRIPTION,
+    USE_DEFAULTS_DESCRIPTION,
     AiEffort,
     AiJobSpec,
     AiMode,
@@ -56,6 +61,7 @@ log = structlog.get_logger(__name__)
 
 AI_TOOLS = (
     "list_ais",
+    "ai_options",
     "ask_ai_batch",
     "ai_start",
     "ai_start_many",
@@ -100,9 +106,46 @@ def _refused(error: AiRequestError) -> ToolResult:
     failure = AiRequestFailure(
         kind=error.kind, message=error.message, ai=error.ai, account=error.account, retry_at=error.retry_at
     )
-    return ToolResult(
-        structured_content={"ok": False, "error": failure.model_dump(mode="json")}, is_error=True
+    content: dict[str, Any] = {"ok": False, "error": failure.model_dump(mode="json")}
+    if error.choices is not None:
+        content["choices"] = error.choices
+    return ToolResult(structured_content=content, is_error=True)
+
+
+async def ask_ai_selection_gate(ctx: FarmContext, args: dict[str, Any]) -> ToolResult | None:
+    """The blocking ``ask_ai``: a call without an explicit choice (and no ``use_defaults``) is answered with
+    ``selection_required`` and the menu, before the router runs (no run, quota or CLI). ``None``: go on; the
+    router still validates the choice against every candidate it considers."""
+    if args.get("use_defaults") is True:
+        return None
+    ai = args.get("ai") or "any"
+    if not isinstance(ai, str):
+        return None  # the router refuses a malformed input with the schema's own message
+    model, effort = args.get("model"), args.get("effort")
+    missing = selection.missing_fields(
+        ai,
+        model=model if isinstance(model, str) else None,
+        effort=effort if isinstance(effort, str) else None,
     )
+    if not missing:
+        return None
+    message = f"choose {' and '.join(missing)} before starting"
+    choices = [
+        {
+            "index": 0,
+            "kind": "selection_required",
+            "message": message,
+            "missing": list(missing),
+            "options": options_menu(await load_accounts(ctx.pool), ctx.clock(), ai=ai),
+        }
+    ]
+    error = {
+        "kind": "selection_required",
+        "message": f"{message} (see choices)",
+        "hint": "call again with model (and effort where supported) from choices, or use_defaults=true",
+        "attempts": [],
+    }
+    return ToolResult(structured_content={"ok": False, "error": error, "choices": choices}, is_error=True)
 
 
 def _problems(exc: ValidationError) -> str:
@@ -163,16 +206,32 @@ async def register_ai_tools(
         {kind, at, message} (one short line; a success clears it)."""
         return await list_ai_accounts(ctx.pool, ctx.clock())
 
+    @server.tool(annotations={"readOnlyHint": True})
+    async def ai_options(
+        ai: Annotated[str | None, Field(pattern=ACCOUNT_SLUG, description="Only this AI.")] = None,
+        account: Annotated[str | None, Field(pattern=ACCOUNT_SLUG, description="Only this account.")] = None,
+    ) -> ToolResult:
+        """The menu to pick from before starting AI work: per AI whether effort applies, per account (labelled
+        provider · account) the configured models with their source (configured / verified), the efforts
+        (or not_supported, with what Codex applies for xhigh/max) and the opt-in default policy.
+        ai_start / ai_start_many / ask_ai refuse a job without model (and effort where supported) unless
+        use_defaults=true and the account's defaults are valid. Read-only."""
+        return _ok(await options_of(ctx.pool, ctx.clock(), ai=ai, account=account))
+
     @server.tool()
     async def ask_ai_batch(tasks: list[dict[str, Any]]) -> dict[str, Any]:
         """Run several AI tasks across the AI pool and wait for all answers (blocking, short tasks).
 
+        Each task needs model (and effort where supported; see ai_options) or use_defaults=true.
         For long work or follow-ups use ai_start_many / ai_start instead: they return at once.
         """
 
         async def run_one(task_args: dict[str, Any]) -> dict[str, Any]:
             args = dict(task_args)
             strategy = args.pop(routing_argument, None)
+            refused = await ask_ai_selection_gate(ctx, args)
+            if refused is not None:
+                return dict(refused.structured_content or {})
             outcome = await route(ctx, "ask_ai", args, strategy=strategy, caller=current_caller.get())
             return outcome.envelope()
 
@@ -196,16 +255,9 @@ async def register_ai_tools(
                 description="Run on exactly this account, e.g. claude-03. Default: the Farm picks.",
             ),
         ] = None,
-        model: Annotated[str | None, Field(description="Model name; the account must offer it.")] = None,
-        effort: Annotated[
-            AiEffort | None,
-            Field(
-                description=(
-                    "Reasoning effort: low, medium, high, xhigh, max. Supported by Claude and Codex "
-                    "(xhigh/max map to high); ignored by Gemini/Hermes."
-                )
-            ),
-        ] = None,
+        model: Annotated[str | None, Field(description=MODEL_DESCRIPTION)] = None,
+        effort: Annotated[AiEffort | None, Field(description=EFFORT_DESCRIPTION)] = None,
+        use_defaults: Annotated[bool, Field(description=USE_DEFAULTS_DESCRIPTION)] = False,
         mode: Annotated[
             AiMode,
             Field(
@@ -233,12 +285,15 @@ async def register_ai_tools(
             ),
         ] = None,
     ) -> ToolResult:
-        """Give a task to another AI and return at once with {job_id, conversation_id, account}.
+        """Give a task to another AI and return at once with {job_id, conversation_id, account, model,
+        effort, effective_effort, selection_source}.
 
-        The job runs in the background (it survives this client disconnecting) on one account of the AI.
-        Check it with ai_status / ai_wait, read the exact answer with ai_result, send a follow-up to the same
-        worker with ai_reply. A job waits when its account is busy (one job per account unless the account
-        allows more).
+        Pick model and effort from ai_options first: without them (and without use_defaults) nothing starts
+        and the reply is selection_required with the choices. A conversation_id continues with its persisted
+        choice. The job runs in the background (it survives this client disconnecting) on one account of the
+        AI. Check it with ai_status / ai_wait, read the exact answer with ai_result, send a follow-up to the
+        same worker with ai_reply. A job waits when its account is busy (one job per account unless the
+        account allows more).
         """
         try:
             spec = AiJobSpec(
@@ -247,6 +302,7 @@ async def register_ai_tools(
                 account=account,
                 model=model,
                 effort=effort,
+                use_defaults=use_defaults,
                 mode=mode,
                 cwd=cwd,
                 conversation_id=conversation_id,
@@ -278,7 +334,9 @@ async def register_ai_tools(
 
         With distinct_accounts every job gets its own account, so they run in parallel; when there are not
         enough usable accounts of an AI nothing is started and the error names the accounts that are missing
-        or unusable. Returns {jobs: [{job_id, conversation_id, account}, ...]} in the order given.
+        or unusable. Every job needs model (and effort where supported) or use_defaults; one job without a
+        valid choice refuses the whole call (selection_required / invalid_selection, choices per job index).
+        Returns {jobs: [{job_id, conversation_id, account, model, effort, ...}, ...]} in the order given.
         """
         try:
             started = await mgr.start_many(
@@ -388,6 +446,9 @@ async def register_ai_tools(
         ai: AiProvider | None = None,
         account: Annotated[str | None, Field(pattern=ACCOUNT_SLUG)] = None,
         model: str | None = None,
+        effort: Annotated[
+            AiEffort | None, Field(description="Default: the failed job's effort (same provider only).")
+        ] = None,
         approve_provider_change: bool = False,
         approve_model_change: bool = False,
         acknowledge_reconciliation: bool = False,
@@ -410,6 +471,7 @@ async def register_ai_tools(
                 ai=ai,
                 account=account,
                 model=model,
+                effort=effort,
                 approve_provider_change=approve_provider_change,
                 approve_model_change=approve_model_change,
                 acknowledge_reconciliation=acknowledge_reconciliation,
@@ -458,10 +520,13 @@ async def register_ai_tools(
         ] = None,
         effort: Annotated[
             AiEffort | None,
+            Field(description="Effort the account offers. Default: the conversation's persisted one."),
+        ] = None,
+        model: Annotated[
+            str | None,
             Field(
-                description=(
-                    "Reasoning effort: low, medium, high, xhigh, max. Default: carry over from conversation."
-                )
+                description="Only for a conversation from before the explicit choice (no persisted model); "
+                "a conversation never changes model."
             ),
         ] = None,
         retry_other_account: Annotated[
@@ -486,6 +551,7 @@ async def register_ai_tools(
                 message,
                 timeout_s=timeout_s,
                 effort=effort,
+                model=model,
                 retry_other_account=retry_other_account,
                 caller=current_caller.get(),
             )

@@ -106,6 +106,7 @@ async def prepare(
     ai: str | None,
     account: str | None,
     model: str | None,
+    effort: str | None = None,
     approve_provider_change: bool,
     approve_model_change: bool = False,
     approval_authorized: bool = False,
@@ -129,7 +130,8 @@ async def prepare(
     if provider == "any":
         raise AiRequestError("bad_request", "recovery requires a specific provider")
     changed = provider != job.ai
-    model_changed = model is not None and model != job.model
+    # A job from before the explicit choice has no model to change: naming one is the first pick.
+    model_changed = model is not None and job.model is not None and model != job.model
     if changed and (not approve_provider_change or not approval_authorized):
         raise AiRequestError(
             "approval_required", "changing provider requires an authorized approve_provider_change=true"
@@ -139,6 +141,8 @@ async def prepare(
             "approval_required", "changing model requires an authorized approve_model_change=true"
         )
     wanted_model = model if model is not None else (None if changed else job.model)
+    # The persisted effort carries over on the same provider; a new provider needs its own explicit pick.
+    wanted_effort = effort if effort is not None else (None if changed else job.effort)
     async with tenant_connection(pool) as conn:
         existing = await conn.execute(
             "select id from public.ai_jobs where recovery_parent_id = %s", (job.id,)
@@ -170,7 +174,11 @@ async def prepare(
         if not _handed_over_unconcluded(latest.get(job_id), str(job_account), attempts):
             tried.add(str(job_account))  # legacy rows and jobs without attempts: the account counts as tried
     accounts = await load_accounts(pool)
-    candidates = usable(accounts, ai=provider, model=wanted_model, now=now, exclude=frozenset(tried))
+    candidates = [
+        candidate
+        for candidate in usable(accounts, ai=provider, model=wanted_model, now=now, exclude=frozenset(tried))
+        if wanted_effort is None or wanted_effort in candidate.efforts
+    ]
     if account:
         candidates = [candidate for candidate in candidates if candidate.id == account]
     if not candidates:
@@ -188,7 +196,7 @@ async def prepare(
             "ai": chosen.ai,
             "account": chosen.id,
             "model": wanted_model,
-            "effort": job.effort,
+            "effort": wanted_effort,
             "mode": job.mode,
             "cwd": job.cwd,
             "json_schema": job.json_schema,

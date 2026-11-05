@@ -29,6 +29,7 @@ import { EvidencePopover, type FarmStatus, MeterBar, StatusChip } from "@/compon
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { type AccountTruth, describeAccount, SHARE_TONE_COLOR, usableShareTone } from "@/lib/farm/account-error";
 import { submitCommand } from "@/lib/farm/actions";
+import { AI_EFFORTS } from "@/lib/farm/command-meta";
+import { buildSelectionDefaults, parseModels, selectionDefaultsProblem } from "@/lib/farm/commands";
 import type { IntegrationAccount, IntegrationSummary } from "@/lib/farm/integrations-data";
 import { looksLikeSecret, SECRET_REFUSAL } from "@/lib/farm/redact";
 import type { Connection, ConnectionStatus } from "@/lib/farm/types";
@@ -127,7 +130,10 @@ export function IntegrationsView({
   const [aiCli, setAiCli] = useState<"claude" | "codex" | "gemini" | "hermes">("claude");
   const [aiAccountId, setAiAccountId] = useState("");
   const [aiLabel, setAiLabel] = useState("");
-  const [aiModels, setAiModels] = useState("claude-3-7-sonnet");
+  const [aiModels, setAiModels] = useState("");
+  const [aiDefaultsEnabled, setAiDefaultsEnabled] = useState(false);
+  const [aiDefaultModel, setAiDefaultModel] = useState("");
+  const [aiDefaultEffort, setAiDefaultEffort] = useState("");
   const [aiMaxParallel, setAiMaxParallel] = useState(1);
 
   // Form Fields - Existing Integration
@@ -200,7 +206,10 @@ export function IntegrationsView({
     setAiCli("claude");
     setAiAccountId("");
     setAiLabel("");
-    setAiModels("claude-3-7-sonnet");
+    setAiModels("");
+    setAiDefaultsEnabled(false);
+    setAiDefaultModel("");
+    setAiDefaultEffort("");
     setAiMaxParallel(1);
 
     setExistingProviderId(integrations[0]?.id ?? "");
@@ -325,11 +334,18 @@ export function IntegrationsView({
           return;
         }
 
-        const modelsList = aiModels
-          .split(",")
-          .map((s) => s.trim())
-          .filter(Boolean);
+        const modelsList = parseModels(aiModels);
         const providerId = aiCli;
+        if (modelsList.length === 0) {
+          toast.error("List at least one model");
+          return;
+        }
+        const defaults = { enabled: aiDefaultsEnabled, model: aiDefaultModel, effort: aiDefaultEffort };
+        const defaultsProblem = selectionDefaultsProblem(providerId, modelsList, defaults);
+        if (defaultsProblem) {
+          toast.error(defaultsProblem.message);
+          return;
+        }
 
         const payload: Record<string, unknown> = {
           provider_id: providerId,
@@ -342,6 +358,7 @@ export function IntegrationsView({
           models: modelsList,
           max_parallel: aiMaxParallel,
           status: "needs_login",
+          meta: { selection_defaults: buildSelectionDefaults(providerId, defaults) },
         };
 
         const res = await submitCommand("add_provider", payload);
@@ -1210,10 +1227,7 @@ export function IntegrationsView({
                           onValueChange={(v) => {
                             if (v === "claude" || v === "codex" || v === "gemini" || v === "hermes") {
                               setAiCli(v);
-                              if (v === "claude") setAiModels("claude-3-7-sonnet");
-                              if (v === "codex") setAiModels("o3-mini");
-                              if (v === "gemini") setAiModels("gemini-2.5-pro");
-                              if (v === "hermes") setAiModels("hermes-3");
+                              setAiDefaultEffort("");
                             }
                           }}
                         >
@@ -1291,6 +1305,58 @@ export function IntegrationsView({
                         />
                       </div>
                     </div>
+
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="ai-defaults-enabled"
+                        checked={aiDefaultsEnabled}
+                        onCheckedChange={(checked) => setAiDefaultsEnabled(checked === true)}
+                      />
+                      <Label htmlFor="ai-defaults-enabled" className="text-xs">
+                        Use default model and effort when a request names none
+                      </Label>
+                    </div>
+
+                    {aiDefaultsEnabled && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Default model</Label>
+                          <Select
+                            value={parseModels(aiModels).includes(aiDefaultModel) ? aiDefaultModel : ""}
+                            onValueChange={setAiDefaultModel}
+                            disabled={parseModels(aiModels).length === 0}
+                          >
+                            <SelectTrigger className="text-xs">
+                              <SelectValue placeholder="Choose a model" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {[...new Set(parseModels(aiModels))].map((model) => (
+                                <SelectItem key={model} value={model} className="text-xs">
+                                  {model}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {AI_EFFORTS[aiCli] && (
+                          <div className="space-y-1">
+                            <Label className="text-xs">Default effort</Label>
+                            <Select value={aiDefaultEffort} onValueChange={setAiDefaultEffort}>
+                              <SelectTrigger className="text-xs">
+                                <SelectValue placeholder="Choose an effort" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {AI_EFFORTS[aiCli]?.map((effort) => (
+                                  <SelectItem key={effort} value={effort} className="text-xs">
+                                    {effort}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </>
                 )}
 

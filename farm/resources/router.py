@@ -56,6 +56,7 @@ import structlog
 import tenacity
 from pydantic import BaseModel, ValidationError
 
+from farm.ai import selection
 from farm.capabilities.policy import falls_back_on_empty
 from farm.capabilities.schemas import CAPABILITY_MODELS
 from farm.context import FarmContext
@@ -77,6 +78,9 @@ from farm.secrets import redact
 log = structlog.get_logger(__name__)
 
 type Models = tuple[type[BaseModel], type[BaseModel]]
+
+ASK_AI_CAPABILITY = "ask_ai"
+"""The one capability with an operator choice to enforce per candidate (``farm.ai.selection``)."""
 
 TIMEOUT_GRACE_S = 5.0
 """Router-side allowance on top of an executor's own ``timeout_s`` before the router cuts the call off."""
@@ -511,6 +515,7 @@ class _Call:
     scope: str
     models: Models | None
     session_pinned: bool = False
+    selection_exempt: bool = False
 
 
 @dataclass(frozen=True)
@@ -586,6 +591,8 @@ class _Chain:
         self.failed_from: str | None = None
         self.fallback_reason: str | None = None
         self.policy_blocks = 0
+        self.choices: dict[str, selection.Choice] = {}
+        """ask_ai: the model/effort each eligible candidate runs with (farm.ai.selection resolved it)."""
 
     def settled_failure(self, error: RouteError) -> _Settled:
         """A failed outcome that still reports what the failed attempts cost and where the last one went."""
@@ -681,6 +688,19 @@ class _Chain:
                         provider_pool, candidate, "model_not_offered", requested_model=str(requested_model)
                     )
                     continue
+            if call.capability == ASK_AI_CAPABILITY and not call.selection_exempt:
+                # The explicit model/effort choice: never an implicit default, never a CLI without one.
+                choice = selection.resolve(
+                    provider_pool.id,
+                    candidate.meta,
+                    model=call.params.get("model"),
+                    effort=call.params.get("effort"),
+                    use_defaults=call.params.get("use_defaults") is True,
+                )
+                if isinstance(choice, selection.Problem):
+                    await self._skip(provider_pool, candidate, choice.kind, problem=choice.message)
+                    continue
+                self.choices[candidate.id] = choice
 
             reason = skip_reason(candidate, call.scope, now)
             if reason is not None:
@@ -801,7 +821,7 @@ class _Chain:
                 connection_id=connection_id,
                 outcome="skipped",
                 kind=reason,
-                message=f"skipped: {reason.replace('_', ' ')}",
+                message=f"skipped: {detail.get('problem') or reason.replace('_', ' ')}",
             )
         )
 
@@ -906,10 +926,14 @@ class _Chain:
         result: ExecResult
         try:
             timeout_s = _timeout_for(candidate, provider_pool, ctx.default_timeout_s)
+            params = call.params
+            choice = self.choices.get(candidate.id)
+            if choice is not None:
+                params = {**params, "model": choice.model, "effort": choice.effort}
             request = ExecRequest(
                 request_id=self.request_id,
                 capability=call.capability,
-                params=call.params,
+                params=params,
                 connection=ConnectionView(
                     id=candidate.id,
                     provider_id=candidate.provider_id,
@@ -919,6 +943,7 @@ class _Chain:
                     rate_per_min=candidate.rate_per_min,
                 ),
                 timeout_s=timeout_s,
+                selection_exempt=call.selection_exempt,
             )
             await traj.event("execute", candidate.id, provider=provider_pool.id, timeout_s=timeout_s)
             self.last_provider, self.last_connection = provider_pool.id, candidate.id
@@ -1297,8 +1322,14 @@ async def route(
     pin: str | None = None,
     caller: str,
     scope: str = "internal",
+    selection_exempt: bool = False,
 ) -> RouteOutcome:
     """Serve one capability call and return its envelope (see the module docstring for the flow).
+
+    ``selection_exempt``: only for the operator's own ``farm ai test`` ping (a fixed one-word prompt, the
+    CLI's own model, reported as unknown); no MCP tool can set it. Every other ``ask_ai`` must carry a
+    model/effort choice each candidate offers, or that candidate is skipped before anything is reserved or
+    launched.
 
     Raises :class:`UnknownCapability` for a capability that is not in the database. Provider and policy
     failures are *not* exceptions: they come back as ``ok = false`` with the error, the attempts and a hint.
@@ -1318,7 +1349,7 @@ async def route(
         strategy="pin" if pin is not None else strategy or cap.default_strategy,
     )
     try:
-        return await _route(ctx, cap, traj, params, strategy, pin, caller, scope)
+        return await _route(ctx, cap, traj, params, strategy, pin, caller, scope, selection_exempt)
     except Exception as exc:
         # A bug, not a provider fault. The run is finalised and the caller still gets an envelope that
         # names the run (so the owner can find the traceback in the log); only cancellation propagates.
@@ -1360,6 +1391,7 @@ async def _route(
     pin: str | None,
     caller: str,
     scope: str,
+    selection_exempt: bool = False,
 ) -> RouteOutcome:
     models = CAPABILITY_MODELS.get(cap.name)
     try:
@@ -1424,6 +1456,7 @@ async def _route(
         scope=scope,
         models=models,
         session_pinned=session_pinned,
+        selection_exempt=selection_exempt,
     )
 
     if pin is not None:

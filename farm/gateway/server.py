@@ -36,7 +36,7 @@ from farm.control.integration_requests import (
     request_integration as ir_request,
 )
 from farm.db.pool import system_connection
-from farm.gateway.ai_tools import register_ai_tools
+from farm.gateway.ai_tools import ask_ai_selection_gate, register_ai_tools
 from farm.gateway.guide import Section, generate_guide
 from farm.gateway.mcp_tools import register_mcp_tools
 from farm.gateway.middleware import (
@@ -120,6 +120,10 @@ class CapabilityTool(Tool):
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         args = dict(arguments)
         strategy = args.pop(ROUTING_ARGUMENT, None)
+        if self.name == "ask_ai":
+            refused = await ask_ai_selection_gate(self._ctx, args)
+            if refused is not None:
+                return refused
         outcome = await route(self._ctx, self.name, args, strategy=strategy, caller=current_caller.get())
         return ToolResult(structured_content=outcome.envelope(), is_error=not outcome.ok)
 

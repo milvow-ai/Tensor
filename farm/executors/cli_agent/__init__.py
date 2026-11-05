@@ -2,6 +2,7 @@
 
 from collections.abc import Awaitable, Callable
 
+from farm.ai import selection
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult, Executor
 from farm.executors.cli_agent.agy import AgyCliExecutor
 from farm.executors.cli_agent.base import (
@@ -51,6 +52,18 @@ class CliAgentExecutor:
                 error_kind=ErrorKind.UNKNOWN,
                 error=f"unknown cli agent driver '{cli_name}'",
             )
+        if req.capability == "ask_ai" and not req.selection_exempt:
+            # The last gate before a process: a caller that bypassed the router still needs a valid choice.
+            choice = selection.resolve(
+                req.connection.provider_id,
+                req.connection.meta or {},
+                model=req.params.get("model"),
+                effort=req.params.get("effort"),
+            )
+            if isinstance(choice, selection.Problem):
+                return ExecResult(
+                    ok=False, error_kind=ErrorKind.BAD_REQUEST, error=f"{choice.kind}: {choice.message}"
+                )
         return await driver.execute(req)
 
     async def list_models(self, connection: ConnectionView) -> list[str] | None:

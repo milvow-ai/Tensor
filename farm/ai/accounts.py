@@ -29,6 +29,7 @@ from datetime import UTC, datetime
 from typing import Any, Final, NamedTuple
 from uuid import uuid4
 
+from farm.ai import selection
 from farm.ai.failures import AiRequestError
 from farm.db.pool import DbPool, tenant_connection
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult, Executor
@@ -38,10 +39,7 @@ ASK_AI = "ask_ai"
 UNROUTED_RANK = 1000
 PING: Final[Mapping[str, str]] = {"task": "Respond with only the word PONG", "mode": "answer"}
 """The tiny call of ``farm ai test`` and of a login re-check."""
-DEFAULT_EFFORTS: Final[Mapping[str, tuple[str, ...]]] = {
-    "claude": ("low", "medium", "high", "xhigh", "max"),
-    "codex": ("low", "medium", "high"),
-}
+DEFAULT_EFFORTS: Final[Mapping[str, tuple[str, ...]]] = selection.EFFORT_PROVIDERS
 """Efforts each CLI accepts when an account's ``meta.efforts`` does not say."""
 
 
@@ -70,22 +68,11 @@ class AccountInfo:
 
     @property
     def efforts(self) -> tuple[str, ...]:
-        raw = self.meta.get("efforts")
-        if isinstance(raw, list):
-            return tuple(str(e) for e in raw)
-        if isinstance(raw, str):
-            return (raw,)
-        return DEFAULT_EFFORTS.get(self.ai, ())
+        return selection.offered_efforts(self.ai, self.meta)
 
     @property
     def models(self) -> tuple[str, ...]:
-        raw = self.meta.get("models")
-        if isinstance(raw, str):
-            return (raw,)
-        if isinstance(raw, list):
-            return tuple(str(m) for m in raw)
-        single = self.meta.get("model")
-        return (str(single),) if single else ()
+        return selection.configured_models(self.meta)
 
     @property
     def configured_parallel(self) -> int | None:
@@ -505,6 +492,60 @@ async def list_ai_accounts(pool: DbPool, now: datetime) -> dict[str, Any]:
     return {"ais": ais, "accounts": entries}
 
 
+# --- the pick-list behind ai_options and selection_required ------------------------------------------------
+
+
+def option_entry(account: AccountInfo, now: datetime) -> dict[str, Any]:
+    """One account of the menu: who it is (provider + account, never a model), whether it can take work
+    now, and what may be chosen on it."""
+    reason = account.unusable_reason(now)
+    entry: dict[str, Any] = {
+        "account": account.id,
+        "ai": account.ai,
+        "label": f"{account.ai} · {account.id}",
+        "usable": reason is None,
+    }
+    if reason is not None:
+        entry["unusable"] = reason
+    entry.update(selection.account_menu(account.ai, account.meta))
+    return entry
+
+
+def options_menu(
+    accounts: Sequence[AccountInfo], now: datetime, *, ai: str | None = None, account: str | None = None
+) -> list[dict[str, Any]]:
+    """The accounts of ``ai`` (``None`` / ``any``: all), or just ``account``, with their choices."""
+    return [
+        option_entry(a, now)
+        for a in sorted(accounts, key=lambda a: (a.ai, a.priority, a.id))
+        if (ai in (None, "any") or a.ai == ai) and (account is None or a.id == account)
+    ]
+
+
+async def ai_options(
+    pool: DbPool, now: datetime, *, ai: str | None = None, account: str | None = None
+) -> dict[str, Any]:
+    """``ai_options``: per provider whether effort applies, per account the configured models (with source),
+    the efforts and the opt-in default policy. Read-only."""
+    entries = options_menu(await load_accounts(pool), now, ai=ai, account=account)
+    providers: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        provider = providers.setdefault(
+            entry["ai"],
+            {"ai": entry["ai"], "effort_supported": selection.supports_effort(entry["ai"]), "accounts": []},
+        )
+        provider["accounts"].append(entry)
+    return {
+        "providers": list(providers.values()),
+        "rules": (
+            "Pass model (and effort where effort_supported) to ai_start / ai_start_many / ask_ai. "
+            "use_defaults=true applies an account's defaults only when defaults.valid. "
+            "Model ids are what the operator configured (source 'configured') or a discovery confirmed "
+            "('verified'); a configured alias is not the exact provider model."
+        ),
+    }
+
+
 # --- re-checking an account marked needs_login ------------------------------------------------------------
 
 
@@ -530,7 +571,12 @@ async def recheck_login(
         id=account_id, provider_id=row[0], auth_ref=row[1], meta=row[2] or {}, concurrency=row[3] or 1
     )
     request = ExecRequest(
-        request_id=uuid4(), capability=ASK_AI, params=dict(PING), connection=view, timeout_s=timeout_s
+        request_id=uuid4(),
+        capability=ASK_AI,
+        params=dict(PING),
+        connection=view,
+        timeout_s=timeout_s,
+        selection_exempt=True,
     )
     result = await executor.execute(request)
     if result.ok and not str((result.data or {}).get("text", "")).strip():

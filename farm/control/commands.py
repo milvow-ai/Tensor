@@ -32,6 +32,7 @@ from pydantic import (
     model_validator,
 )
 
+from farm.ai import selection
 from farm.connect.commands import CONNECT_PAYLOADS, consumed_payload, execute_connect_command
 from farm.db.pool import DbPool, system_connection, tenant_connection
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest
@@ -118,6 +119,13 @@ def validate_plan(val: dict[str, Any] | None) -> dict[str, Any] | None:
     if val:
         PlanSpec.model_validate(val)
     return val
+
+
+def _assert_valid_selection_defaults(provider_id: str, meta: dict[str, Any]) -> None:
+    """A new account's opt-in defaults must be ones it offers (see ``farm.ai.selection``)."""
+    problem = selection.defaults_config_problem(provider_id, meta)
+    if problem is not None:
+        raise ValueError(f"Invalid selection_defaults: {problem}")
 
 
 def _assert_no_raw_secrets(obj: Any) -> None:
@@ -211,6 +219,11 @@ class AddConnectionPayload(BaseModel):
     @classmethod
     def check_plan(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
         return validate_plan(v)
+
+    @model_validator(mode="after")
+    def check_selection_defaults(self) -> AddConnectionPayload:
+        _assert_valid_selection_defaults(self.provider_id, self.meta)
+        return self
 
 
 class UpdateConnectionPayload(BaseModel):
@@ -351,6 +364,12 @@ class AddProviderPayload(BaseModel):
     @model_validator(mode="after")
     def validate_no_secrets(self) -> AddProviderPayload:
         _assert_no_raw_secrets(self.model_dump())
+        return self
+
+    @model_validator(mode="after")
+    def check_selection_defaults(self) -> AddProviderPayload:
+        meta = {**self.meta, "models": self.models} if self.models else self.meta
+        _assert_valid_selection_defaults(self.provider_id, meta)
         return self
 
     @field_validator("plan")
@@ -1430,6 +1449,7 @@ async def execute_command(
                                 params={"model": "sonar", **PING},
                                 connection=conn_view,
                                 timeout_s=60.0,
+                                selection_exempt=True,
                             )
                         )
                         auth_ok = ping.ok
@@ -1459,6 +1479,7 @@ async def execute_command(
                                 params={"task": "ping", "prompt": "ping", "mode": "answer"},
                                 connection=conn_view,
                                 timeout_s=120.0,  # CLI cold start (e.g. Codex via WSL) exceeds 10 s
+                                selection_exempt=True,
                             )
                             res = await executor.execute(req)
                             if res.ok:

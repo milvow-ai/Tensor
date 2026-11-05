@@ -154,7 +154,7 @@ async def test_over_http_a_worker_token_cannot_approve_recovery_and_an_operator_
 
         async with _http_client(app, operator) as client:
             moved = await _recover(
-                client, job_id=str(answer_parent.id), ai="codex", approve_provider_change=True
+                client, job_id=str(answer_parent.id), ai="codex", model="gpt-5", effort="high", approve_provider_change=True, approve_model_change=True
             )
             edited = await _recover(client, job_id=str(edit_parent.id), acknowledge_reconciliation=True)
         assert moved["ok"] is True and edited["ok"] is True, (moved, edited)

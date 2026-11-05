@@ -42,6 +42,7 @@ from pydantic import (
     model_validator,
 )
 
+from farm.ai.selection import SelectionSource
 from farm.executors.cli_agent.base import BaseCliAgentExecutor
 
 VerifyStatus = Literal["valid", "invalid", "risky", "catch_all", "unknown"]
@@ -473,19 +474,24 @@ AiProvider = Literal["claude", "codex", "gemini", "hermes", "perplexity", "any"]
 AiMode = Literal["answer", "edit"]
 
 
+MODEL_DESCRIPTION = (
+    "Model id from ai_options (required unless use_defaults applies); the account must offer it."
+)
+EFFORT_DESCRIPTION = (
+    "Reasoning effort from ai_options: required for Claude and Codex (Codex applies xhigh/max as high), "
+    "not supported by Gemini/Hermes/Perplexity (leave it out there)."
+)
+USE_DEFAULTS_DESCRIPTION = (
+    "Opt in to the account's configured default model/effort for the values not given (false by default). "
+    "Applies only where the account enabled defaults (see ai_options); legacy meta model keys never count."
+)
+
+
 class AskAiIn(_Input):
     ai: AiProvider = "any"
-    model: str | None = None
-    effort: Annotated[
-        AiEffort | None,
-        Field(
-            default=None,
-            description=(
-                "Reasoning effort: low, medium, high, xhigh, max. Supported by Claude and Codex "
-                "(xhigh/max map to high); ignored by Gemini/Hermes."
-            ),
-        ),
-    ] = None
+    model: str | None = Field(default=None, description=MODEL_DESCRIPTION)
+    effort: Annotated[AiEffort | None, Field(default=None, description=EFFORT_DESCRIPTION)] = None
+    use_defaults: bool = Field(default=False, description=USE_DEFAULTS_DESCRIPTION)
     task: str = Field(min_length=1)
     mode: AiMode = "answer"
     cwd: str | None = None
@@ -508,7 +514,11 @@ class AskAiOut(BaseModel):
     json: Any = None
     ai: str
     model: str | None = None
+    """The requested model (a configured id, possibly a CLI alias)."""
+    resolved_model: str | None = None
+    """The exact model the CLI reported it ran on; None = unknown."""
     effort: AiEffort | None = None
+    effective_effort: AiEffort | None = None
     effort_applied: bool | None = None
     connection_id: str
     session_id: str | None = None
@@ -537,6 +547,8 @@ RequestErrorKind = Literal[
     "context_unavailable",
     "recovery_exists",
     "recovery_limit",
+    "selection_required",
+    "invalid_selection",
 ]
 MAX_TASK_CHARS = 1_000_000
 MAX_JOB_TIMEOUT_S = 7200
@@ -573,17 +585,9 @@ class AiJobSpec(_Input):
         pattern=ACCOUNT_SLUG,
         description="Run on exactly this account (connection id such as claude-03). Default: the Farm picks.",
     )
-    model: str | None = Field(default=None, description="Model name; the account must offer it.")
-    effort: Annotated[
-        AiEffort | None,
-        Field(
-            default=None,
-            description=(
-                "Reasoning effort: low, medium, high, xhigh, max. Supported by Claude and Codex "
-                "(xhigh/max map to high); ignored by Gemini/Hermes."
-            ),
-        ),
-    ] = None
+    model: str | None = Field(default=None, description=MODEL_DESCRIPTION)
+    effort: Annotated[AiEffort | None, Field(default=None, description=EFFORT_DESCRIPTION)] = None
+    use_defaults: bool = Field(default=False, description=USE_DEFAULTS_DESCRIPTION)
     mode: AiMode = Field(
         default="answer", description="answer = read-only; edit = may change files under cwd (if allowed)."
     )
@@ -664,7 +668,13 @@ class AiStarted(BaseModel):
     account: str
     ai: str
     model: str | None = None
+    """The model asked for (a configured id, possibly a CLI alias), persisted before the job was queued."""
     effort: AiEffort | None = None
+    """The requested effort."""
+    effective_effort: AiEffort | None = None
+    """The effort the driver applies (Codex: xhigh/max -> high; None where effort is not supported)."""
+    selection_source: SelectionSource | None = None
+    """explicit, account_defaults (use_defaults opt-in) or inherited (a continuation); None: an older job."""
     turn: int
     state: JobState
     jobs_ahead: int | None = None
@@ -703,7 +713,13 @@ class AiJobStatus(BaseModel):
     ai: str
     account: str
     model: str | None = None
+    """The requested model as persisted (a configured id, possibly an alias); see resolved_model."""
+    resolved_model: str | None = None
+    """The exact model the worker reported it ran on; None = unknown (never inferred from an alias)."""
     effort: AiEffort | None = None
+    """The requested effort."""
+    effective_effort: AiEffort | None = None
+    selection_source: SelectionSource | None = None
     mode: AiMode
     jobs_ahead: int | None = None
     """Queued jobs only: how many jobs (running, or queued earlier) must finish on its account first."""

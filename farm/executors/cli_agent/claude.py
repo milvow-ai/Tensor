@@ -22,8 +22,9 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
         config_dir = meta.get("config_dir")
 
         task = req.params.get("task") or req.params.get("prompt", "")
-        model = req.params.get("model") or meta.get("model") or meta.get("default_model")
-        effort = req.params.get("effort") or meta.get("effort") or meta.get("default_effort")
+        # Only the request's explicit choice (farm.ai.selection resolved it): legacy meta defaults never apply.
+        model = req.params.get("model")
+        effort = req.params.get("effort")
         mode = req.params.get("mode", "answer")
         session_id = req.params.get("session_id")
         cwd = req.params.get("cwd")

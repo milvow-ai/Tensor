@@ -58,12 +58,13 @@ from psycopg.rows import class_row, dict_row
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
-from farm.ai import recovery, results
+from farm.ai import recovery, results, selection
 from farm.ai.accounts import (
     ASK_AI,
     AccountInfo,
     Wish,
     load_accounts,
+    options_menu,
     plan_accounts,
     rank,
     refuse_single,
@@ -161,6 +162,9 @@ class JobRecord(BaseModel):
     recovery_parent_id: UUID | None = None
     recovery_depth: int = 0
     recovery_approval_actor: str | None = None
+    effective_effort: AiEffort | None = None
+    selection_source: selection.SelectionSource | None = None
+    resolved_model: str | None = None
 
     @property
     def finished(self) -> bool:
@@ -174,7 +178,7 @@ _JOB_COLUMNS: LiteralString = (
     "cancel_requested_at, attempts, run_id, result_path, result_chars, json_valid, json_errors, "
     "files_changed, usage, tokens, cost_usd, cost_estimated, duration_s, error_kind, error_message, "
     "error_cause, retry_at, created_at, started_at, finished_at, input_sha256, recovery_parent_id, "
-    "recovery_depth, recovery_approval_actor"
+    "recovery_depth, recovery_approval_actor, effective_effort, selection_source, resolved_model"
 )
 _JOB_SELECT: LiteralString = "select " + _JOB_COLUMNS + " from public.ai_jobs "
 _JOB_RETURNING: LiteralString = " returning " + _JOB_COLUMNS
@@ -202,6 +206,8 @@ class Finish:
     retry_at: datetime | None = None
     handed_off: bool = False
     """The job moved to another account by automatic failover (its native session is a fresh one)."""
+    resolved_model: str | None = None
+    """The exact model the worker reported (None: unknown)."""
 
 
 class JobStore:
@@ -217,6 +223,7 @@ class JobStore:
         ai: str,
         account: str,
         spec: AiJobSpec,
+        choice: selection.Choice,
         caller: str,
         owner_id: UUID,
         now: datetime,
@@ -225,7 +232,9 @@ class JobStore:
     ) -> JobRecord:
         """Insert a ``queued`` job (and its conversation when it is the first turn) in one transaction.
 
-        Raises ``AiRequestError('conversation_busy')`` when the conversation has a queued or running job.
+        ``choice`` (validated against ``account``) is persisted with the row: the job can never run on a
+        model/effort that was not chosen. Raises ``AiRequestError('conversation_busy')`` when the conversation
+        has a queued or running job.
         """
         job_id = uuid4()
         payload = spec.task.encode("utf-8", errors="surrogatepass")
@@ -271,12 +280,13 @@ class JobStore:
                           id, conversation_id, turn, ai, account, model, effort, mode, cwd,
                           timeout_s, retry_other_account, caller, task_chars, json_schema,
                           resume_session_id, owner_id, heartbeat_at, created_at, input_sha256,
-                          recovery_parent_id, recovery_depth, recovery_approval_actor)
+                          recovery_parent_id, recovery_depth, recovery_approval_actor,
+                          effective_effort, selection_source)
                         values (
                           %(id)s, %(conversation)s, %(turn)s, %(ai)s, %(account)s, %(model)s,
                           %(effort)s, %(mode)s, %(cwd)s, %(timeout)s, %(retry)s, %(caller)s,
                           %(chars)s, %(schema)s, %(resume)s, %(owner)s, %(now)s, %(now)s, %(digest)s,
-                          %(parent)s, %(depth)s, %(approval_actor)s)
+                          %(parent)s, %(depth)s, %(approval_actor)s, %(effective)s, %(source)s)
                         """
                         + _JOB_RETURNING,
                         {
@@ -289,8 +299,10 @@ class JobStore:
                             "turn": turn,
                             "ai": ai,
                             "account": account,
-                            "model": spec.model,
-                            "effort": spec.effort,
+                            "model": choice.model,
+                            "effort": choice.effort,
+                            "effective": choice.effective_effort,
+                            "source": choice.source,
                             "mode": spec.mode,
                             "cwd": spec.cwd,
                             "timeout": spec.timeout_s,
@@ -453,7 +465,7 @@ class JobStore:
                   files_changed = %(files)s, usage = %(usage)s, tokens = %(tokens)s, cost_usd = %(cost)s,
                   cost_estimated = %(estimated)s, duration_s = %(duration)s, error_kind = %(kind)s,
                   error_message = %(message)s, error_cause = %(cause)s, retry_at = %(retry_at)s,
-                  finished_at = %(now)s, heartbeat_at = %(now)s
+                  resolved_model = %(resolved_model)s, finished_at = %(now)s, heartbeat_at = %(now)s
                 where id = %(id)s and state in ('queued', 'running')
                   and (%(owner)s::uuid is null or owner_id = %(owner)s)
                 returning id
@@ -481,6 +493,7 @@ class JobStore:
                     "message": None if failure is None else redact(failure.message)[:MAX_ERROR_CHARS],
                     "cause": None if failure is None else failure.cause,
                     "retry_at": fin.retry_at,
+                    "resolved_model": None if fin.resolved_model is None else fin.resolved_model[:200],
                     "now": now,
                 },
             )
@@ -652,7 +665,10 @@ def status_of(record: JobRecord, now: datetime, jobs_ahead: int | None = None) -
             "ai": record.ai,
             "account": record.account,
             "model": record.model,
+            "resolved_model": record.resolved_model,
             "effort": record.effort,
+            "effective_effort": record.effective_effort,
+            "selection_source": record.selection_source,
             "mode": record.mode,
             "jobs_ahead": jobs_ahead if record.state == "queued" else None,
             "elapsed_s": _elapsed_s(record, now),
@@ -693,7 +709,7 @@ async def result_of(record: JobRecord, now: datetime, *, include_text: bool = Tr
             note = "Incomplete output from a failed attempt; only a bounded prefix was saved."
     effort_applied: bool | None = None
     if record.effort is not None:
-        effort_applied = record.ai not in ("gemini", "hermes", "agy", "perplexity")
+        effort_applied = selection.supports_effort(record.ai)
     return AiJobResult.model_validate(
         {
             **status_of(record, now).model_dump(),
@@ -718,6 +734,101 @@ async def result_of(record: JobRecord, now: datetime, *, include_text: bool = Tr
             "attempts": record.attempts,
         }
     )
+
+
+# --- the explicit model/effort choice (farm.ai.selection) ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Ask:
+    """The model/effort one job asks for; ``inherited``: both come from its conversation's last job."""
+
+    model: str | None
+    effort: AiEffort | None
+    inherited: bool
+
+
+def _selection_error(
+    problems: Sequence[tuple[int, selection.Problem, list[dict[str, Any]]]], *, single: bool
+) -> AiRequestError:
+    """One refusal for every job without a valid choice, with what each lacks and its accounts' menus."""
+    invalid = any(p.kind == "invalid_selection" for _, p, _ in problems)
+    message = "; ".join(p.message if single else f"job {i}: {p.message}" for i, p, _ in problems)
+    choices = [
+        {"index": i, "kind": p.kind, "message": p.message, "missing": list(p.missing), "options": options}
+        for i, p, options in problems
+    ]
+    return AiRequestError(
+        "invalid_selection" if invalid else "selection_required",
+        f"{message} (see choices, or ai_options)",
+        choices=choices,
+    )
+
+
+def _require_choices(
+    accounts: Sequence[AccountInfo],
+    wishes: Sequence[Wish],
+    asks: Sequence[_Ask],
+    specs: Sequence[AiJobSpec],
+    now: datetime,
+) -> None:
+    """Refuse, before any account is planned, the jobs that name no model (or no effort where their provider
+    takes one) and did not opt in to account defaults, and the ones naming a model nothing there offers."""
+    by_id = {a.id: a for a in accounts}
+    problems: list[tuple[int, selection.Problem, list[dict[str, Any]]]] = []
+    for index, (wish, ask, spec) in enumerate(zip(wishes, asks, specs, strict=True)):
+        named = by_id.get(wish.account) if wish.account else None
+        if wish.account and named is None:
+            continue  # refuse_single says the account does not exist
+        provider = named.ai if named is not None else wish.ai
+        missing: tuple[str, ...] = ()
+        if not spec.use_defaults:
+            missing = selection.missing_fields(provider, model=ask.model, effort=ask.effort)
+        pool = [a for a in accounts if a is named or (named is None and provider in ("any", a.ai))]
+        problem: selection.Problem | None = None
+        if missing:
+            problem = selection.Problem(
+                "selection_required", f"choose {' and '.join(missing)} before starting", missing
+            )
+        elif ask.model and pool and not any(a.offers(ask.model) for a in pool):
+            problem = selection.Problem("invalid_selection", f"model '{ask.model}' is not offered here")
+        if problem is not None:
+            problems.append((index, problem, options_menu(accounts, now, ai=provider, account=wish.account)))
+    if problems:
+        raise _selection_error(problems, single=len(specs) == 1)
+
+
+def _resolve_choices(
+    accounts: Sequence[AccountInfo],
+    plan: Sequence[AccountInfo],
+    asks: Sequence[_Ask],
+    specs: Sequence[AiJobSpec],
+    now: datetime,
+) -> list[selection.Choice]:
+    """Each job's choice validated against the account it was planned on (or the refusal of all)."""
+    resolved: list[selection.Choice] = []
+    problems: list[tuple[int, selection.Problem, list[dict[str, Any]]]] = []
+    for index, (account, ask, spec) in enumerate(zip(plan, asks, specs, strict=True)):
+        choice = selection.resolve(
+            account.ai,
+            account.meta,
+            model=ask.model,
+            effort=ask.effort,
+            use_defaults=spec.use_defaults,
+            inherited=ask.inherited,
+        )
+        if isinstance(choice, selection.Problem):
+            problems.append((index, choice, options_menu(accounts, now, ai=account.ai)))
+        else:
+            resolved.append(choice)
+    if problems:
+        raise _selection_error(problems, single=len(specs) == 1)
+    return resolved
+
+
+def offers_choice(account: AccountInfo, model: str | None, effort: str | None) -> bool:
+    """Automatic failover keeps the job's choice: only accounts that offer the same model and effort."""
+    return account.offers(model) and (effort is None or effort in account.efforts)
 
 
 # --- the manager ------------------------------------------------------------------------------------------
@@ -922,14 +1033,17 @@ class JobManager:
         now = self.clock()
         accounts = await load_accounts(self.ctx.pool)
         conversations = [await self._conversation_for(spec) for spec in specs]
+        asks = [await self._requested(spec, conv) for spec, conv in zip(specs, conversations, strict=True)]
         wishes = [
             Wish(
                 ai=spec.ai if conv is None else conv.ai,
-                model=spec.model,
+                model=ask.model,
                 account=spec.account if conv is None else conv.account,
             )
-            for spec, conv in zip(specs, conversations, strict=True)
+            for spec, conv, ask in zip(specs, conversations, asks, strict=True)
         ]
+        # Nothing is planned, inserted, reserved or launched until every job has an explicit choice.
+        _require_choices(accounts, wishes, asks, specs, now)
         try:
             plan = plan_accounts(accounts, wishes, distinct=distinct_accounts, now=now)
         except AiRequestError:
@@ -937,10 +1051,11 @@ class JobManager:
             if len(wishes) == 1:
                 raise refuse_single(accounts, wishes[0], now) from None
             raise
+        choices = _resolve_choices(accounts, plan, asks, specs, now)
         started: list[AiStarted] = []
         try:
-            for spec, conv, account in zip(specs, conversations, plan, strict=True):
-                started.append(await self._submit(spec, conv, account, caller))
+            for spec, conv, account, choice in zip(specs, conversations, plan, choices, strict=True):
+                started.append(await self._submit(spec, conv, account, choice, caller))
         except BaseException:
             for done in started:
                 await asyncio.shield(self._withdraw(done.job_id))
@@ -954,11 +1069,13 @@ class JobManager:
         *,
         timeout_s: int | None,
         effort: AiEffort | None = None,
+        model: str | None = None,
         retry_other_account: bool | None = None,
         caller: str,
     ) -> AiStarted:
         """The next turn of a conversation: same account and session;
-        mode, cwd, model, effort and automatic failover (``retry_other_account``) carry over.
+        mode, cwd, the persisted model/effort choice and automatic failover (``retry_other_account``) carry
+        over. ``model`` only fills a conversation whose earlier jobs predate the explicit choice.
 
         With failover, a turn whose account fails continues on another account of the same AI in a fresh
         session that gets the conversation's saved history as context (never the old native session)."""
@@ -975,7 +1092,6 @@ class JobManager:
                 account=conv.account,
             )
         last = None if conv.last_job_id is None else await self.store.get(conv.last_job_id)
-        effective_effort = effort if effort is not None else (None if last is None else last.effort)
         mode = "answer" if last is None else last.mode
         if retry_other_account is None:  # inherit; an explicit True on an edit is refused by the spec
             retry_other_account = last is not None and last.retry_other_account and mode == "answer"
@@ -986,8 +1102,8 @@ class JobManager:
                 "retry_other_account": retry_other_account,
                 "mode": mode,
                 "cwd": None if last is None else last.cwd,
-                "model": None if last is None else last.model,
-                "effort": effective_effort,
+                "model": model,  # None: inherit the persisted choice (start_many -> _requested)
+                "effort": effort,
                 "timeout_s": timeout_s or (900 if last is None else last.timeout_s),
             }
         )
@@ -1003,11 +1119,15 @@ class JobManager:
         ai: str | None = None,
         account: str | None = None,
         model: str | None = None,
+        effort: AiEffort | None = None,
         approve_provider_change: bool = False,
         approve_model_change: bool = False,
         acknowledge_reconciliation: bool = False,
     ) -> AiStarted:
-        """Explicit continuation using saved context; never reuse another account's native session."""
+        """Explicit continuation using saved context; never reuse another account's native session.
+
+        The failed job's persisted model/effort carry over (``inherited``); a provider change needs the
+        choice for the new provider (``effort``, and ``model`` already needs its approval)."""
         if self._closing:
             raise AiRequestError("bad_request", "the Farm is shutting down and takes no new jobs")
         await self._maybe_sweep()
@@ -1021,20 +1141,48 @@ class JobManager:
             ai=ai,
             account=account,
             model=model,
+            effort=effort,
             approve_provider_change=approve_provider_change,
             approve_model_change=approve_model_change,
             approval_authorized=approval_authorized,
             acknowledge_reconciliation=acknowledge_reconciliation,
         )
+        choice = selection.resolve(
+            chosen.ai,
+            chosen.meta,
+            model=spec.model,
+            effort=spec.effort,
+            inherited=spec.model == record.model and spec.effort == record.effort,
+        )
+        if isinstance(choice, selection.Problem):
+            raise _selection_error([(0, choice, options_menu([chosen], self.clock()))], single=True)
         approved = (
             spec.ai != record.ai
-            or (model is not None and model != record.model)
+            or (model is not None and record.model is not None and model != record.model)
             or record.mode == "edit"
         )
         return await self._submit(
-            spec, None, chosen, caller, recovery_parent_id=job_id,
+            spec, None, chosen, choice, caller, recovery_parent_id=job_id,
             recovery_approval_actor=approval_actor if approved else None,
         )
+
+    async def _requested(self, spec: AiJobSpec, conv: ConversationRecord | None) -> _Ask:
+        """What a job asks for: its own values, a continuation's persisted choice where it gives none."""
+        if conv is None:
+            return _Ask(spec.model, spec.effort, inherited=False)
+        last = None if conv.last_job_id is None else await self.store.get(conv.last_job_id)
+        if last is None or last.model is None:  # an older conversation: the choice must be made now
+            return _Ask(spec.model, spec.effort, inherited=False)
+        if spec.model is not None and spec.model.lower() != last.model.lower():
+            raise AiRequestError(
+                "bad_request",
+                f"conversation {conv.id} runs on model '{last.model}'; start a new conversation for "
+                f"'{spec.model}'",
+                ai=conv.ai,
+                account=conv.account,
+            )
+        effort = spec.effort if spec.effort is not None else last.effort
+        return _Ask(last.model, effort, inherited=effort == last.effort)
 
     async def _conversation_for(self, spec: AiJobSpec) -> ConversationRecord | None:
         if spec.conversation_id is None:
@@ -1062,6 +1210,7 @@ class JobManager:
         spec: AiJobSpec,
         conv: ConversationRecord | None,
         account: AccountInfo,
+        choice: selection.Choice,
         caller: str,
         *,
         recovery_parent_id: UUID | None = None,
@@ -1072,6 +1221,7 @@ class JobManager:
             ai=account.ai,
             account=account.id,
             spec=spec,
+            choice=choice,
             caller=caller,
             owner_id=self.instance_id,
             now=self.clock(),
@@ -1102,6 +1252,8 @@ class JobManager:
             ai=record.ai,
             model=record.model,
             effort=record.effort,
+            effective_effort=record.effective_effort,
+            selection_source=record.selection_source,
             turn=record.turn,
             state="queued",
             jobs_ahead=ahead,
@@ -1295,9 +1447,13 @@ class JobManager:
             entry["failover"] = "attempt_limit"
             return False
         accounts = await load_accounts(self.ctx.pool)
-        free = usable(
-            accounts, ai=work.ai, model=record.model, now=self.clock(), exclude=frozenset(work.tried)
-        )
+        free = [
+            a
+            for a in usable(
+                accounts, ai=work.ai, model=record.model, now=self.clock(), exclude=frozenset(work.tried)
+            )
+            if offers_choice(a, record.model, record.effort)
+        ]
         if not free:
             entry["failover"] = "pool_exhausted"
             return False
@@ -1373,6 +1529,7 @@ class JobManager:
             json_errors=json_errors,
             files_changed=files_changed,
             handed_off=work.handed_off,
+            resolved_model=None if not data.get("resolved_model") else str(data["resolved_model"]),
         )
         if await self._commit(record, fin):
             log.info("ai.job_finished", job=str(work.job_id), state="succeeded", account=attempt.account)

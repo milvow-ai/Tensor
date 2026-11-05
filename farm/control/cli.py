@@ -627,7 +627,7 @@ async def ai_test_report(ctx: "FarmContext", connection: str) -> AiTestReport:
         error = None if result.ok else (result.error or "unknown error")
         cost, reactivated = float(result.cost_usd), result.ok
     else:
-        outcome = await route(ctx, "ask_ai", dict(PING), pin=connection, caller="cli")
+        outcome = await route(ctx, "ask_ai", dict(PING), pin=connection, caller="cli", selection_exempt=True)
         answered = bool(outcome.ok and outcome.result and str(outcome.result.get("text", "")).strip())
         answer = str(outcome.result.get("text", "")).strip() if answered and outcome.result else None
         error = None if answered else (outcome.error.message if outcome.error else "unknown error")

@@ -52,10 +52,12 @@ export function AiOrchestrationView({
     if (jobSearch) {
       const q = jobSearch.toLowerCase();
       return (
-        j.task.toLowerCase().includes(q) ||
+        j.task?.toLowerCase().includes(q) ||
         j.id.toLowerCase().includes(q) ||
         j.account.toLowerCase().includes(q) ||
-        j.ai.toLowerCase().includes(q)
+        j.ai.toLowerCase().includes(q) ||
+        j.model?.toLowerCase().includes(q) ||
+        j.resolvedModel?.toLowerCase().includes(q)
       );
     }
     return true;
@@ -248,9 +250,16 @@ export function AiOrchestrationView({
                         <span className="font-mono text-xs">{job.account}</span>
                       </TableCell>
                       <TableCell className="max-w-[320px]">
-                        <div className="truncate font-medium text-xs">{job.task}</div>
+                        <div className="truncate font-medium text-xs">{job.task ?? job.id}</div>
+                        <div className="truncate font-mono text-[11px] text-muted-foreground">
+                          model {job.model ?? "not set"} → {job.resolvedModel ?? "unknown"} · effort{" "}
+                          {job.requestedEffort ?? "not set"} → {job.effectiveEffort ?? "unknown"} · source{" "}
+                          {job.selectionSource ?? "unknown"}
+                        </div>
                         {job.error && (
-                          <div className="truncate text-[11px] text-destructive">Error: {job.error.message}</div>
+                          <div className="truncate text-[11px] text-destructive">
+                            Error: {job.error.message ?? job.error.kind}
+                          </div>
                         )}
                       </TableCell>
                       <TableCell className="font-mono text-muted-foreground text-xs">{job.elapsedS}s</TableCell>

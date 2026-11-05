@@ -111,7 +111,7 @@ class AgyCliExecutor(BaseCliAgentExecutor):
         cli_bin = meta.get("cli_path", self.default_bin)
 
         task = req.params.get("task") or req.params.get("prompt", "")
-        model = req.params.get("model") or meta.get("model") or meta.get("default_model")
+        model = req.params.get("model")  # explicit choice only; legacy meta defaults never apply
         mode = req.params.get("mode", "answer")
         session_id = req.params.get("session_id")
         cwd = req.params.get("cwd")

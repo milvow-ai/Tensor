@@ -1,0 +1,9 @@
+# Explicit model and effort selection — 2026-11-06
+
+No inference job may silently choose a model/effort. ai_options returns account-scoped menus with configured/verified source; selection_required returns choices before a job, reservation or subprocess. Explicit account defaults use meta.selection_defaults.enabled and request use_defaults; old model/default_model/effort keys do not enable defaults. Continuations inherit persisted choices, new-provider recovery requires explicit choices. Status/start/result contain selected model, effective effort, selection source; exact resolved model stays unknown unless reported.
+
+Add AI no longer presets fabricated models; both forms have opt-in defaults controls. Sign-in badges use evidence. Real jobs use tenant-filtered security-invoker v_ai_jobs; UI shows account, requested model and requested/effective effort. Existing memberships/RLS remain enforced. No task bodies/session/error text included in the view. Empty model lists require operator configuration; this change does not infer subscription model access.
+
+Validation:47 selection tests passed21.48s;25 recovery/approval tests passed35.51s after updating explicit-choice fixtures; mypy8backendmodules pass; Ruff targetedpass; TypeScriptpass;113frontendtests pass; webpackproductionbuildpass;4AddAccountPlaywrighttests pass17.8s. Turbopack cannot follow repair-worktree dependencyjunction, so existing supportedwebpack builder used. Independent Farmreview timedout; no completed independentreview claimed; lead reviewed selectiongates, tenantview and testassertions. Backup pre-selection-20261106/backups/farm_backup_20261105_201424.dump1,343,285bytes.
+
+Deployment pending at commit. UI hosting must be deployed separately from PC service. Known baseline capacity-report test remains unrelated. Historical jobs with no selectedmodel/effort display unknown.

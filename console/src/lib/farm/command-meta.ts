@@ -10,22 +10,20 @@ export type AiCli = (typeof AI_CLIS)[number];
 
 export type AiSignInMethod = "cli" | "api_key";
 
-/** Which provider pool an AI CLI belongs to, and sensible default models (editable in the dialog). */
-export const AI_CLI_INFO: Record<
-  AiCli,
-  { providerId: string; label: string; models: string[]; signIn?: AiSignInMethod }
-> = {
-  claude: { providerId: "claude", label: "Claude Code", models: ["sonnet", "opus", "haiku"] },
-  codex: { providerId: "codex", label: "Codex CLI", models: ["gpt-5-codex", "gpt-5"] },
-  gemini: { providerId: "gemini", label: "Gemini CLI", models: ["gemini-2.5-pro", "gemini-2.5-flash"] },
-  agy: { providerId: "gemini", label: "Antigravity (agy)", models: ["gemini-3-pro", "gemini-3-flash"] },
-  hermes: { providerId: "hermes", label: "Hermes", models: ["farm-agent"] },
-  perplexity: {
-    providerId: "perplexity",
-    label: "Perplexity",
-    models: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
-    signIn: "api_key",
-  },
+/** Which provider pool an AI CLI belongs to. Models are never preset: the operator lists what the account offers. */
+export const AI_CLI_INFO: Record<AiCli, { providerId: string; label: string; signIn?: AiSignInMethod }> = {
+  claude: { providerId: "claude", label: "Claude Code" },
+  codex: { providerId: "codex", label: "Codex CLI" },
+  gemini: { providerId: "gemini", label: "Gemini CLI" },
+  agy: { providerId: "gemini", label: "Antigravity (agy)" },
+  hermes: { providerId: "hermes", label: "Hermes" },
+  perplexity: { providerId: "perplexity", label: "Perplexity", signIn: "api_key" },
+};
+
+/** The efforts a provider's driver accepts (farm/ai/selection.py); providers not listed have no effort setting. */
+export const AI_EFFORTS: Partial<Record<string, readonly string[]>> = {
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  codex: ["low", "medium", "high", "xhigh", "max"],
 };
 
 export function isApiKeyAi(providerIdOrCli?: string | null): boolean {

@@ -99,7 +99,8 @@ test("adding an AI account asks for the CLI and models, and opens its sign-in ca
   await page.getByRole("button", { name: "Add AI account" }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("CLI type").selectOption("codex");
-  await expect(dialog.getByLabel("Models")).toHaveValue("gpt-5-codex, gpt-5");
+  await expect(dialog.getByLabel("Models")).toHaveValue("");
+  await expect(dialog.getByLabel("Default model")).toBeDisabled();
   await dialog.getByLabel("Account id").fill("codex-02");
   await dialog.getByLabel("Label").fill("Codex (second seat)");
   await dialog.getByLabel("Models").fill("gpt 5");
