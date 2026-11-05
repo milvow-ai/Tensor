@@ -48,6 +48,8 @@ log = structlog.get_logger(__name__)
 
 current_caller: ContextVar[str] = ContextVar("farm_caller", default="mcp")
 """Who is calling, for the tool that is running (set by ``TrajectoryMiddleware``)."""
+current_identity: ContextVar[TokenIdentity | None] = ContextVar("farm_identity", default=None)
+"""Authenticated API token identity for this tool call; None denotes trusted local stdio."""
 
 type PolicyCheck = Callable[[str, str, dict[str, Any]], str | None]
 """``(caller, tool name, arguments) -> reason to refuse, or None to allow``."""
@@ -151,6 +153,11 @@ class TrajectoryMiddleware(Middleware):
     ) -> ToolResult:
         caller = caller_from_client_name(_client_name(context))
         token = current_caller.set(caller)
+        try:
+            identity = get_http_request().scope.get(IDENTITY_SCOPE_KEY)
+        except RuntimeError:
+            identity = None
+        identity_token = current_identity.set(identity if isinstance(identity, TokenIdentity) else None)
         started = time.monotonic()
         outcome = "error"
         try:
@@ -159,6 +166,7 @@ class TrajectoryMiddleware(Middleware):
             return result
         finally:
             current_caller.reset(token)
+            current_identity.reset(identity_token)
             log.info(
                 "gateway.tool_call",
                 tool=context.message.name,

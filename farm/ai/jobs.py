@@ -11,9 +11,12 @@ Life of a job::
                 and the ``runs`` trajectory are the router's, as for the blocking ask_ai; the CLI runs on the
                 thread runner
              -> ``succeeded`` (answer in a result file) | ``failed`` (kind, cause, retry_at) | ``cancelled``
-             -> or, with ``retry_other_account`` and a first turn that failed on its account (limit / auth /
-                crash / account unavailable): back to ``queued`` on the next usable account, every attempt
-                recorded
+             -> or, with ``retry_other_account`` and an answer turn (first or later) that failed on its
+                account (limit / auth / crash / account unavailable): back to ``queued`` on an untried
+                account of the same AI and model, under the same job id, every attempt recorded
+                (``_failover``). The next attempt starts a fresh native session; a later turn or a partial
+                answer travels as a context pack committed to ``ai_job_checkpoints`` first. At most
+                ``MAX_ATTEMPTS``; an edit is never replayed automatically.
 
 Guarantees (each one tested in ``tests/test_ai_jobs.py`` / ``tests/test_accept_aip2.py``):
 
@@ -29,8 +32,9 @@ Guarantees (each one tested in ``tests/test_ai_jobs.py`` / ``tests/test_accept_a
   silently re-run, and never failed while their owner is alive. A graceful stop (``shutdown``) does it
   at once.
 * One queued/running job per conversation (unique index), so two turns never race on one native session.
-* The task text lives in memory only; the answer is a file (``farm.ai.results``). The database gets the
-  trajectory: state, account, model, tokens, cost, native session id, attempts, error.
+* The original task bytes are committed with the queued row in a tenant-scoped immutable input table.
+  Failed work can be explicitly recovered once, on another account, using the available saved context.
+  Hidden provider state is never claimed to transfer; edit recovery requires reconciliation acknowledgement.
 
 Limits worth knowing: the CLI runner uses the event loop's default thread pool, which bounds how many CLI
 processes run at once to ``min(32, cpu_count + 4)``; ``connections.concurrency`` is enforced per Farm process.
@@ -39,6 +43,7 @@ processes run at once to ``min(32, cpu_count + 4)``; ``connections.concurrency``
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass, field, replace
@@ -49,11 +54,11 @@ from uuid import UUID, uuid4
 
 import psycopg
 import structlog
-from psycopg.rows import class_row
+from psycopg.rows import class_row, dict_row
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
-from farm.ai import results
+from farm.ai import recovery, results
 from farm.ai.accounts import (
     ASK_AI,
     AccountInfo,
@@ -85,7 +90,7 @@ from farm.capabilities.schemas import (
 )
 from farm.context import FarmContext
 from farm.db.pool import DbPool, system_connection, tenant_connection
-from farm.resources.router import UnknownCapability, route
+from farm.resources.router import MAX_PARTIAL_CHARS, UnknownCapability, route
 from farm.secrets import redact
 from farm.tenancy import require_tenant, use_tenant
 
@@ -101,6 +106,8 @@ CANCEL_WAIT_S = 15.0
 STATUS_WINDOW = timedelta(hours=24)
 STATUS_LIMIT = 50
 MAX_ERROR_CHARS = 500
+MAX_ATTEMPTS = 5
+"""Attempts of one job across automatic same-provider failover (the first one included)."""
 
 FARM_RESTART_MESSAGE = "the Farm process running this job stopped; the job was not re-run"
 
@@ -150,6 +157,10 @@ class JobRecord(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    input_sha256: str | None = None
+    recovery_parent_id: UUID | None = None
+    recovery_depth: int = 0
+    recovery_approval_actor: str | None = None
 
     @property
     def finished(self) -> bool:
@@ -162,7 +173,8 @@ _JOB_COLUMNS: LiteralString = (
     "task_chars, json_schema, resume_session_id, native_session_id, owner_id, heartbeat_at, "
     "cancel_requested_at, attempts, run_id, result_path, result_chars, json_valid, json_errors, "
     "files_changed, usage, tokens, cost_usd, cost_estimated, duration_s, error_kind, error_message, "
-    "error_cause, retry_at, created_at, started_at, finished_at"
+    "error_cause, retry_at, created_at, started_at, finished_at, input_sha256, recovery_parent_id, "
+    "recovery_depth, recovery_approval_actor"
 )
 _JOB_SELECT: LiteralString = "select " + _JOB_COLUMNS + " from public.ai_jobs "
 _JOB_RETURNING: LiteralString = " returning " + _JOB_COLUMNS
@@ -188,6 +200,8 @@ class Finish:
     files_changed: list[str] | None = None
     failure: Failure | None = None
     retry_at: datetime | None = None
+    handed_off: bool = False
+    """The job moved to another account by automatic failover (its native session is a fresh one)."""
 
 
 class JobStore:
@@ -206,14 +220,36 @@ class JobStore:
         caller: str,
         owner_id: UUID,
         now: datetime,
+        recovery_parent_id: UUID | None = None,
+        recovery_approval_actor: str | None = None,
     ) -> JobRecord:
         """Insert a ``queued`` job (and its conversation when it is the first turn) in one transaction.
 
         Raises ``AiRequestError('conversation_busy')`` when the conversation has a queued or running job.
         """
         job_id = uuid4()
+        payload = spec.task.encode("utf-8", errors="surrogatepass")
+        digest = hashlib.sha256(payload).hexdigest()
         try:
             async with tenant_connection(self._pool) as conn, conn.transaction():
+                depth = 0
+                if recovery_parent_id is not None:
+                    parent_cur = await conn.execute(
+                        "select state, recovery_depth from public.ai_jobs where id = %s for update",
+                        (recovery_parent_id,),
+                    )
+                    parent = await parent_cur.fetchone()
+                    if parent is None or parent[0] != "failed":
+                        raise AiRequestError("bad_request", "only a failed job can be recovered")
+                    if parent[1] >= recovery.MAX_RECOVERIES:
+                        raise AiRequestError("recovery_limit", "the recovery chain has reached its limit")
+                    existing = await conn.execute(
+                        "select id from public.ai_jobs where recovery_parent_id = %s", (recovery_parent_id,)
+                    )
+                    child = await existing.fetchone()
+                    if child is not None:
+                        raise AiRequestError("recovery_exists", f"recovery already created: {child[0]}")
+                    depth = int(parent[1]) + 1
                 resume: str | None = None
                 if conversation is None:
                     conversation_id = await insert_conversation(conn, ai=ai, account=account)
@@ -234,15 +270,21 @@ class JobStore:
                         insert into public.ai_jobs (
                           id, conversation_id, turn, ai, account, model, effort, mode, cwd,
                           timeout_s, retry_other_account, caller, task_chars, json_schema,
-                          resume_session_id, owner_id, heartbeat_at, created_at)
+                          resume_session_id, owner_id, heartbeat_at, created_at, input_sha256,
+                          recovery_parent_id, recovery_depth, recovery_approval_actor)
                         values (
                           %(id)s, %(conversation)s, %(turn)s, %(ai)s, %(account)s, %(model)s,
                           %(effort)s, %(mode)s, %(cwd)s, %(timeout)s, %(retry)s, %(caller)s,
-                          %(chars)s, %(schema)s, %(resume)s, %(owner)s, %(now)s, %(now)s)
+                          %(chars)s, %(schema)s, %(resume)s, %(owner)s, %(now)s, %(now)s, %(digest)s,
+                          %(parent)s, %(depth)s, %(approval_actor)s)
                         """
                         + _JOB_RETURNING,
                         {
                             "id": job_id,
+                            "digest": digest,
+                            "parent": recovery_parent_id,
+                            "depth": depth,
+                            "approval_actor": recovery_approval_actor,
                             "conversation": conversation_id,
                             "turn": turn,
                             "ai": ai,
@@ -264,6 +306,10 @@ class JobStore:
                     record = await cur2.fetchone()
                 if record is None:
                     raise RuntimeError("insert into ai_jobs returned no row")
+                await conn.execute(
+                    "insert into public.ai_job_inputs(job_id, payload, sha256) values (%s, %s, %s)",
+                    (job_id, payload, digest),
+                )
                 await point_to_job(conn, conversation_id, job_id)
         except psycopg.errors.UniqueViolation:
             where = "" if conversation is None else f" {conversation.id}"
@@ -346,6 +392,53 @@ class JobStore:
             await move_to_account(conn, job.conversation_id, account)
         return True
 
+    async def handoff(
+        self,
+        job: JobRecord,
+        owner_id: UUID,
+        *,
+        account: str,
+        attempts: list[dict[str, Any]],
+        now: datetime,
+        task: str,
+        partial: str | None,
+        partial_chars: int | None,
+    ) -> bool:
+        """``running`` -> ``queued`` on another account of the same AI, with its checkpoint, atomically.
+
+        The task the next attempt runs is committed before the job can be picked up again. The old account's
+        native session never follows the job: ``resume_session_id`` is cleared, so the next attempt starts a
+        fresh session; the conversation keeps its own session until a handed-off turn succeeds.
+        """
+        payload = task.encode("utf-8", errors="surrogatepass")
+        clipped = None if not partial else partial[:MAX_PARTIAL_CHARS].encode("utf-8", errors="replace")
+        async with tenant_connection(self._pool) as conn, conn.transaction():
+            cur = await conn.execute(
+                "update public.ai_jobs set state = 'queued', account = %s, attempts = %s, heartbeat_at = %s, "
+                "resume_session_id = null "
+                "where id = %s and owner_id = %s and state = 'running' returning id",
+                (account, Jsonb(attempts), now, job.id, owner_id),
+            )
+            if await cur.fetchone() is None:
+                return False
+            await conn.execute(
+                "insert into public.ai_job_checkpoints "
+                "(job_id, attempt, from_account, to_account, payload, sha256, partial, partial_chars) "
+                "values (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    job.id,
+                    len(attempts) + 1,
+                    job.account,
+                    account,
+                    payload,
+                    hashlib.sha256(payload).hexdigest(),
+                    clipped,
+                    None if clipped is None else partial_chars,
+                ),
+            )
+            await move_to_account(conn, job.conversation_id, account)
+        return True
+
     async def finish(self, job: JobRecord, owner_id: UUID | None, fin: Finish, now: datetime) -> bool:
         """The final UPDATE of a job and its conversation, atomically; ``False``: it had already ended."""
         failure = fin.failure
@@ -403,6 +496,24 @@ class JobStore:
                 cost_usd=fin.cost_usd,
                 succeeded=fin.state == "succeeded",
             )
+            if fin.state == "failed":
+                # Inside the guarded transaction: one alert per job, however often a finish is attempted.
+                failed = job.model_copy(
+                    update={
+                        "state": "failed",
+                        "account": fin.account,
+                        "attempts": fin.attempts,
+                        "error_kind": None if failure is None else failure.kind,
+                    }
+                )
+                await _insert_failure_alert(conn, failed)
+            if fin.handed_off and fin.state == "succeeded":
+                # The turn ran in a fresh session on another account: the old account's session must not
+                # stay attached to the conversation (apply_turn keeps it when the new one is unknown).
+                await conn.execute(
+                    "update public.ai_conversations set native_session_id = %s where id = %s",
+                    (fin.native_session_id, job.conversation_id),
+                )
         return True
 
     async def request_cancel(self, job_id: UUID, now: datetime) -> JobRecord | None:
@@ -445,7 +556,8 @@ class JobStore:
         """
         async with (
             system_connection(self._pool) as conn,
-            conn.cursor(row_factory=class_row(JobRecord)) as cur,
+            conn.transaction(),
+            conn.cursor(row_factory=dict_row) as cur,
         ):
             await cur.execute(
                 """
@@ -454,7 +566,8 @@ class JobStore:
                 where state in ('queued', 'running') and owner_id is distinct from %(me)s
                   and (heartbeat_at is null or heartbeat_at < %(cutoff)s)
                 """
-                + _JOB_RETURNING,
+                + _JOB_RETURNING
+                + ", tenant_id",
                 {
                     "message": FARM_RESTART_MESSAGE,
                     "now": now,
@@ -462,7 +575,47 @@ class JobStore:
                     "cutoff": now - timedelta(seconds=lease_s),
                 },
             )
-            return await cur.fetchall()
+            swept: list[JobRecord] = []
+            for row in await cur.fetchall():
+                tenant_id = row.pop("tenant_id")
+                record = JobRecord.model_validate(row)
+                # The system connection has no tenant: each alert names the tenant of its job.
+                await _insert_failure_alert(conn, record, tenant_id=tenant_id)
+                swept.append(record)
+            return swept
+
+
+FAILURE_ALERT_KIND = "ai_job_failed"
+
+
+def failure_alert_ref(job_id: UUID) -> str:
+    return f"ai-job:{job_id}"
+
+
+async def _insert_failure_alert(
+    conn: psycopg.AsyncConnection[Any], job: JobRecord, *, tenant_id: UUID | None = None
+) -> None:
+    """A persistent, internal operator alert for a job that ended ``failed`` (no notification is sent).
+
+    The message names the job, the account, the failure kind and the next action only: never the task,
+    the output or an error text that could carry them.
+    """
+    hint = recovery.hint(job) or {}
+    message = (
+        f"AI job {job.id} failed on account {job.account}: {job.error_kind or 'unknown'}; "
+        f"action: {hint.get('action') or 'manual_review'}"
+    )
+    if tenant_id is None:  # a tenant connection: the column default is the connection's tenant
+        await conn.execute(
+            "insert into public.alerts (kind, severity, message, ref) values (%s, 'warn', %s, %s)",
+            (FAILURE_ALERT_KIND, message, failure_alert_ref(job.id)),
+        )
+    else:
+        await conn.execute(
+            "insert into public.alerts (tenant_id, kind, severity, message, ref) "
+            "values (%s, %s, 'warn', %s, %s)",
+            (tenant_id, FAILURE_ALERT_KIND, message, failure_alert_ref(job.id)),
+        )
 
 
 # --- views ----------------------------------------------------------------------------------------------
@@ -509,6 +662,7 @@ def status_of(record: JobRecord, now: datetime, jobs_ahead: int | None = None) -
             "started_at": record.started_at,
             "finished_at": record.finished_at,
             "error": failure_of(record),
+            "recovery": recovery.hint(record),
         }
     )
 
@@ -519,12 +673,12 @@ async def result_of(record: JobRecord, now: datetime, *, include_text: bool = Tr
     truncated = False
     parsed: Any = None
     note: str | None = None
-    if record.state == "succeeded" and record.result_path:
+    if record.result_path:
         stored = await asyncio.to_thread(results.read_result, record.result_path)
         if stored is None:
             note = f"the result file {record.result_path} is gone: the answer can no longer be read"
         else:
-            if record.json_schema is not None:
+            if record.json_schema is not None and record.state == "succeeded":
                 parsed = results.check_json(stored, None, record.json_schema).parsed
             if include_text:
                 if len(stored) > results.inline_limit():
@@ -532,6 +686,11 @@ async def result_of(record: JobRecord, now: datetime, *, include_text: bool = Tr
                     truncated = len(text) < len(stored)
                 else:
                     text = stored
+    if record.state == "failed" and record.result_path:
+        full_chars = (record.attempts[-1].get("partial_chars") if record.attempts else None)
+        if isinstance(full_chars, int) and full_chars > (record.result_chars or 0):
+            truncated = True
+            note = "Incomplete output from a failed attempt; only a bounded prefix was saved."
     effort_applied: bool | None = None
     if record.effort is not None:
         effort_applied = record.ai not in ("gemini", "hermes", "agy", "perplexity")
@@ -542,6 +701,7 @@ async def result_of(record: JobRecord, now: datetime, *, include_text: bool = Tr
             "effort_applied": effort_applied,
             "text": text,
             "text_truncated": truncated,
+            "partial_output": record.state == "failed" and record.result_path is not None,
             "note": note,
             "result_path": record.result_path,
             "result_chars": record.result_chars,
@@ -565,7 +725,7 @@ async def result_of(record: JobRecord, now: datetime, *, include_text: bool = Tr
 
 @dataclass(eq=False)
 class _Work:
-    """A job this process owns: the task text (memory only), where it runs and what it holds."""
+    """A job this process owns: a working copy of its durable input, where it runs and what it holds."""
 
     record: JobRecord
     task: str
@@ -579,6 +739,11 @@ class _Work:
     attempts: list[dict[str, Any]] = field(default_factory=list)
     tried: list[str] = field(default_factory=list)
     cost: Decimal = Decimal(0)
+    original: str = ""
+    """The durable input (``task`` becomes a context pack after an automatic failover)."""
+    partials: list[recovery.Partial] = field(default_factory=list)
+    """Every failed attempt's partial output, in order (each clipped by the router, its full length kept)."""
+    handed_off: bool = False
     attempt_started_at: datetime | None = None
     not_before: float = 0.0
     busy_since: float | None = None
@@ -601,6 +766,9 @@ class Attempt:
     run_id: UUID | None = None
     cost_usd: Decimal = Decimal(0)
     data: dict[str, Any] | None = None
+    partial_text: str | None = None
+    partial_chars: int | None = None
+    """Full length of the partial answer before clipping (``partial_text`` may be shorter)."""
     failure: Failure | None = None
     busy: bool = False
     retry_at: datetime | None = None
@@ -670,6 +838,11 @@ class RouterTransport:
         if failure.kind in ("limit", "account_unavailable"):
             found = await load_accounts(self._ctx.pool, ids=[job.account])
             retry_at = found[0].retry_at(self._ctx.clock()) if found else None
+        partial = outcome.partial_result or {}
+        partial_text = partial.get("text") if isinstance(partial.get("text"), str) else None
+        partial_chars = partial.get("chars")
+        if partial_text and not isinstance(partial_chars, int):
+            partial_chars = len(partial_text)
         return Attempt(
             job.account,
             started,
@@ -677,6 +850,8 @@ class RouterTransport:
             run_id=outcome.run_id,
             cost_usd=cost,
             failure=failure,
+            partial_text=partial_text[:MAX_PARTIAL_CHARS] if partial_text else None,
+            partial_chars=partial_chars if partial_text else None,
             retry_at=retry_at,
         )
 
@@ -779,28 +954,37 @@ class JobManager:
         *,
         timeout_s: int | None,
         effort: AiEffort | None = None,
+        retry_other_account: bool | None = None,
         caller: str,
     ) -> AiStarted:
         """The next turn of a conversation: same account and session;
-        mode, cwd, model and effort carry over."""
+        mode, cwd, model, effort and automatic failover (``retry_other_account``) carry over.
+
+        With failover, a turn whose account fails continues on another account of the same AI in a fresh
+        session that gets the conversation's saved history as context (never the old native session)."""
         conv = await self.conversations.get(conversation_id)
         if conv is None:
             raise AiRequestError("not_found", f"conversation {conversation_id} does not exist")
         if conv.native_session_id is None:
             raise AiRequestError(
                 "bad_request",
-                f"conversation {conv.id} has no native session yet (its first job did not succeed); "
+                f"conversation {conv.id} has no native session (its first job did not succeed, or its last "
+                "turn moved to another account whose worker reported no session); "
                 "start the work again with ai_start(conversation_id=...)",
                 ai=conv.ai,
                 account=conv.account,
             )
         last = None if conv.last_job_id is None else await self.store.get(conv.last_job_id)
         effective_effort = effort if effort is not None else (None if last is None else last.effort)
+        mode = "answer" if last is None else last.mode
+        if retry_other_account is None:  # inherit; an explicit True on an edit is refused by the spec
+            retry_other_account = last is not None and last.retry_other_account and mode == "answer"
         spec = AiJobSpec.model_validate(
             {
                 "task": message,
                 "conversation_id": str(conv.id),
-                "mode": "answer" if last is None else last.mode,
+                "retry_other_account": retry_other_account,
+                "mode": mode,
                 "cwd": None if last is None else last.cwd,
                 "model": None if last is None else last.model,
                 "effort": effective_effort,
@@ -808,6 +992,49 @@ class JobManager:
             }
         )
         return await self.start(spec, caller=caller)
+
+    async def recover_job(
+        self,
+        job_id: UUID,
+        *,
+        caller: str,
+        approval_authorized: bool = False,
+        approval_actor: str = "unknown",
+        ai: str | None = None,
+        account: str | None = None,
+        model: str | None = None,
+        approve_provider_change: bool = False,
+        approve_model_change: bool = False,
+        acknowledge_reconciliation: bool = False,
+    ) -> AiStarted:
+        """Explicit continuation using saved context; never reuse another account's native session."""
+        if self._closing:
+            raise AiRequestError("bad_request", "the Farm is shutting down and takes no new jobs")
+        await self._maybe_sweep()
+        record = await self.store.get(job_id)
+        if record is None:
+            raise AiRequestError("not_found", "job does not exist")
+        spec, chosen = await recovery.prepare(
+            self.ctx.pool,
+            record,
+            now=self.clock(),
+            ai=ai,
+            account=account,
+            model=model,
+            approve_provider_change=approve_provider_change,
+            approve_model_change=approve_model_change,
+            approval_authorized=approval_authorized,
+            acknowledge_reconciliation=acknowledge_reconciliation,
+        )
+        approved = (
+            spec.ai != record.ai
+            or (model is not None and model != record.model)
+            or record.mode == "edit"
+        )
+        return await self._submit(
+            spec, None, chosen, caller, recovery_parent_id=job_id,
+            recovery_approval_actor=approval_actor if approved else None,
+        )
 
     async def _conversation_for(self, spec: AiJobSpec) -> ConversationRecord | None:
         if spec.conversation_id is None:
@@ -828,18 +1055,17 @@ class JobManager:
                 ai=conv.ai,
                 account=conv.account,
             )
-        if spec.retry_other_account and conv.native_session_id is not None:
-            raise AiRequestError(
-                "bad_request",
-                "retry_other_account is for first turns only: the session of this conversation lives on "
-                f"account '{conv.account}'",
-                ai=conv.ai,
-                account=conv.account,
-            )
         return conv
 
     async def _submit(
-        self, spec: AiJobSpec, conv: ConversationRecord | None, account: AccountInfo, caller: str
+        self,
+        spec: AiJobSpec,
+        conv: ConversationRecord | None,
+        account: AccountInfo,
+        caller: str,
+        *,
+        recovery_parent_id: UUID | None = None,
+        recovery_approval_actor: str | None = None,
     ) -> AiStarted:
         record = await self.store.create(
             conversation=conv,
@@ -849,11 +1075,14 @@ class JobManager:
             caller=caller,
             owner_id=self.instance_id,
             now=self.clock(),
+            recovery_parent_id=recovery_parent_id,
+            recovery_approval_actor=recovery_approval_actor,
         )
         self._seq += 1
         work = _Work(
             record=record,
             task=spec.task,
+            original=spec.task,
             seq=self._seq,
             ai=account.ai,
             account=account.id,
@@ -987,6 +1216,7 @@ class JobManager:
             started_at=attempt.started_at,
             finished_at=attempt.finished_at,
             cost_usd=float(attempt.cost_usd),
+            partial_chars=attempt.partial_chars if attempt.partial_text else None,
         )
         return entry.model_dump(mode="json")
 
@@ -1018,17 +1248,17 @@ class JobManager:
         failure = attempt.failure
         if failure is None:  # unreachable: an attempt is an answer, a failure or busy
             failure = Failure("crash", "the attempt ended without a result")
-        nxt = await self._next_account(work, failure)
-        if nxt is not None:
-            log.info(
-                "ai.job_retry",
-                job=str(work.job_id),
-                failed_on=attempt.account,
-                next=nxt.id,
-                kind=failure.kind,
+        if attempt.partial_text:
+            work.partials.append(
+                recovery.Partial(
+                    attempt=len(work.attempts),
+                    account=attempt.account,
+                    text=attempt.partial_text[:MAX_PARTIAL_CHARS],
+                    chars=attempt.partial_chars or len(attempt.partial_text),
+                )
             )
-            work.account, work.limit, work.pool_limit = nxt.id, nxt.max_parallel, nxt.pool_max_parallel
-            return await self._requeue(work, nxt.id)
+        if await self._failover(work, attempt, failure):
+            return True
         await self._finish_failure(work, attempt, failure)
         return False
 
@@ -1037,20 +1267,80 @@ class JobManager:
             work.record, self.instance_id, account=account, attempts=work.attempts, now=self.clock()
         )
 
-    async def _next_account(self, work: _Work, failure: Failure) -> AccountInfo | None:
+    def _failover_applies(self, work: _Work, failure: Failure) -> bool:
+        """Automatic failover: answer (read-only) jobs that did not opt out, for account-side failures only.
+
+        An edit is never replayed automatically: its worker may have changed files or caused external effects.
+        """
         record = work.record
-        if not (
+        return (
             record.retry_other_account
             and record.mode == "answer"
-            and record.resume_session_id is None
             and retryable_on_another_account(failure.kind)
-        ):
-            return None
+        )
+
+    async def _failover(self, work: _Work, attempt: Attempt, failure: Failure) -> bool:
+        """Hand the job to an untried account of the same AI and model; True when it went back to the queue.
+
+        The job id stays the same (``ai_wait`` keeps following it). The next attempt runs in a fresh native
+        session, with the original input, the conversation's earlier turns and every earlier attempt's
+        partial output as context, committed as a checkpoint before it can start. When failover stops, the
+        last attempt says why (``failover``), which ``recovery.hint`` turns into the operator's next action.
+        """
+        if not self._failover_applies(work, failure):
+            return False
+        entry = work.attempts[-1]
+        record = work.record
+        if len(work.attempts) >= MAX_ATTEMPTS:
+            entry["failover"] = "attempt_limit"
+            return False
         accounts = await load_accounts(self.ctx.pool)
         free = usable(
             accounts, ai=work.ai, model=record.model, now=self.clock(), exclude=frozenset(work.tried)
         )
-        return rank(free)[0] if free else None
+        if not free:
+            entry["failover"] = "pool_exhausted"
+            return False
+        nxt = rank(free)[0]
+        task = work.original
+        # The checkpoint keeps the partial of the attempt that just failed; earlier ones are in earlier rows.
+        latest = work.partials[-1] if work.partials else None
+        if latest is not None and latest.attempt != len(work.attempts):
+            latest = None
+        if recovery.needs_context(record, partials=work.partials):
+            try:
+                task = await recovery.build_context(
+                    self.ctx.pool,
+                    record,
+                    original=work.original,
+                    failure=failure.kind,
+                    partials=work.partials,
+                    automatic=True,
+                )
+            except AiRequestError as exc:
+                if exc.kind != "context_unavailable":
+                    raise
+                entry["failover"] = "context_unavailable"
+                return False
+        entry["failover"], entry["next_account"] = "next_account", nxt.id
+        moved = await self.store.handoff(
+            record,
+            self.instance_id,
+            account=nxt.id,
+            attempts=work.attempts,
+            now=self.clock(),
+            task=task,
+            partial=None if latest is None else latest.text,
+            partial_chars=None if latest is None else latest.chars,
+        )
+        if not moved:  # cancelled or failed by someone else meanwhile: nothing more to write
+            return False
+        log.info(
+            "ai.job_failover", job=str(work.job_id), failed_on=attempt.account, next=nxt.id, kind=failure.kind
+        )
+        work.task, work.handed_off = task, True
+        work.account, work.limit, work.pool_limit = nxt.id, nxt.max_parallel, nxt.pool_max_parallel
+        return True
 
     async def _finish_success(self, work: _Work, attempt: Attempt) -> None:
         data = attempt.data or {}
@@ -1082,6 +1372,7 @@ class JobManager:
             json_valid=json_valid,
             json_errors=json_errors,
             files_changed=files_changed,
+            handed_off=work.handed_off,
         )
         if await self._commit(record, fin):
             log.info("ai.job_finished", job=str(work.job_id), state="succeeded", account=attempt.account)
@@ -1098,6 +1389,8 @@ class JobManager:
             return await write
 
     async def _finish_failure(self, work: _Work, attempt: Attempt, failure: Failure) -> None:
+        partial = attempt.partial_text
+        stored = await asyncio.to_thread(results.store_result, work.job_id, partial) if partial else None
         fin = Finish(
             state="failed",
             account=attempt.account,
@@ -1105,7 +1398,13 @@ class JobManager:
             run_id=attempt.run_id,
             cost_usd=work.cost,
             failure=failure,
+            stored=stored,
             retry_at=attempt.retry_at,
+            files_changed=(
+                await results.git_status(work.record.cwd)
+                if work.record.mode == "edit" and work.record.cwd
+                else None
+            ),
         )
         if await self.store.finish(work.record, self.instance_id, fin, self.clock()):
             log.info(
@@ -1115,6 +1414,8 @@ class JobManager:
                 kind=failure.kind,
                 account=attempt.account,
             )
+        elif stored is not None:
+            await asyncio.to_thread(results.discard_result, stored.path)
 
     async def _conclude_interrupted(self, work: _Work) -> None:
         with use_tenant(work.tenant_id):
@@ -1157,6 +1458,11 @@ class JobManager:
             log.error("ai.job_unrecorded", job=str(work.job_id), error=type(db_exc).__name__)
 
     # --- reading ------------------------------------------------------------------------------------------
+
+    async def attention(self, limit: int) -> list[AiJobStatus]:
+        """The newest failed jobs of the tenant, each with its recovery hint (read-only; acks nothing)."""
+        now = self.clock()
+        return [status_of(r, now) for r in await self.store.newest(state="failed", limit=limit)]
 
     async def status(self, job_ids: Sequence[UUID] | None) -> tuple[list[AiJobStatus], list[UUID]]:
         """Status of the named jobs (and which ids are unknown), or of the active and recent jobs."""

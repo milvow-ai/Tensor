@@ -56,6 +56,7 @@ from farm.gateway.middleware import (
     _client_name,
     caller_from_client_name,
     current_caller,
+    current_identity,
 )
 from farm.gateway.server import build_server
 from farm.manager.scheduler import ManagerScheduler
@@ -199,26 +200,28 @@ async def verify_token(pool: DbPool, raw_token: str) -> TokenIdentity | None:
 # --- Custom Middlewares -----------------------------------------------------------------------------------
 
 
-def _request_identity_name() -> str | None:
-    """The client name of the token behind the MCP request being handled (per request, not per session)."""
+def _request_identity() -> TokenIdentity | None:
+    """The token behind the MCP request being handled (per request, not per session)."""
     try:
         identity = get_http_request().scope.get(IDENTITY_SCOPE_KEY)
     except RuntimeError:
         return None
-    return identity.name if isinstance(identity, TokenIdentity) else None
+    return identity if isinstance(identity, TokenIdentity) else None
 
 
 class TokenTrajectoryMiddleware(Middleware):
-    """Trajectory middleware mapping the authenticated token to current_caller for run rows."""
+    """Trajectory middleware binding the authenticated token to current_caller and current_identity."""
 
     async def on_call_tool(
         self,
         context: MiddlewareContext[mt.CallToolRequestParams],
         call_next: CallNext[mt.CallToolRequestParams, ToolResult],
     ) -> ToolResult:
-        client = _request_identity_name() or authenticated_client_name.get()
+        identity = _request_identity()
+        client = (identity.name if identity is not None else None) or authenticated_client_name.get()
         caller = client or caller_from_client_name(_client_name(context))
         tok = current_caller.set(caller)
+        identity_tok = current_identity.set(identity)
         started = time.monotonic()
         outcome = "error"
         try:
@@ -227,6 +230,7 @@ class TokenTrajectoryMiddleware(Middleware):
             return result
         finally:
             current_caller.reset(tok)
+            current_identity.reset(identity_tok)
             log.info(
                 "gateway.tool_call",
                 tool=context.message.name,

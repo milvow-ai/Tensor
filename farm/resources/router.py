@@ -83,6 +83,8 @@ TIMEOUT_GRACE_S = 5.0
 RESERVATION_MARGIN_S = 60.0
 LEASE_MARGIN_S = 30.0
 MAX_MESSAGE_CHARS = 300
+MAX_PARTIAL_CHARS = 40_000
+"""A failed ``ask_ai`` attempt's partial answer is clipped to this; ``chars`` keeps its full length."""
 
 NO_CAPACITY = "no_capacity"
 POLICY_BLOCKED = "policy_blocked"
@@ -177,6 +179,7 @@ class Cost(BaseModel):
 class RouteOutcome(BaseModel):
     ok: bool
     result: dict[str, Any] | None = None
+    partial_result: dict[str, Any] | None = None
     error: RouteError | None = None
     run_id: UUID
     source: Source | None = None
@@ -443,6 +446,7 @@ class _Settled:
     ok: bool
     status: Literal["succeeded", "failed", "blocked"]
     data: dict[str, Any] | None = None
+    partial_data: dict[str, Any] | None = None
     found: bool | None = None
     provider: str | None = None
     connection_id: str | None = None
@@ -487,6 +491,7 @@ def _outcome(run_id: UUID, settled: _Settled) -> RouteOutcome:
     return RouteOutcome(
         ok=settled.ok,
         result=settled.data if settled.ok else None,
+        partial_result=settled.partial_data if not settled.ok else None,
         error=settled.error,
         run_id=run_id,
         source=source,
@@ -577,6 +582,7 @@ class _Chain:
         self.last_provider: str | None = None
         self.last_connection: str | None = None
         self.empty_answer: _Settled | None = None
+        self.last_partial: dict[str, Any] | None = None
         self.failed_from: str | None = None
         self.fallback_reason: str | None = None
         self.policy_blocks = 0
@@ -589,6 +595,7 @@ class _Chain:
             connection_id=self.last_connection,
             cost_usd=self.cost_usd,
             units=dict(self.units),
+            partial_data=self.last_partial,
         )
 
     async def run(self) -> _Settled:
@@ -966,6 +973,14 @@ class _Chain:
 
         if result.ok:
             return await self._answered(provider_pool, candidate, result)
+        # The failed attempt's partial answer, for recovery only: never cached, never an answer. A later
+        # failed attempt replaces it, so it always belongs to the account the failure reports.
+        partial = result.data.get("text") if call.capability == "ask_ai" and result.data else None
+        self.last_partial = (
+            {"text": partial[:MAX_PARTIAL_CHARS], "chars": len(partial)}
+            if isinstance(partial, str) and partial
+            else None
+        )
         await self._on_failure(provider_pool, candidate, result)
         if call.session_pinned:
             error = _error(

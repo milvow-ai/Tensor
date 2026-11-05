@@ -873,7 +873,7 @@ async def test_a_failed_job_says_which_worker_failed_why_and_when_it_is_back(
 ) -> None:
     aip.harness.set_response(per_account={"claude-02": config})
     async with aip.client() as client:
-        started = await start(client, ai="claude", account="claude-02")
+        started = await start(client, ai="claude", account="claude-02", retry_other_account=False)
         reply = await call(client, "ai_wait", job_ids=[started["job_id"]], mode="all", timeout_s=WAIT_S)
         (result,) = reply["finished"]
         via_result = await client.call_tool("ai_result", {"job_id": started["job_id"]}, raise_on_error=False)
@@ -956,12 +956,12 @@ async def test_a_job_reserves_and_commits_quota_through_the_router_and_an_empty_
     aip.harness.set_response(stdout=claude_ok("ok"))
     async with aip.client() as client:
         for _ in range(2):
-            started = await start(client, ai="claude", account="claude-02")
+            started = await start(client, ai="claude", account="claude-02", retry_other_account=False)
             await finish(client, [started["job_id"]])
         assert await aip.quota("claude-02") == (2, 0)  # committed, nothing left reserved
         assert await aip.reservations("claude-02") == ["committed", "committed"]
 
-        started = await start(client, ai="claude", account="claude-02")
+        started = await start(client, ai="claude", account="claude-02", retry_other_account=False)
         (empty,) = await finish(client, [started["job_id"]])
     assert empty["error"]["kind"] == "limit" and "quota is used up" in empty["error"]["message"]
     assert len(aip.harness.events()) == 2  # the third call never reached the CLI
@@ -1352,10 +1352,12 @@ def test_farm_ai_login_starts_each_cli_in_its_own_home(
     outputs = [run.invoke(app, ["ai", "login", conn_id]) for conn_id in ("agy-02", "codex-02", "agy-01")]
     assert [o.exit_code for o in outputs] == [0, 0, 0], [o.output for o in outputs]
     (agy_argv, agy_env), (codex_argv, codex_env), (global_argv, global_env) = launched
-    assert agy_argv == ["agy"] and agy_env["USERPROFILE"] == agy_env["HOME"] == str(agy_home)
+    assert len(agy_argv) == 1 and Path(agy_argv[0]).stem.lower() == "agy"
+    assert agy_env["USERPROFILE"] == agy_env["HOME"] == str(agy_home)
     assert agy_home.is_dir() and f"Home directory: {agy_home}" in outputs[0].output
-    assert codex_argv == ["codex", "login"] and codex_env["CODEX_HOME"] == str(codex_home) and codex_home.is_dir()
-    assert global_argv == ["agy"] and global_env.get("USERPROFILE") == os.environ.get("USERPROFILE")  # not redirected
+    assert len(codex_argv) == 2 and Path(codex_argv[0]).stem.lower() == 'codex' and codex_argv[1] == 'login'
+    assert codex_env['CODEX_HOME'] == str(codex_home) and codex_home.is_dir()
+    assert global_argv == agy_argv and global_env.get("USERPROFILE") == os.environ.get("USERPROFILE")  # not redirected
     assert "global login" in outputs[2].output
 
 
@@ -1394,6 +1396,157 @@ def scripted_manager(aip: Aip, transport: ScriptedTransport) -> JobManager:
     manager = JobManager(aip.ctx, transport=transport, tick_s=0.05, busy_backoff_s=0.05)
     aip.ctx.executors[f"ai-jobs:{uuid4()}"] = ManagerHook(manager)  # stopped with the context
     return manager
+
+
+def crashed(account: str = "claude-02") -> Attempt:
+    return Attempt(account, START, START, failure=Failure("crash", "worker crashed"))
+
+
+def recovery_context(task: str) -> dict[str, Any]:
+    """The saved-context JSON a recovery job hands its worker (it follows the one-line instruction)."""
+    _, _, payload = task.partition("\n")
+    return dict(json.loads(payload))
+
+
+async def failed_recovery_parent(aip: Aip, *, task: str = "durable original task", mode: str = "answer") -> JobRecord:
+    manager = scripted_manager(aip, ScriptedTransport(crashed()))
+    started = await manager.start(spec(task=task, ai="claude", account="claude-02", mode=mode), caller="test")
+    (result,), _ = await manager.wait([started.job_id], mode="all", timeout_s=WAIT_S)
+    assert not result.ok
+    record = await manager.store.get(started.job_id)
+    assert record is not None and record.state == "failed"
+    return record
+
+
+async def test_recovery_uses_durable_input_after_manager_recreation(aip: Aip) -> None:
+    parent = await failed_recovery_parent(aip)
+    assert (await fetch(aip.pool, "select payload from public.ai_job_inputs where job_id = %s", parent.id))[0][0] == b"durable original task"
+    transport = ScriptedTransport(lambda job, task: answered(job.account, task))
+    manager = scripted_manager(aip, transport)
+    child = await manager.recover_job(parent.id, caller="test")
+    (result,), _ = await manager.wait([child.job_id], mode="all", timeout_s=WAIT_S)
+    assert result.ok and result.text is not None
+    context = recovery_context(result.text)
+    assert context["task_to_continue"] == "durable original task"
+    assert context["failed_job_id"] == str(parent.id) and context["native_session_transferred"] is False
+
+
+async def test_competing_recoveries_create_one_child(aip: Aip) -> None:
+    parent = await failed_recovery_parent(aip)
+    manager = scripted_manager(aip, ScriptedTransport(lambda job, task: answered(job.account, task)))
+    outcomes = await asyncio.gather(
+        manager.recover_job(parent.id, caller="one"), manager.recover_job(parent.id, caller="two"),
+        return_exceptions=True,
+    )
+    assert sum(not isinstance(item, BaseException) for item in outcomes) == 1
+    errors = [item for item in outcomes if isinstance(item, AiRequestError)]
+    assert len(errors) == 1 and errors[0].kind == "recovery_exists"
+    assert await fetch(aip.pool, "select count(*) from public.ai_jobs where recovery_parent_id = %s", parent.id) == [(1,)]
+
+
+async def test_recovery_refuses_missing_legacy_input_and_nonfailed_states(aip: Aip) -> None:
+    parent = await failed_recovery_parent(aip)
+    async with aip.pool.connection() as conn:
+        await conn.execute("delete from public.ai_job_inputs where job_id = %s", (parent.id,))
+    manager = scripted_manager(aip, ScriptedTransport(answered("claude-03", "unused")))
+    with pytest.raises(AiRequestError, match="durable input is missing"):
+        await manager.recover_job(parent.id, caller="test")
+    assert (await manager.store.get(parent.id)).state == "failed"  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("state", ["cancelled", "succeeded", "running"])
+async def test_recovery_refuses_cancelled_succeeded_and_running_jobs(aip: Aip, state: str) -> None:
+    parent = await failed_recovery_parent(aip)
+    async with aip.pool.connection() as conn:
+        await conn.execute("update public.ai_jobs set state = %s where id = %s", (state, parent.id))
+    manager = scripted_manager(aip, ScriptedTransport(answered("claude-03", "unused")))
+    with pytest.raises(AiRequestError):
+        await manager.recover_job(parent.id, caller="test")
+
+
+async def test_cross_provider_recovery_requires_operator_grant_and_records_actor(
+    aip_factory: Callable[..., Awaitable[Aip]],
+) -> None:
+    aip = await aip_factory(codex=1)
+    parent = await failed_recovery_parent(aip)
+    manager = scripted_manager(aip, ScriptedTransport(lambda job, task: answered(job.account, task)))
+    with pytest.raises(AiRequestError) as denied:
+        await manager.recover_job(parent.id, caller="test", ai="codex", approve_provider_change=True)
+    assert denied.value.kind == "approval_required"
+    child = await manager.recover_job(
+        parent.id, caller="test", ai="codex", approve_provider_change=True,
+        approval_authorized=True, approval_actor="token:operator:ops",
+    )
+    row = await manager.store.get(child.job_id)
+    assert row is not None and row.ai == "codex" and row.recovery_approval_actor == "token:operator:ops"
+
+
+async def test_edit_recovery_requires_reconciliation_acknowledgement(aip: Aip) -> None:
+    parent = await failed_recovery_parent(aip, mode="edit")
+    manager = scripted_manager(aip, ScriptedTransport(answered("claude-03", "done")))
+    with pytest.raises(AiRequestError) as denied:
+        await manager.recover_job(parent.id, caller="test")
+    assert denied.value.kind == "needs_reconciliation"
+    child = await manager.recover_job(parent.id, caller="test", acknowledge_reconciliation=True, approval_authorized=True, approval_actor="token:ops")
+    assert (await manager.store.get(child.job_id)).recovery_parent_id == parent.id  # type: ignore[union-attr]
+
+
+async def test_tenant_b_cannot_recover_tenant_a_job(aip: Aip, two_tenants: Any) -> None:
+    from farm.tenancy import use_tenant
+
+    parent = await failed_recovery_parent(aip)
+    manager = scripted_manager(aip, ScriptedTransport(answered("claude-03", "unused")))
+    with use_tenant(two_tenants.b):
+        with pytest.raises(AiRequestError) as denied:
+            await manager.recover_job(parent.id, caller="tenant-b")
+    assert denied.value.kind == "not_found"
+
+
+async def test_missing_legacy_history_turn_is_marked_in_recovery_context(aip: Aip) -> None:
+    first_transport = ScriptedTransport(answered("claude-02", "first answer"))
+    manager = scripted_manager(aip, first_transport)
+    first = await manager.start(spec(task="older user input", ai="claude", account="claude-02"), caller="test")
+    (one,), _ = await manager.wait([first.job_id], mode="all", timeout_s=WAIT_S)
+    assert one.ok
+    first_record = await manager.store.get(first.job_id)
+    async with aip.pool.connection() as conn:
+        await conn.execute("delete from public.ai_job_inputs where job_id = %s", (first.job_id,))
+        await conn.execute("update public.ai_jobs set input_sha256 = null where id = %s", (first.job_id,))
+    # A later turn of a conversation stays on the conversation's account; only recovery moves it.
+    next_manager = scripted_manager(aip, ScriptedTransport(crashed("claude-02")))
+    second = await next_manager.start(
+        spec(task="newer failed input", ai="claude", account="claude-02", conversation_id=str(first.conversation_id)),
+        caller="test",
+    )
+    (two,), _ = await next_manager.wait([second.job_id], mode="all", timeout_s=WAIT_S)
+    assert not two.ok
+    parent = await next_manager.store.get(second.job_id)
+    assert parent is not None and first_record is not None
+    replay = ScriptedTransport(lambda job, task: answered(job.account, task))
+    recovering = scripted_manager(aip, replay)
+    child = await recovering.recover_job(parent.id, caller="test")
+    (recovered,), _ = await recovering.wait([child.job_id], mode="all", timeout_s=WAIT_S)
+    assert recovered.ok
+    job, task = replay.calls[0]
+    assert job.account != "claude-02"  # the failed account is not retried
+    (older,) = recovery_context(task)["history"]
+    assert older["task_missing"] is True and older["task"] is None and older["answer"] == "first answer"
+
+
+async def test_recovery_depth_is_bounded(aip_factory: Callable[..., Awaitable[Aip]]) -> None:
+    aip = await aip_factory(claude=6)  # claude-02 fails, then each of five recoveries needs an untried account
+    parent = await failed_recovery_parent(aip)
+    manager = scripted_manager(aip, ScriptedTransport(lambda job, task: crashed(job.account)))
+    cursor = parent
+    for _ in range(5):
+        child = await manager.recover_job(cursor.id, caller="test")
+        (result,), _ = await manager.wait([child.job_id], mode="all", timeout_s=WAIT_S)
+        assert not result.ok
+        cursor = await manager.store.get(child.job_id)  # type: ignore[assignment]
+    assert cursor is not None and cursor.recovery_depth == 5
+    with pytest.raises(AiRequestError) as denied:
+        await manager.recover_job(cursor.id, caller="test")
+    assert denied.value.kind == "recovery_limit"
 
 
 async def test_a_second_transport_runs_turns_and_conversations_behind_the_same_job_api(aip: Aip) -> None:

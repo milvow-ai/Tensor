@@ -532,6 +532,11 @@ RequestErrorKind = Literal[
     "not_enough_accounts",
     "account_unavailable",
     "not_finished",
+    "approval_required",
+    "needs_reconciliation",
+    "context_unavailable",
+    "recovery_exists",
+    "recovery_limit",
 ]
 MAX_TASK_CHARS = 1_000_000
 MAX_JOB_TIMEOUT_S = 7200
@@ -594,8 +599,9 @@ class AiJobSpec(_Input):
     )
     retry_other_account: bool = Field(
         default=False,
-        description="First turn, answer mode only: if the account hits a limit, is logged out or crashes, "
-        "rerun on the next account.",
+        description="Answer mode only: if the account hits a limit, is logged out or crashes, continue on an "
+        "untried account of the same AI (fresh session, saved history and partial output as context; at most "
+        "5 attempts). Never changes AI or model.",
     )
 
     @field_validator("model")
@@ -664,6 +670,10 @@ class AiStarted(BaseModel):
     jobs_ahead: int | None = None
 
 
+AiFailover = Literal["next_account", "pool_exhausted", "attempt_limit", "context_unavailable"]
+"""``next_account``: handed to an untried account of the same provider; the others: failover stopped there."""
+
+
 class AiAttempt(BaseModel):
     """One try of a job on one account (a job has several only with ``retry_other_account``)."""
 
@@ -677,6 +687,12 @@ class AiAttempt(BaseModel):
     started_at: AwareDatetime
     finished_at: AwareDatetime
     cost_usd: float = 0.0
+    partial_chars: int | None = None
+    """Length of the failed attempt's partial answer before the router clipped it (None: no partial)."""
+    failover: AiFailover | None = None
+    """What automatic same-provider failover did after this failed attempt (None: it did not apply)."""
+    next_account: str | None = None
+    """The account the job was handed to (``failover = 'next_account'``), with a fresh native session."""
 
 
 class AiJobStatus(BaseModel):
@@ -699,6 +715,8 @@ class AiJobStatus(BaseModel):
     started_at: AwareDatetime | None = None
     finished_at: AwareDatetime | None = None
     error: AiFailure | None = None
+    recovery: dict[str, Any] | None = None
+    """Actionable recovery guidance, with limitations; no input text or secrets."""
 
 
 class AiJobResult(AiJobStatus):
@@ -712,6 +730,7 @@ class AiJobResult(AiJobStatus):
     text_truncated: bool = False
     """True when ``text`` is only the preview of a result larger than ``FARM_AI_RESULT_INLINE_CHARS``."""
     note: str | None = None
+    partial_output: bool = False
     """Something the caller should know about this result (for example: the result file was deleted)."""
     result_path: str | None = None
     result_chars: int | None = None
@@ -724,6 +743,7 @@ class AiJobResult(AiJobStatus):
     cost_estimated: bool = True
     duration_s: float | None = None
     files_changed: list[str] | None = None
+    """Final `git status --short` snapshot; it is not a before/after diff or causal attribution."""
     run_id: UUID | None = None
     attempts: list[AiAttempt] = Field(default_factory=list)
 
@@ -790,7 +810,6 @@ _TOOL_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
 _models_dict = CapabilityModelsDict(_TOOL_MODELS)
 _models_dict._ai_models = {"ask_ai": (AskAiIn, AskAiOut)}
 CAPABILITY_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = _models_dict
-
 
 
 def _key(raw: object) -> str:

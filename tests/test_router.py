@@ -938,6 +938,6 @@ async def test_the_envelope_is_json_safe_and_has_the_contract_keys(farm_ctx: Far
 
     envelope = json.loads(json.dumps(out.envelope()))
 
-    assert set(envelope) == {"ok", "result", "error", "run_id", "source", "cost"}
+    assert set(envelope) == {"ok", "result", "partial_result", "error", "run_id", "source", "cost"}
     assert set(envelope["source"]) == {"provider", "connection_id", "cached"}
     assert set(envelope["cost"]) == {"usd", "units"} and envelope["error"] is None

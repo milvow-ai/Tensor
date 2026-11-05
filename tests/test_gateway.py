@@ -73,6 +73,8 @@ async def test_a_tool_is_generated_for_every_capability_that_has_models_and_only
         "ai_cancel",
         "ai_conversations",
         "ai_reply",
+        "ai_recover",
+        "ai_attention",
         "ai_result",
         "ai_start",
         "ai_start_many",

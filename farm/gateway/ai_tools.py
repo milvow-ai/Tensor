@@ -27,6 +27,7 @@ from uuid import UUID
 
 import structlog
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools import ToolResult
 from pydantic import Field, ValidationError
 
@@ -47,8 +48,9 @@ from farm.capabilities.schemas import (
 )
 from farm.context import FarmContext
 from farm.executors.base import ErrorKind, ExecRequest, ExecResult
-from farm.gateway.middleware import current_caller
+from farm.gateway.middleware import IDENTITY_SCOPE_KEY, current_caller, current_identity
 from farm.resources.router import route
+from farm.tenancy import TokenIdentity
 
 log = structlog.get_logger(__name__)
 
@@ -62,10 +64,32 @@ AI_TOOLS = (
     "ai_result",
     "ai_cancel",
     "ai_reply",
+    "ai_recover",
+    "ai_attention",
     "ai_conversations",
 )
 MAX_WAIT_S = 300
 MAX_IDS = 100
+RECOVERY_APPROVAL_SCOPE = "ai:recovery:approve"
+
+
+def _recovery_approval_actor() -> tuple[bool, str]:
+    """Whether this call may approve a provider/model/edit retry, and who to record as the approver.
+
+    Only the local stdio boundary (no HTTP request at all) is trusted administration. An HTTP call whose
+    token identity was not bound fails closed, whichever middleware stack served it.
+    """
+    identity = current_identity.get()
+    if identity is None:
+        try:
+            scoped = get_http_request().scope.get(IDENTITY_SCOPE_KEY)
+        except RuntimeError:
+            return True, f"local:{current_caller.get()}"
+        if not isinstance(scoped, TokenIdentity):
+            return False, f"http:{current_caller.get()}"
+        identity = scoped
+    allowed = "*" in identity.scopes or RECOVERY_APPROVAL_SCOPE in identity.scopes
+    return allowed, f"token:{identity.token_id}:{identity.name}"
 
 
 def _ok(payload: dict[str, Any]) -> ToolResult:
@@ -200,12 +224,14 @@ async def register_ai_tools(
             int, Field(ge=1, le=MAX_JOB_TIMEOUT_S, description="Longest the worker may run, in seconds.")
         ] = 900,
         retry_other_account: Annotated[
-            bool,
+            bool | None,
             Field(
-                description="First turn, answer mode only: on a limit, a logout or a crash of the account, "
-                "rerun on the next account."
+                description="Automatic failover. Default: on for answer mode, off for edit (an edit is never "
+                "replayed automatically). On a limit, a logout or a crash of the account the job continues "
+                "on an untried account of the same AI and model in a fresh session, with saved history and "
+                "partial output as context (same job_id, at most 5 attempts). false opts out."
             ),
-        ] = False,
+        ] = None,
     ) -> ToolResult:
         """Give a task to another AI and return at once with {job_id, conversation_id, account}.
 
@@ -226,7 +252,7 @@ async def register_ai_tools(
                 conversation_id=conversation_id,
                 json_schema=json_schema,
                 timeout_s=timeout_s,
-                retry_other_account=retry_other_account,
+                retry_other_account=mode == "answer" if retry_other_account is None else retry_other_account,
             )
             started = await mgr.start(spec, caller=current_caller.get())
         except ValidationError as exc:
@@ -282,6 +308,16 @@ async def register_ai_tools(
         return _ok(
             {"jobs": [s.model_dump(mode="json") for s in statuses], "unknown": [str(u) for u in unknown]}
         )
+
+    @server.tool(annotations={"readOnlyHint": True})
+    async def ai_attention(
+        limit: Annotated[int, Field(ge=1, le=MAX_IDS, description="Most failed jobs to list.")] = 20,
+    ) -> ToolResult:
+        """Failed jobs that need an operator, newest first: account, failure kind and the recovery hint
+        (recovery.action: recover_same_provider, reconcile_then_recover, operator_approval_required or
+        manual_review). Read-only: nothing is retried or acknowledged."""
+        jobs = await mgr.attention(limit)
+        return _ok({"jobs": [s.model_dump(mode="json") for s in jobs]})
 
     @server.tool(annotations={"readOnlyHint": True})
     async def ai_wait(
@@ -345,6 +381,46 @@ async def register_ai_tools(
         )
 
     @server.tool()
+    async def ai_recover(
+        job_id: Annotated[
+            str, Field(description="A failed job to continue using its saved input and history.")
+        ],
+        ai: AiProvider | None = None,
+        account: Annotated[str | None, Field(pattern=ACCOUNT_SLUG)] = None,
+        model: str | None = None,
+        approve_provider_change: bool = False,
+        approve_model_change: bool = False,
+        acknowledge_reconciliation: bool = False,
+    ) -> ToolResult:
+        """Continue a failed job once on an untried account; default is the same provider.
+
+        Inputs/history are durable. Hidden native state and unsaved partial output cannot transfer.
+        Cross-provider continuation requires approve_provider_change. Edits require inspecting existing
+        files/external effects and acknowledge_reconciliation. Never automatically replay an ambiguous edit.
+        A competing recovery returns recovery_exists and its child job ID. Maximum five recovery steps.
+        """
+        try:
+            (parsed,) = _uuids([job_id], "job_id")
+            authorized, actor = _recovery_approval_actor()
+            started = await mgr.recover_job(
+                parsed,
+                caller=current_caller.get(),
+                approval_authorized=authorized,
+                approval_actor=actor,
+                ai=ai,
+                account=account,
+                model=model,
+                approve_provider_change=approve_provider_change,
+                approve_model_change=approve_model_change,
+                acknowledge_reconciliation=acknowledge_reconciliation,
+            )
+        except ValidationError as exc:
+            return _refused(AiRequestError("bad_request", _problems(exc)))
+        except AiRequestError as exc:
+            return _refused(exc)
+        return _ok(started.model_dump(mode="json"))
+
+    @server.tool()
     async def ai_cancel(job_id: Annotated[str, Field(description="A job id from ai_start.")]) -> ToolResult:
         """Stop a job: a queued job is withdrawn; a running job's process tree is killed, its quota settled.
 
@@ -388,16 +464,30 @@ async def register_ai_tools(
                 )
             ),
         ] = None,
+        retry_other_account: Annotated[
+            bool | None,
+            Field(
+                description="Automatic failover for this turn. Default: as the conversation's last job "
+                "(answer mode only). false opts out."
+            ),
+        ] = None,
     ) -> ToolResult:
         """Send a follow-up to the same worker: a new job on the same account and native session.
 
-        The worker remembers the conversation. Fails with account_unavailable and retry_at when that account
-        is limited or logged out: a conversation never moves to another account. One turn at a time.
+        The worker remembers the conversation. When that account is limited, logged out or crashes and
+        failover is on (answer mode), the turn continues on an untried account of the same AI in a fresh
+        session that gets the saved history as context; otherwise it fails with account_unavailable and
+        retry_at. The provider or model never changes automatically. One turn at a time.
         """
         try:
             (parsed,) = _uuids([conversation_id], "conversation_id")
             started = await mgr.reply(
-                parsed, message, timeout_s=timeout_s, effort=effort, caller=current_caller.get()
+                parsed,
+                message,
+                timeout_s=timeout_s,
+                effort=effort,
+                retry_other_account=retry_other_account,
+                caller=current_caller.get(),
             )
         except ValidationError as exc:
             return _refused(AiRequestError("bad_request", _problems(exc)))
