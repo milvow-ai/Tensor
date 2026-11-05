@@ -178,3 +178,204 @@ def test_classification_is_frozen() -> None:
     v: Any = Classification(ok=True)
     with pytest.raises(AttributeError):
         v.ok = False
+
+# --- R1 regression tests: false account exhaustion, terminal events, stdout prose isolation --------
+
+
+def test_r1_server_overload_and_capacity() -> None:
+    # 1. Overload -> SERVER
+    v1 = classify_claude(
+        json.dumps({"is_error": True, "error": "Server is temporarily overloaded."}), "", 1
+    )
+    assert not v1.ok
+    assert v1.kind == ErrorKind.SERVER
+
+    v2 = classify_codex("", "Error: OpenAI engine overloaded. Please try again later.", 1)
+    assert not v2.ok
+    assert v2.kind == ErrorKind.SERVER
+
+    # 2. At capacity -> SERVER
+    v3 = classify_claude(
+        json.dumps({"is_error": True, "error": "Anthropic is currently at capacity."}), "", 1
+    )
+    assert not v3.ok
+    assert v3.kind == ErrorKind.SERVER
+
+    # 3. Model capacity -> SERVER
+    v4 = classify_agy("", "AGY_ERROR: {\"short_error\": \"model capacity exceeded\", \"error_code\": 503}", 1)
+    assert not v4.ok
+    assert v4.kind == ErrorKind.SERVER
+
+    v5 = classify_gemini(
+        json.dumps({"error": {"code": 503, "message": "The model-capacity limit was hit."}}), "", 1
+    )
+    assert not v5.ok
+    assert v5.kind == ErrorKind.SERVER
+
+    # 4. HTTP 529 / 503 -> SERVER
+    v6 = classify_claude(
+        json.dumps({"is_error": True, "api_error_status": 529, "error": "Service temporarily busy"}), "", 1
+    )
+    assert not v6.ok
+    assert v6.kind == ErrorKind.SERVER
+
+
+def test_r1_rate_limited_vs_quota_exhaustion() -> None:
+    # Generic rate throttle -> RATE_LIMITED
+    v_rate = classify_codex("", "Rate limit reached. Please slow down.", 1)
+    assert not v_rate.ok
+    assert v_rate.kind == ErrorKind.RATE_LIMITED
+
+    # HTTP 429 without explicit quota -> RATE_LIMITED
+    v_429 = classify_gemini(json.dumps({"error": {"code": 429, "message": "Too many requests"}}), "", 1)
+    assert not v_429.ok
+    assert v_429.kind == ErrorKind.RATE_LIMITED
+
+    # Generic resets not quota -> UNKNOWN when no rate or quota keywords
+    v_reset_only = classify_claude("", "Connection closed. Resets in 5 minutes.", 1)
+    assert not v_reset_only.ok
+    assert v_reset_only.kind == ErrorKind.UNKNOWN
+    assert v_reset_only.kind != ErrorKind.LIMIT_REACHED
+
+    # Explicit quota exhaustion remains LIMIT_REACHED even with 429
+    v_quota_429 = classify_gemini(
+        json.dumps({"error": {"code": 429, "message": "Quota exceeded for current plan"}}), "", 1
+    )
+    assert not v_quota_429.ok
+    assert v_quota_429.kind == ErrorKind.LIMIT_REACHED
+
+    v_insufficient = classify_codex("", "Error: rate limit exceeded (insufficient_quota).", 1)
+    assert not v_insufficient.ok
+    assert v_insufficient.kind == ErrorKind.LIMIT_REACHED
+
+    v_individual = classify_agy(
+        "",
+        "AGY_ERROR: {\"short_error\": \"Individual quota reached.\", \"error_code\": 429}",
+        1,
+    )
+    assert not v_individual.ok
+    assert v_individual.kind == ErrorKind.LIMIT_REACHED
+
+    # RESOURCE_EXHAUSTED is overloaded across APIs and is not enough by itself to
+    # prove account quota exhaustion. A 429 still means a short rate-limit cooldown.
+    v_resource = classify_agy(
+        "",
+        'AGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "short_error": "Request temporarily unavailable."}',
+        1,
+    )
+    assert v_resource.kind == ErrorKind.UNKNOWN
+
+    v_resource_429 = classify_agy(
+        "",
+        'AGY_ERROR: {"status": "RESOURCE_EXHAUSTED", "error_code": 429, "short_error": "Please retry."}',
+        1,
+    )
+    assert v_resource_429.kind == ErrorKind.RATE_LIMITED
+
+    # A vague usage-limit phrase and reset time do not establish exhausted quota.
+    assert classify_codex("", "Usage limit encountered. Resets in 5 hours.", 1).kind == ErrorKind.UNKNOWN
+
+    # Explicit credit exhaustion and scoped plan usage exhaustion remain hard limits.
+    assert classify_codex("", "Your credits are exhausted.", 1).kind == ErrorKind.LIMIT_REACHED
+    assert classify_codex("", "Your plan usage limit exceeded.", 1).kind == ErrorKind.LIMIT_REACHED
+
+
+def test_r1_unstructured_does_not_classify_stdout_prose_on_nonzero_exit() -> None:
+    prose_with_triggers = (
+        "Here is the code to handle HTTP 401 unauthorized and quota exceeded:\n"
+        "Please log in using your API key. If the rate limit is hit, wait for it to reset."
+    )
+    # On nonzero exit with empty stderr, unstructured must NOT scan stdout for auth/quota
+    for cli in ("claude", "codex", "agy", "gemini", "hermes"):
+        if cli == "claude":
+            v = classify_claude(prose_with_triggers, "", 1)
+        elif cli == "codex":
+            v = classify_codex(prose_with_triggers, "", 1)
+        elif cli == "gemini":
+            v = classify_gemini(prose_with_triggers, "", 1)
+        elif cli == "agy":
+            v = classify_agy(prose_with_triggers, "", 1)
+        else:
+            v = classify_hermes(prose_with_triggers, "", 1, {})
+        assert not v.ok
+        assert v.kind == ErrorKind.UNKNOWN, f"{cli} classified stdout prose as {v.kind}"
+        assert v.kind not in (ErrorKind.NEEDS_LOGIN, ErrorKind.LIMIT_REACHED, ErrorKind.RATE_LIMITED)
+
+
+def test_r1_codex_final_terminal_event_ordering() -> None:
+    # Turn completed earlier, but final terminal event is turn.failed -> FAILURE
+    events_fail = [
+        {"type": "item.completed", "item": {"text": "Step 1 done"}},
+        {"type": "turn.completed", "usage": {"input_tokens": 10}},
+        {"type": "item.completed", "item": {"text": "Step 2 failed"}},
+        {"type": "turn.failed", "error": {"message": "Rate limit reached during step 2"}},
+    ]
+    stdout_fail = "\n".join(json.dumps(e) for e in events_fail)
+    v_fail = classify_codex(stdout_fail, "", 0)
+    assert not v_fail.ok
+    assert v_fail.kind == ErrorKind.RATE_LIMITED
+    assert "Rate limit reached" in (v_fail.message or "")
+
+    # Turn failed earlier, but retried and final terminal event is turn.completed -> SUCCESS
+    events_succeed = [
+        {"type": "turn.failed", "error": {"message": "Temporary error"}},
+        {"type": "item.completed", "item": {"text": "Step 1 retried and completed"}},
+        {"type": "turn.completed", "usage": {"input_tokens": 20}},
+    ]
+    stdout_succeed = "\n".join(json.dumps(e) for e in events_succeed)
+    v_succeed = classify_codex(stdout_succeed, "", 0)
+    assert v_succeed.ok
+
+    # Assistant prose containing quota phrases is not failure evidence.
+    assistant_limit_text = [
+        {"type": "item.completed", "item": {"type": "message", "text": "The API says quota exceeded."}},
+        {"type": "turn.completed", "usage": {}},
+    ]
+    assert classify_codex("\n".join(json.dumps(e) for e in assistant_limit_text), "", 0).ok
+
+
+@pytest.mark.parametrize("apostrophe", ["'", "\u2019"])
+@pytest.mark.parametrize("structured", [False, True])
+def test_r1_observed_codex_usage_limit_remains_exhaustion(apostrophe: str, structured: bool) -> None:
+    message = (
+        f"You{apostrophe}ve hit your usage limit. Upgrade to Pro or "
+        "try again at 2026-11-06T04:52:00Z."
+    )
+    stdout = json.dumps({"type": "turn.failed", "error": {"message": message}}) if structured else ""
+    verdict = classify_codex(stdout, "" if structured else message, 1)
+    assert not verdict.ok
+    assert verdict.kind == ErrorKind.LIMIT_REACHED
+    assert verdict.reset_at == datetime(2026, 11, 6, 4, 52, tzinfo=UTC)
+
+
+def test_r1_codex_time_only_reset_stays_unknown() -> None:
+    # The CLI's display timezone/date is absent: recognize the limit without inventing a reset date.
+    verdict = classify_codex("", "You've hit your usage limit. Try again at 4:52 AM.", 1)
+    assert verdict.kind == ErrorKind.LIMIT_REACHED
+    assert verdict.reset_at is None
+
+
+@pytest.mark.parametrize("stale_stderr", ["", "Earlier request: quota exceeded"])
+def test_r1_codex_success_boundary_discards_stale_failure(stale_stderr: str) -> None:
+    events = [
+        {"type": "turn.failed", "error": {"message": "Quota exceeded"}},
+        {"type": "turn.completed", "usage": {}},
+        {"type": "turn.failed", "error": {"message": "Connection dropped"}},
+    ]
+    verdict = classify_codex("\n".join(json.dumps(event) for event in events), stale_stderr, 1)
+    assert not verdict.ok
+    assert verdict.kind == ErrorKind.UNKNOWN
+    assert "quota exceeded" not in (verdict.message or "").lower()
+
+
+def test_r1_codex_actual_quota_after_success_still_exhausts() -> None:
+    events = [
+        {"type": "turn.failed", "error": {"message": "Connection dropped"}},
+        {"type": "turn.completed", "usage": {}},
+        {"type": "turn.failed", "error": {"message": "You've hit your usage limit. Resets in 5h."}},
+    ]
+    verdict = classify_codex("\n".join(json.dumps(event) for event in events), "", 1)
+    assert not verdict.ok
+    assert verdict.kind == ErrorKind.LIMIT_REACHED
+    assert verdict.reset_at is not None
+    assert "Connection dropped" not in (verdict.message or "")

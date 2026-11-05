@@ -445,10 +445,12 @@ def _run_sync_worker(
                 pass
         t_out.join(timeout=1.0)
         t_err.join(timeout=1.0)
+        timeout_msg = f"Process timed out after {timeout_s}s"
+        err_msg = f"{stderr_result[0]}\n{timeout_msg}" if stderr_result[0] else timeout_msg
         return SubprocessOutput(
             exit_code=-1,
-            stdout="",
-            stderr=f"Process timed out after {timeout_s}s",
+            stdout=stdout_result[0],
+            stderr=err_msg,
             duration_s=duration_s,
             timed_out=True,
         )

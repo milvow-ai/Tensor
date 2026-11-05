@@ -79,11 +79,7 @@ class CodexCliExecutor(BaseCliAgentExecutor):
             except Exception:
                 pass
 
-        argv: list[str] = [cli_bin, "exec"]
-        if session_id:
-            argv.extend(["resume", "--", str(session_id)])
-
-        argv.extend(["--json", "--skip-git-repo-check"])
+        argv: list[str] = [cli_bin, "exec", "--json", "--skip-git-repo-check"]
 
         if model:
             argv.extend(["-m", str(model)])
@@ -111,8 +107,11 @@ class CodexCliExecutor(BaseCliAgentExecutor):
         if schema_path_str:
             argv.extend(["--output-schema", path_arg(schema_path_str)])
 
-        # Codex reads prompt from stdin when '-' is specified
-        argv.append("-")
+        if session_id:
+            argv.extend(["resume", "--", str(session_id), "-"])
+        else:
+            argv.append("-")
+
         if isinstance(prefix, list) and prefix:
             argv = [str(p) for p in prefix] + argv
 
@@ -139,14 +138,39 @@ class CodexCliExecutor(BaseCliAgentExecutor):
                     pass
 
         if out.timed_out:
+            extracted_text = out.stdout
+            events = parse_jsonl(out.stdout)
+            if events:
+                text_parts: list[str] = []
+                for ev in events:
+                    ev_type = ev.get("type", "")
+                    if ev_type in ("message", "assistant_message", "item.completed"):
+                        if "text" in ev:
+                            text_parts.append(str(ev["text"]))
+                        elif "content" in ev:
+                            content = ev["content"]
+                            if isinstance(content, str):
+                                text_parts.append(content)
+                            elif isinstance(content, list):
+                                for item in content:
+                                    if isinstance(item, dict) and item.get("text"):
+                                        text_parts.append(str(item["text"]))
+                        elif "item" in ev and isinstance(ev["item"], dict):
+                            item = ev["item"]
+                            if item.get("text"):
+                                text_parts.append(str(item["text"]))
+                if text_parts:
+                    extracted_text = "\n".join(text_parts).strip()
             return self.build_exec_result(
                 ok=False,
+                text=extracted_text,
                 ai="codex",
                 model=str(model) if model else None,
                 connection=req.connection,
                 duration_s=out.duration_s,
                 error_kind=ErrorKind.TIMEOUT,
                 error=out.stderr or f"Codex CLI timed out after {timeout_s}s",
+                session_id=str(session_id) if session_id else None,
             )
 
         # Parse JSON / JSONL
@@ -186,7 +210,7 @@ class CodexCliExecutor(BaseCliAgentExecutor):
             cost_usd = float(single_json.get("total_cost_usd") or single_json.get("cost_usd") or 0.0)
         else:
             # Parse events stream
-            text_parts: list[str] = []
+            text_parts = []
             for ev in jsonl_events:
                 ev_type = ev.get("type", "")
                 if "session_id" in ev:

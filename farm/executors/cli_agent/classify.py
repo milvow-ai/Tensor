@@ -7,8 +7,10 @@ One rule order for every CLI:
 2. **Structured failure** -> the error kind comes from the structured error fields
    (status / HTTP code / error text) and stderr, through that CLI's tables of exact phrases: login
    (``NEEDS_LOGIN``), a request the CLI refuses as given, such as a model it does not know
-   (``BAD_REQUEST``: the account is fine), and limits (``LIMIT_REACHED``), checked in that order.
+   (``BAD_REQUEST``: the account is fine), server capacity / overload (``SERVER``), explicit
+   limits (``LIMIT_REACHED``), and rate throttling (``RATE_LIMITED``), checked in that order.
 3. **No structured output** -> exit code and stderr only (exit 0 is a success).
+   stdout answer prose must not be classified as auth/quota on nonzero exit.
 4. Anything the tables do not recognise -> ``ErrorKind.UNKNOWN`` (never a guess such as ``NEEDS_LOGIN``).
 
 Phrases in the tables come from real outputs (``tests/fixtures/cli/``) or the CLIs' documented messages.
@@ -55,44 +57,26 @@ _AUTH_COMMON = (
     r"unauthorized",
     r"\bhttp 401\b",
 )
-_LIMIT_COMMON = (
-    r"usage limit",
-    r"rate limit",
-    r"quota exceeded",
-    r"exceeded your current quota",
-    r"insufficient_quota",
-    r"insufficient balance",
-    r"insufficient funds",
-    r"overloaded",
-    r"resource_exhausted",
-    r"individual quota reached",
-    r"\bresets?\s+(?:at|in)\b",
-    r"\bhttp 429\b",
-)
-
-_TABLES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+_AUTH_PER_CLI: dict[str, tuple[str, ...]] = {
     "claude": (
-        _AUTH_COMMON
-        + (
-            r"please run /login",
-            r"claude login",
-            r"setup-token",
-            r"invalid authentication credentials",
-            # "Failed to authenticate: OAuth session expired and could not be refreshed". Not the transient
-            # "Failed to refresh OAuth token: another Claude Code process is refreshing it ...".
-            r"oauth session expired",
-        ),
-        _LIMIT_COMMON + (r"at capacity",),
+        r"please run /login",
+        r"claude login",
+        r"setup-token",
+        r"invalid authentication credentials",
+        # "Failed to authenticate: OAuth session expired and could not be refreshed". Not the transient
+        # "Failed to refresh OAuth token: another Claude Code process is refreshing it ...".
+        r"oauth session expired",
     ),
-    "codex": (_AUTH_COMMON + (r"codex login",), _LIMIT_COMMON),
+    "codex": (r"codex login",),
     "agy": (
-        _AUTH_COMMON
-        + (r"not eligible for antigravity", r"eligibility check failed", r"launch agy interactively"),
-        _LIMIT_COMMON + (r"model capacity",),
+        r"not eligible for antigravity",
+        r"eligibility check failed",
+        r"launch agy interactively",
     ),
-    "gemini": (_AUTH_COMMON + (r"gemini auth", r"login with google"), _LIMIT_COMMON + (r"model capacity",)),
-    "hermes": (_AUTH_COMMON + (r"rejected your api key", r"hermes setup"), _LIMIT_COMMON),
+    "gemini": (r"gemini auth", r"login with google"),
+    "hermes": (r"rejected your api key", r"hermes setup"),
 }
+
 # The CLI refused the request as given (BAD_REQUEST: neither the account's health nor its state changes).
 _REQUEST: dict[str, tuple[str, ...]] = {
     # The CLI's own message for a model the API does not know or the account cannot use.
@@ -105,29 +89,76 @@ _REQUEST: dict[str, tuple[str, ...]] = {
     # error" names no cause and stays unknown.
     "hermes": (r"model is unavailable for free",),
 }
+
+# Transient server overload or capacity issues (SERVER: not account exhaustion).
+_SERVER_COMMON = (
+    r"\boverload(?:ed)?\b",
+    r"at capacity",
+    r"model[- ]capacity",
+    r"\bhttp 500\b",
+    r"\bhttp 502\b",
+    r"\bhttp 503\b",
+    r"\bhttp 504\b",
+    r"\bhttp 529\b",
+)
+
+# Explicit quota exhaustion (remains LIMIT_REACHED; generic resets not quota).
+_QUOTA_COMMON = (
+    r"quota exceeded",
+    r"exceeded your current quota",
+    r"insufficient_quota",
+    r"insufficient balance",
+    r"insufficient funds",
+    r"(?:credits?|credit balance) (?:are |is )?exhausted",
+    r"\b(?:hit|reached|exceeded) (?:your |the )?(?:(?:account|plan|subscription) )?usage limit\b",
+    r"individual quota reached",
+    r"(?:account|plan|subscription|project|organization) usage limit (?:reached|exceeded)",
+)
+
+# Generic rate throttle / HTTP 429 (RATE_LIMITED: not account quota exhaustion).
+_RATE_COMMON = (
+    r"rate limit",
+    r"rate-limited",
+    r"rate limited",
+    r"too many requests",
+    r"\bhttp 429\b",
+    r"\b429\b",
+)
+
+_ALL_CLIS = ("claude", "codex", "agy", "gemini", "hermes")
+
 _COMPILED = {
     cli: (
-        [re.compile(p, re.IGNORECASE) for p in auth],
+        [re.compile(p, re.IGNORECASE) for p in _AUTH_COMMON + _AUTH_PER_CLI.get(cli, ())],
         [re.compile(p, re.IGNORECASE) for p in _REQUEST.get(cli, ())],
-        [re.compile(p, re.IGNORECASE) for p in limit],
+        [re.compile(p, re.IGNORECASE) for p in _SERVER_COMMON],
+        [re.compile(p, re.IGNORECASE) for p in _QUOTA_COMMON],
+        [re.compile(p, re.IGNORECASE) for p in _RATE_COMMON],
     )
-    for cli, (auth, limit) in _TABLES.items()
+    for cli in _ALL_CLIS
 }
 
 
 def _kind_from_text(cli: str, text: str) -> ErrorKind | None:
-    auth, request, limit = _COMPILED[cli]
+    compiled = _COMPILED.get(cli)
+    if not compiled:
+        return None
+    auth, request, server, quota, rate = compiled
     if any(p.search(text) for p in auth):
         return ErrorKind.NEEDS_LOGIN
     if any(p.search(text) for p in request):
         return ErrorKind.BAD_REQUEST
-    if any(p.search(text) for p in limit):
+    if any(p.search(text) for p in server):
+        return ErrorKind.SERVER
+    if any(p.search(text) for p in quota):
         return ErrorKind.LIMIT_REACHED
+    if any(p.search(text) for p in rate):
+        return ErrorKind.RATE_LIMITED
     return None
 
 
 def _kind_from_http(code: Any) -> ErrorKind | None:
-    """Structured HTTP-style code: 401 = bad login, 429 = limit; anything else says nothing."""
+    """Structured HTTP-style code: 401 = bad login, 429 = rate limit, 5xx/529 = server."""
     try:
         n = int(code)
     except (TypeError, ValueError):
@@ -135,7 +166,9 @@ def _kind_from_http(code: Any) -> ErrorKind | None:
     if n == 401:
         return ErrorKind.NEEDS_LOGIN
     if n == 429:
-        return ErrorKind.LIMIT_REACHED
+        return ErrorKind.RATE_LIMITED
+    if n in (500, 502, 503, 504, 529):
+        return ErrorKind.SERVER
     return None
 
 
@@ -180,17 +213,42 @@ def _failure(
 ) -> Classification:
     """Build a failure from the error-channel ``texts`` (joined) with an optional structured ``kind_hint``."""
     text = _join_error_texts(texts)
-    kind = kind_hint or _kind_from_text(cli, text) or ErrorKind.UNKNOWN
-    reset_at = parse_reset(text, data) if kind == ErrorKind.LIMIT_REACHED else None
+    text_kind = _kind_from_text(cli, text)
+    kind: ErrorKind
+    if text_kind is not None:
+        if kind_hint == ErrorKind.RATE_LIMITED and text_kind in (
+            ErrorKind.LIMIT_REACHED,
+            ErrorKind.SERVER,
+            ErrorKind.NEEDS_LOGIN,
+            ErrorKind.BAD_REQUEST,
+        ):
+            kind = text_kind
+        elif kind_hint is None:
+            kind = text_kind
+        else:
+            kind = kind_hint
+    else:
+        kind = kind_hint or ErrorKind.UNKNOWN
+    reset_at = parse_reset(text, data) if kind in (ErrorKind.LIMIT_REACHED, ErrorKind.RATE_LIMITED) else None
     return Classification(ok=False, kind=kind, message=text or fallback, reset_at=reset_at)
 
 
 def _unstructured(cli: str, stdout: str, stderr: str, exit_code: int) -> Classification:
-    """Rule 3: no structured output. Exit 0 is success; otherwise stderr decides."""
+    """Rule 3: no structured output. Exit 0 is success; otherwise stderr decides.
+    
+    stdout answer prose must not be classified as auth/quota on nonzero exit.
+    """
     if exit_code == 0:
         return _OK
-    kind = _kind_from_text(cli, clean_cli_text(stderr))
-    return _failure(cli, kind, [stderr or stdout], f"{cli} exited with code {exit_code}", None)
+    clean_err = clean_cli_text(stderr)
+    kind = _kind_from_text(cli, clean_err) or ErrorKind.UNKNOWN
+    msg = clean_err or f"{cli} exited with code {exit_code}"
+    reset_at = (
+        parse_reset(clean_err)
+        if kind in (ErrorKind.LIMIT_REACHED, ErrorKind.RATE_LIMITED)
+        else None
+    )
+    return Classification(ok=False, kind=kind, message=msg, reset_at=reset_at)
 
 
 _AGY_ERROR_LINE = re.compile(r"^AGY_ERROR:\s*(\{.*\})\s*$", re.MULTILINE)
@@ -234,8 +292,6 @@ def classify_agy(stdout: str, stderr: str, exit_code: int) -> Classification:
     err = _agy_stderr_error(stderr)
     if err:
         hint = _kind_from_http(err.get("error_code"))
-        if hint is None and str(err.get("status")) == "RESOURCE_EXHAUSTED":
-            hint = ErrorKind.LIMIT_REACHED
         return _failure("agy", hint, [stderr], "agy error", err)
     return _unstructured("agy", stdout, stderr, exit_code)
 
@@ -270,8 +326,33 @@ def _codex_error_text(ev: dict[str, Any]) -> str:
 def classify_codex(stdout: str, stderr: str, exit_code: int) -> Classification:
     # A successful run's stderr holds Codex log noise ("ERROR codex_core::session: ..."): not read.
     events = parse_jsonl(stdout)
-    if any(str(ev.get("type", "")) in _CODEX_DONE for ev in events):
-        return _OK
+    terminal_events = _CODEX_DONE | _CODEX_FAIL
+    last_terminal: dict[str, Any] | None = None
+    for ev in reversed(events):
+        if str(ev.get("type", "")) in terminal_events:
+            last_terminal = ev
+            break
+
+    if last_terminal is not None:
+        if str(last_terminal.get("type", "")) in _CODEX_DONE:
+            return _OK
+        fail_text = _codex_error_text(last_terminal)
+        # A completed turn ends the relevance of earlier errors.
+        failures: list[str] = []
+        after_completed = False
+        for ev in events:
+            event_type = str(ev.get("type", ""))
+            if event_type in _CODEX_DONE:
+                after_completed = True
+                failures.clear()
+            elif event_type in _CODEX_FAIL:
+                failures.append(_codex_error_text(ev))
+        if fail_text and fail_text not in failures:
+            failures.append(fail_text)
+        # stderr is undated and can contain failures from a completed turn.
+        current_stderr = "" if after_completed else stderr
+        return _failure("codex", None, [*failures, current_stderr], "Codex error", None)
+
     single = parse_json_or_none(stdout)
     if isinstance(single, dict) and any(k in single for k in ("result", "response", "text")):
         return _OK
