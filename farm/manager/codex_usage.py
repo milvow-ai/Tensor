@@ -135,7 +135,7 @@ def _argv(meta: dict[str, Any]) -> list[str] | None:
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.DEVNULL,
-                        timeout=3,
+                        timeout=8,
                         check=False,
                     )
                     wsl_home = discovered.stdout.decode("utf-8", "strict").strip()
@@ -547,7 +547,7 @@ async def probe_codex(meta: dict[str, Any], timeout: float = TIMEOUT_S) -> dict[
         return {"status": "unconfigured", "error_code": "account_home_missing"}
 
     try:
-        argv = await asyncio.wait_for(asyncio.to_thread(_argv, meta), timeout=4.0)
+        argv = await asyncio.wait_for(asyncio.to_thread(_argv, meta), timeout=9.0)
     except TimeoutError:
         argv = None
     if not argv:
