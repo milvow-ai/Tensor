@@ -253,6 +253,7 @@ class JobStore:
         now: datetime,
         recovery_parent_id: UUID | None = None,
         recovery_approval_actor: str | None = None,
+        new_job_id: UUID | None = None,
     ) -> JobRecord:
         """Insert a ``queued`` job (and its conversation when it is the first turn) in one transaction.
 
@@ -260,7 +261,7 @@ class JobStore:
         model/effort that was not chosen. Raises ``AiRequestError('conversation_busy')`` when the conversation
         has a queued or running job.
         """
-        job_id = uuid4()
+        job_id = new_job_id or uuid4()
         payload = spec.task.encode("utf-8", errors="surrogatepass")
         digest = hashlib.sha256(payload).hexdigest()
         try:
@@ -1046,12 +1047,14 @@ class JobManager:
 
     # --- starting ---------------------------------------------------------------------------------------
 
-    async def start(self, spec: AiJobSpec, *, caller: str) -> AiStarted:
+    async def start(self, spec: AiJobSpec, *, caller: str, new_job_id: UUID | None = None) -> AiStarted:
         """One job (a first turn, or the next turn of ``spec.conversation_id``) queued; returns at once."""
-        return (await self.start_many([spec], distinct_accounts=False, caller=caller))[0]
+        started = await self.start_many([spec], distinct_accounts=False, caller=caller, new_job_id=new_job_id)
+        return started[0]
 
     async def start_many(
-        self, specs: Sequence[AiJobSpec], *, distinct_accounts: bool, caller: str
+        self, specs: Sequence[AiJobSpec], *, distinct_accounts: bool, caller: str,
+        new_job_id: UUID | None = None,
     ) -> list[AiStarted]:
         """Queue every job or none: the accounts are planned first and a refusal starts nothing.
 
@@ -1060,6 +1063,8 @@ class JobManager:
         """
         if self._closing:
             raise AiRequestError("bad_request", "the Farm is shutting down and takes no new jobs")
+        if new_job_id is not None and len(specs) != 1:
+            raise ValueError("a reserved job ID belongs to one job")
         now = self.clock()
         accounts = await load_accounts(self.ctx.pool)
         conversations = [await self._conversation_for(spec) for spec in specs]
@@ -1085,7 +1090,7 @@ class JobManager:
         started: list[AiStarted] = []
         try:
             for spec, conv, account, choice in zip(specs, conversations, plan, choices, strict=True):
-                started.append(await self._submit(spec, conv, account, choice, caller))
+                started.append(await self._submit(spec, conv, account, choice, caller, new_job_id=new_job_id))
         except BaseException:
             for done in started:
                 await asyncio.shield(self._withdraw(done.job_id))
@@ -1245,6 +1250,7 @@ class JobManager:
         *,
         recovery_parent_id: UUID | None = None,
         recovery_approval_actor: str | None = None,
+        new_job_id: UUID | None = None,
     ) -> AiStarted:
         record = await self.store.create(
             conversation=conv,
@@ -1257,6 +1263,7 @@ class JobManager:
             now=self.clock(),
             recovery_parent_id=recovery_parent_id,
             recovery_approval_actor=recovery_approval_actor,
+            new_job_id=new_job_id,
         )
         self._seq += 1
         work = _Work(

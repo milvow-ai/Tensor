@@ -59,6 +59,7 @@ from farm.gateway.middleware import (
     _client_name,
     caller_from_client_name,
     current_caller,
+    current_client,
     current_identity,
 )
 from farm.gateway.server import build_server
@@ -274,6 +275,7 @@ class TokenTrajectoryMiddleware(Middleware):
         client = (identity.name if identity is not None else None) or authenticated_client_name.get()
         caller = client or caller_from_client_name(_client_name(context))
         tok = current_caller.set(caller)
+        client_tok = current_client.set(caller_from_client_name(_client_name(context)))
         identity_tok = current_identity.set(identity)
         started = time.monotonic()
         outcome = "error"
@@ -283,6 +285,7 @@ class TokenTrajectoryMiddleware(Middleware):
             return result
         finally:
             current_caller.reset(tok)
+            current_client.reset(client_tok)
             current_identity.reset(identity_tok)
             log.info(
                 "gateway.tool_call",

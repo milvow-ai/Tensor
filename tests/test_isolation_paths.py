@@ -199,6 +199,10 @@ def _plain(tool: str, args: dict[str, Any] | Callable[[dict[str, Any]], dict[str
     return case
 
 
+def _task_case(name: str, **args: Any) -> Case:
+    return _plain(name, lambda b: {"task_id": str(b["task_id"]), **args})
+
+
 INFRA_CASES: dict[str, Case] = {
     "farm_guide": _plain("farm_guide", {}),
     "farm_operator": _plain("farm_operator", {}),
@@ -213,6 +217,23 @@ INFRA_CASES: dict[str, Case] = {
     "memory_delete": _plain("memory_delete", {"project": "project", "key": "key", "expected_version": 1}),
     "request_integration": _infra_integration,
     "list_integration_requests": _plain("list_integration_requests", {}),
+    "task_open": _plain("task_open", {
+        "project": "project", "workspace": "/iso/project", "title": "A's task", "goal": "A's goal",
+    }),
+    "task_list": _plain("task_list", {"workspace": "/iso/project"}),
+    "task_status": _task_case("task_status"),
+    "task_takeover": _task_case("task_takeover", epoch=1, workspace="/iso/project", approach="delegate"),
+    "task_checkpoint": _task_case("task_checkpoint", epoch=1, note="A's checkpoint"),
+    "task_local_edit": _task_case("task_local_edit", epoch=1, step_key="edit", label="Edit"),
+    "task_cli": _task_case("task_cli", epoch=1, step_key="job", label="Worker", job={"task": "hello"}),
+    "task_call": _task_case(
+        "task_call", epoch=1, step_key="api", label="API", tool="verify_email", arguments={"email": "a@test.com"},
+    ),
+    "task_resolve_step": _task_case(
+        "task_resolve_step", epoch=1, step_key="step", resolution="superseded", evidence="Verified",
+    ),
+    "task_complete": _task_case("task_complete", epoch=1, summary="A's summary"),
+    "worker_profiles": _plain("worker_profiles", {}),
 }
 
 

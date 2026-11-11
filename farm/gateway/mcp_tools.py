@@ -31,7 +31,7 @@ import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 from weakref import WeakKeyDictionary
 
 import mcp_types
@@ -175,6 +175,14 @@ class PassthroughTool(Tool):
         return tool
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
+        return relay(self.name, await self.execute_route(arguments))
+
+    @property
+    def read_only(self) -> bool:
+        annotations = self._stored.definition.annotations
+        return annotations is not None and annotations.read_only_hint is True
+
+    async def execute_route(self, arguments: dict[str, Any], *, run_id: UUID | None = None) -> RouteOutcome:
         args = dict(arguments)
         control = parse_control(args.pop(FARM_ARGUMENT, None))
         params: dict[str, Any] = {
@@ -185,7 +193,7 @@ class PassthroughTool(Tool):
         if control.timeout_s is not None:
             params["timeout_s"] = control.timeout_s
         try:
-            outcome = await route(
+            return await route(
                 self._ctx,
                 self._provider.capability,
                 params,
@@ -193,10 +201,8 @@ class PassthroughTool(Tool):
                 pin=control.account,
                 caller=current_caller.get(),
                 # Idempotence under one account does not make a write safe in another account's workspace.
-                retry_safe=bool(
-                    self._stored.definition.annotations
-                    and self._stored.definition.annotations.read_only_hint is True
-                ),
+                retry_safe=self.read_only,
+                run_id=run_id,
             )
         except UnknownCapability:
             raise ToolError(
@@ -204,7 +210,6 @@ class PassthroughTool(Tool):
             ) from None
         except NotImplementedError as exc:
             raise ToolError(str(exc)) from None
-        return relay(self.name, outcome)
 
 
 @dataclass(frozen=True)

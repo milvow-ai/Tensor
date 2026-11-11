@@ -195,6 +195,7 @@ def test_every_table_has_tenant_id_default(db_url: str) -> None:
         "api_tokens",
         "login_sessions",
         "ai_usage_snapshots", "ai_usage_settings", "ai_job_inputs", "ai_job_checkpoints", "project_memory",
+        "farm_tasks", "farm_task_steps", "farm_task_events",
     }
     for table, data_type, nullable, default in rows:
         assert data_type == "uuid" and nullable == "NO", table
@@ -755,6 +756,11 @@ def test_supabase_member_can_read_own_private_work_and_login_only(scratch_db: Ca
         conn.execute("insert into connections(id,provider_id,label,auth_ref) values('p-1','p','P','P_KEY')")
         for email in ("member@example.com", "both@example.com"):
             user = conn.execute("select id from users where email=%s", (email,)).fetchone()[0]
+            conn.execute(
+                "insert into farm_tasks(owner_id,project,workspace,title,goal,operator_key,operator_client,"
+                "approach,lease_until) values(%s,'project','/workspace',%s,'Private','key','client','finish',now())",
+                (user, email),
+            )
             conv = conn.execute(
                 "insert into ai_conversations(ai,account,operator_user_id) values('claude','p-1',%s) returning id",
                 (user,),
@@ -772,10 +778,16 @@ def test_supabase_member_can_read_own_private_work_and_login_only(scratch_db: Ca
             _as(conn, "authenticated", email, sub)
             assert conn.execute("select operator_email from v_ai_jobs").fetchall() == [(email,)]
             assert conn.execute("select created_by from v_login_sessions").fetchall() == [(email,)]
+            assert conn.execute("select title from farm_tasks").fetchall() == [(email,)]
+            assert conn.execute("select account,slots from v_worker_activity").fetchall() == [("p-1", 1)]
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute("select goal from farm_tasks")
             conn.execute("reset role")
         _as(conn, "authenticated", "stranger@example.com", STRANGER_SUB)
         assert conn.execute("select count(*) from v_ai_jobs").fetchone() == (0,)
         assert conn.execute("select count(*) from v_login_sessions").fetchone() == (0,)
+        assert conn.execute("select count(id) from farm_tasks").fetchone() == (0,)
+        assert conn.execute("select count(*) from v_worker_activity").fetchone() == (0,)
         conn.execute("reset role")
     command.downgrade(alembic_config(url), "0027")
     command.upgrade(alembic_config(url), "head")

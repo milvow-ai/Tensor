@@ -1028,7 +1028,8 @@ class _Chain:
                 _error("bad_request", result.error or "invalid request", self.attempts)
             )
         if not is_idempotent and result.request_sent is not False and (
-            call.capability.startswith("mcp:")
+            call.retry_safe is False
+            or call.capability.startswith("mcp:")
             or (call.capability == "ask_ai" and call.params.get("mode") == "edit")
         ):
             return self.settled_failure(
@@ -1246,8 +1247,19 @@ class _Chain:
         try:
             async with asyncio.timeout(timeout_s):
                 async with self.ctx.execution_gate:
-                    entered = True
-                    result = await executor.execute(request)
+                    model = request.params.get("model")
+                    try:
+                        await _best_effort(
+                            self.traj.slot(
+                                request.connection.id, model if isinstance(model, str) else None,
+                                timeout_s + 5,
+                            ),
+                            "slot.open",
+                        )
+                        entered = True
+                        result = await executor.execute(request)
+                    finally:
+                        await _best_effort(self.traj.slot(None, None, None), "slot.close")
         except TimeoutError:
             failure = _failed(
                 ErrorKind.TIMEOUT,
@@ -1369,6 +1381,7 @@ async def route(
     scope: str = "internal",
     selection_exempt: bool = False,
     retry_safe: bool | None = None,
+    run_id: UUID | None = None,
 ) -> RouteOutcome:
     """Serve one capability call and return its envelope (see the module docstring for the flow).
 
@@ -1393,10 +1406,12 @@ async def route(
         capability=capability,
         caller=caller,
         strategy="pin" if pin is not None else strategy or cap.default_strategy,
+        run_id=run_id,
     )
     try:
         return await _route(
-            ctx, cap, traj, params, strategy, pin, caller, scope, selection_exempt, retry_safe
+            ctx, cap, traj, params, strategy, pin, caller, scope, selection_exempt, retry_safe,
+            isolated=run_id is not None,
         )
     except Exception as exc:
         # A bug, not a provider fault. The run is finalised and the caller still gets an envelope that
@@ -1441,6 +1456,8 @@ async def _route(
     scope: str,
     selection_exempt: bool = False,
     retry_safe: bool | None = None,
+    *,
+    isolated: bool = False,
 ) -> RouteOutcome:
     models = CAPABILITY_MODELS.get(cap.name)
     try:
@@ -1509,7 +1526,7 @@ async def _route(
         retry_safe=retry_safe,
     )
 
-    if pin is not None:
+    if pin is not None or isolated:
         return _outcome(traj.run_id, await _lead(ctx, call, traj, shared=False))
 
     hit = await flight.lookup_cache(ctx.pool, call.request_hash, ctx.clock())

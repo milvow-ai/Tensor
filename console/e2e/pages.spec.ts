@@ -46,6 +46,10 @@ for (const viewport of VIEWPORTS) {
         await page.goto(screen.path);
         await expect(page.getByRole("heading", { level: 1, name: screen.heading, exact: true })).toBeVisible();
         if (screen.name === "overview") await expect(page.locator(".recharts-surface").first()).toBeVisible();
+        if (screen.name === "tasks") {
+          await expect(page.getByText("Project handoffs", { exact: true })).toBeVisible();
+          await expect(page.getByText("Worker activity", { exact: true })).toBeVisible();
+        }
         if (screen.name.startsWith("pool-")) {
           await expect(page.getByTestId("accounts-table")).toBeVisible();
           // The row actions menu loads right after hydration.

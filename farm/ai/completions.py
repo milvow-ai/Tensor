@@ -6,16 +6,18 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Literal
 from uuid import UUID, uuid4
 
 from farm.settings import data_dir
 
 MAX_METADATA_BYTES = 1_048_576
 MAX_REPLAY_BATCH = 100
+Bucket = Literal["ai-completions", "task-completions"]
 
 
-def root() -> Path:
-    return data_dir() / "ai-completions"
+def root(bucket: Bucket = "ai-completions") -> Path:
+    return data_dir() / bucket
 
 
 def sync_directory(path: Path) -> None:
@@ -27,13 +29,14 @@ def sync_directory(path: Path) -> None:
             os.close(fd)
 
 
-def write(tenant_id: UUID, job_id: UUID, payload: bytes) -> Path:
+def write(tenant_id: UUID, job_id: UUID, payload: bytes, *, bucket: Bucket = "ai-completions") -> Path:
     if len(payload) > MAX_METADATA_BYTES:
         raise ValueError("terminal metadata exceeds spool limit")
-    folder = root() / str(tenant_id)
+    base = root(bucket)
+    folder = base / str(tenant_id)
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     if os.name != "nt":
-        root().chmod(0o700)
+        base.chmod(0o700)
         folder.chmod(0o700)
     path = folder / f"{job_id}.json"
     wrapped = json.dumps(
@@ -48,14 +51,14 @@ def write(tenant_id: UUID, job_id: UUID, payload: bytes) -> Path:
             os.fsync(stream.fileno())
         os.replace(temporary, path)
         sync_directory(folder)
-        sync_directory(root())
+        sync_directory(base)
     finally:
         temporary.unlink(missing_ok=True)
     return path
 
 
-def entries() -> list[Path]:
-    base = root()
+def entries(*, bucket: Bucket = "ai-completions") -> list[Path]:
+    base = root(bucket)
     if not base.exists():
         return []
     found: list[Path] = []

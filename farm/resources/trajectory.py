@@ -77,8 +77,9 @@ class Trajectory:
         capability: str,
         caller: str,
         strategy: str | None,
+        run_id: UUID | None = None,
     ) -> Trajectory:
-        run_id = uuid4()
+        run_id = run_id or uuid4()
         async with tenant_connection(pool) as conn:
             await conn.execute(
                 "insert into public.runs (id, capability, caller, strategy, status, started_at, "
@@ -87,6 +88,15 @@ class Trajectory:
                 (run_id, capability, caller, strategy, clock(), *operator_snapshot()),
             )
         return cls(pool, run_id, clock)
+
+    async def slot(self, account: str | None, model: str | None, seconds: float | None) -> None:
+        async with tenant_connection(self._pool) as conn:
+            await conn.execute(
+                "update public.runs set active_connection_id=%s,active_model=%s,"
+                "active_until=now()+make_interval(secs=>%s) "
+                "where id=%s",
+                (account, model, seconds, self.run_id),
+            )
 
     async def attach_request(self, request_id: UUID) -> None:
         """Link the run to its ``capability_requests`` row (known only after the claim)."""
@@ -127,7 +137,8 @@ class Trajectory:
         async with tenant_connection(self._pool) as conn:
             await conn.execute(
                 "update public.runs set status = %s, cost_usd = %s, cached = %s, connection_id = %s, "
-                "error_kind = %s, error = %s, finished_at = %s where id = %s",
+                "error_kind = %s, error = %s, finished_at = %s, "
+                "active_connection_id=null, active_model=null, active_until=null where id = %s",
                 (
                     status,
                     cost_usd,

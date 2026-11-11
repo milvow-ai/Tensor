@@ -51,6 +51,7 @@ from farm.gateway.middleware import (
     current_caller,
     current_identity,
 )
+from farm.gateway.task_tools import TASK_TOOLS, register_task_tools
 from farm.gateway.usage_tools import register_usage_tools
 from farm.registry.models import MCP_CAPABILITY_PREFIX, STRATEGIES
 from farm.resources import reports
@@ -71,6 +72,7 @@ INFRA_TOOLS = (
     "request_integration",
     "list_integration_requests",
     *MEMORY_TOOLS,
+    *TASK_TOOLS,
 )
 ROUTING_ARGUMENT = "routing_strategy"
 
@@ -87,6 +89,12 @@ INSTRUCTIONS = (
     "right now. Use get_capacity to see remaining limits, get_run(run_id) to inspect routing decisions, "
     "and get_usage for spend. To delegate to other AIs (Claude, Codex, Gemini, Hermes), use ai_start / "
     "ai_start_many, track with ai_wait, and retrieve answers with ai_result."
+)
+TASK_INSTRUCTIONS = (
+    " For work that may outlive this IDE, open a task with task_open, save checkpoints, and use "
+    "task_cli or task_call so the next operator can find and continue it. When asked to resume work, "
+    "call task_list with the project folder and read task_status. Ask whether to finish in this IDE or "
+    "delegate remaining steps before taking over. Check worker_profiles before delegating."
 )
 
 
@@ -125,14 +133,21 @@ class CapabilityTool(Tool):
         return tool
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
-        args = dict(arguments)
-        strategy = args.pop(ROUTING_ARGUMENT, None)
         if self.name == "ask_ai":
+            args = {key: value for key, value in arguments.items() if key != ROUTING_ARGUMENT}
             refused = await ask_ai_selection_gate(self._ctx, args)
             if refused is not None:
                 return refused
-        outcome = await route(self._ctx, self.name, args, strategy=strategy, caller=current_caller.get())
+        outcome = await self.execute_route(arguments)
         return ToolResult(structured_content=outcome.envelope(), is_error=not outcome.ok)
+
+    async def execute_route(self, arguments: dict[str, Any], *, run_id: UUID | None = None) -> RouteOutcome:
+        args = dict(arguments)
+        strategy = args.pop(ROUTING_ARGUMENT, None)
+        return await route(
+            self._ctx, self.name, args, strategy=strategy, caller=current_caller.get(),
+            retry_safe=False if run_id is not None else None, run_id=run_id,
+        )
 
 
 def _register_infra_tools(server: FastMCP, ctx: FarmContext) -> None:
@@ -275,7 +290,9 @@ async def build_server(
     gate ``(caller, tool, arguments) -> reason to refuse | None``. ``mcp_direct_limit`` / ``mcp_pinned``:
     ``settings.mcp_direct_limit`` / ``settings.mcp_pinned`` of the registry (which MCP tools are listed).
     """
-    server = FastMCP(SERVER_NAME, instructions=INSTRUCTIONS)
+    shared = os.environ.get("FARM_SHARED_INSTANCE") == "1"
+    instructions = INSTRUCTIONS if shared else INSTRUCTIONS + TASK_INSTRUCTIONS
+    server = FastMCP(SERVER_NAME, instructions=instructions)
     server.add_middleware(AuthMiddleware(token))
     server.add_middleware(PolicyMiddleware(policy))
     server.add_middleware(TrajectoryMiddleware())
@@ -295,7 +312,6 @@ async def build_server(
             log.info("gateway.capability_without_tool", capability=name, reason="no input/output models yet")
             continue
         server.add_tool(CapabilityTool.create(ctx, name, description or name, *models))
-    shared = os.environ.get("FARM_SHARED_INSTANCE") == "1"
     if not shared and not any(name == "ask_ai" for name, _ in capabilities):
         # A blank gateway stays usable when its first worker is enrolled, without a restart.
         server.add_tool(CapabilityTool.create(
@@ -305,6 +321,8 @@ async def build_server(
     register_usage_tools(server, ctx)
     if not shared:
         register_memory_tools(server, ctx)
-    await register_ai_tools(server, ctx, routing_argument=ROUTING_ARGUMENT, manager=job_manager)
+    manager = await register_ai_tools(server, ctx, routing_argument=ROUTING_ARGUMENT, manager=job_manager)
+    if not shared:
+        await register_task_tools(server, ctx, manager, policy)
     await register_mcp_tools(server, ctx, direct_limit=mcp_direct_limit, pinned=mcp_pinned)
     return server

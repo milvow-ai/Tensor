@@ -149,6 +149,7 @@ def test_downgrade_upgrade_round_trip_with_data(scratch_db: Callable[[], str]) -
         assert _tenant_tables(url) == sorted([
             *tables_before, "memberships", "budget_reservations", "api_tokens", "login_sessions",
             "ai_job_inputs", "ai_usage_settings", "ai_usage_snapshots", "ai_job_checkpoints", "project_memory",
+            "farm_tasks", "farm_task_steps", "farm_task_events",
         ])
 
         command.downgrade(cfg, "0013")

@@ -48,6 +48,8 @@ log = structlog.get_logger(__name__)
 
 current_caller: ContextVar[str] = ContextVar("farm_caller", default="mcp")
 """Who is calling, for the tool that is running (set by ``TrajectoryMiddleware``)."""
+current_client: ContextVar[str] = ContextVar("farm_client", default="mcp")
+"""Normalized MCP client name, independent of an HTTP token's operator label."""
 current_identity: ContextVar[TokenIdentity | None] = ContextVar("farm_identity", default=None)
 """Authenticated API token identity for this tool call; None denotes trusted local stdio."""
 
@@ -169,6 +171,7 @@ class TrajectoryMiddleware(Middleware):
     ) -> ToolResult:
         caller = caller_from_client_name(_client_name(context))
         token = current_caller.set(caller)
+        client_token = current_client.set(caller)
         try:
             identity = get_http_request().scope.get(IDENTITY_SCOPE_KEY)
         except RuntimeError:
@@ -182,6 +185,7 @@ class TrajectoryMiddleware(Middleware):
             return result
         finally:
             current_caller.reset(token)
+            current_client.reset(client_token)
             current_identity.reset(identity_token)
             log.info(
                 "gateway.tool_call",

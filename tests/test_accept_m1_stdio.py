@@ -119,7 +119,18 @@ def test_farm_serve_over_stdio_lists_the_tools_and_answers_verify_email(
         "memory_put",
         "request_integration",
         "search_tools",
+        "task_call",
+        "task_checkpoint",
+        "task_cli",
+        "task_complete",
+        "task_list",
+        "task_local_edit",
+        "task_open",
+        "task_resolve_step",
+        "task_status",
+        "task_takeover",
         "verify_email",
+        "worker_profiles",
     ]  # the AI tools included: the server no longer hides them from tests by test name
     envelope = seen["envelope"]
     assert envelope["ok"] is True and envelope["result"] == answer["data"]

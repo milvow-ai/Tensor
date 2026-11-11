@@ -63,6 +63,17 @@ Repeat per profile, inspect each unit's journal and authenticate `/ready`. `/hea
 
 Sign into each personal console, add/test its native CLI accounts and MCP connections there, and verify real provider-returned identity. An unverified account shows unknown identity. The active model/effort and worker account are separate from the verified Farm-token operator email. `farm_operator` identifies the authenticated Farm member/client; it does not attest which subscription is signed into the caller's IDE.
 
+### Continue a task from another IDE
+
+Connect both IDEs to the same personal Farm, using a member-bound token for each IDE. In the first IDE, call `task_open` with the project name, absolute workspace path, and goal. Save the task ID and operator epoch.
+
+1. Use `task_cli` for a worker job, `task_call` for a Farm API or upstream MCP tool, and `task_local_edit` before editing the IDE workspace. Use a distinct step key for each action and the same key and input if retrying the submission. Choose a model and effort with `ai_options` when assigning a worker. Parallel edits need separate Git worktrees on the worker host.
+2. Save progress with `task_checkpoint`, including changed files, completed work, and what remains. A note-free checkpoint renews the three-minute operator lease. Pause explicitly when leaving if the IDE is still responsive. Farm jobs and calls already submitted continue independently of the IDE.
+3. In the new IDE, call `task_list` with the same workspace path, then `task_status`. Choose **finish** for local edits or **delegate** for worker assignments. `task_takeover` records the choice and gives the new operator a fresh epoch. Replacing an active lease requires explicit confirmation. For an interrupted local edit, check that the old IDE has stopped writing and inspect the files before acknowledging the workspace check.
+4. Read a saved MCP or API response with `task_status(task_id, step_key)`. Read CLI output and any partial result with `ai_result` using the job ID. Responses above the receipt limit retain a preview and run reference. For failed or interrupted steps, record verified outcomes with `task_resolve_step`. If work remains, give the replacement step a fresh key and include the saved checkpoint and output in the instructions. Verify external writes and file changes before superseding an uncertain step. Close the task with `task_complete`.
+
+The personal console's Tasks page refreshes worker activity and task status while visible. `worker_profiles` also shows account slots, active and queued work, model selections, and Farm-metered limits. Provider allowance windows and resets appear where observed. The Farm can resume saved workspace files and registered steps. An IDE's unsaved buffers and native chat history remain with that IDE.
+
 Register the team gateway as an upstream HTTP MCP in each personal Farm, using the corresponding person's team token held in their private secrets file. Start with a discovery namespace and explicit tool policy. Always sync/test the upstream before use. New synced tools become discoverable on the running gateway; an IDE that caches its direct tool list may need its tool list refreshed. Search/describe/call helpers remain present even before the first server is added. Never link the team gateway back to a personal Farm.
 
 ## Administrator reporting
@@ -110,6 +121,8 @@ Restore logins, OAuth stores, memory and job artifacts only to the matching prof
 MCP writes with uncertain outcomes stop as `outcome_unknown`. Verify the external service before resubmitting. Failover after dispatch requires a trusted read-only hint. Before dispatch, a confirmed transport failure may move a call to another account. AI edits require reconciliation approval before continuation. Failed answers can continue through bounded recovery while preserving provenance and the chosen model and effort.
 
 Terminal answers are fsynced locally before the final SQL update and replayed to SQL after a database outage. A completed worker is never reexecuted by spool replay. Damaged/conflicting spool entries and output files are retained for review under `ai-completions` and job-result storage. Preserve these during recovery; do not manually delete them to clear a warning.
+
+Tracked MCP and API receipts are replayed from `task-completions`. If the Farm process stops before a receipt is saved, the expired call becomes `outcome_unknown` and can be reconciled by the next operator.
 
 For upgrades, first prove an off-host backup and a usable rollback build. Stop all profile backends, check no CLI children remain, update the root-owned code/dependencies, apply migrations per profile, build consoles individually, then smoke-test one profile before the rest. Do not use the legacy single-instance `update.sh`. Restore the previous code/build for a code-only rollback; schema rollback or database restore needs a deliberate plan for that migration and post-backup work. Never point two workers at one database during a transition.
 

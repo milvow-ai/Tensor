@@ -306,6 +306,15 @@ async def farm_ctx(farm_factory: Callable[..., Awaitable[FarmContext]], registry
 
 SEEDS: dict[str, tuple[str, str]] = {
     "project_memory": ("project, key, body", "'project', 'key', %(msg)s"),
+    "farm_tasks": (
+        "id,project,workspace,title,goal,operator_key,operator_client,approach,lease_until",
+        "%(task_id)s,'project','/iso/project',%(msg)s,%(msg)s,'client',%(msg)s,'finish',now()",
+    ),
+    "farm_task_steps": (
+        "task_id,step_key,fingerprint,kind,label,operator_epoch,assigned_by",
+        "%(task_id)s,'step','fingerprint','local',%(msg)s,1,%(msg)s",
+    ),
+    "farm_task_events": ("task_id,kind,actor,epoch,approach", "%(task_id)s,'opened',%(msg)s,1,'finish'"),
     # table -> (columns, values); %(name)s are per-tenant parameters from ``tenant_params``. Ordered for FKs.
     "providers": ("id, name, kind, executor", "%(pid)s, %(msg)s, 'tool', 'api'"),
     "connections": ("id, provider_id", "%(conn)s, %(pid)s"),
@@ -369,6 +378,7 @@ def tenant_params(tag: str) -> dict[str, Any]:
         "alert": uuid.uuid4(),
         "cv": uuid.uuid4(),
         "jid": uuid.uuid4(),
+        "task_id": uuid.uuid4(),
         "eid": uuid.uuid4(),
         "sid": f"iso-{tag}-session",
         "ckey": f"iso-{tag}-company",
