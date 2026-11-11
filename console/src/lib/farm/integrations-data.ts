@@ -11,6 +11,7 @@
 import { createClient } from "@/lib/supabase/server";
 
 import { getFarmData } from "./data";
+import { mcpToolAllowed } from "./mcp-permissions";
 import { getTenantId } from "./seal";
 import type { ConnectionStatus, JsonObject, PoolHealth, ProviderExecutor } from "./types";
 
@@ -52,13 +53,14 @@ export interface McpToolItem {
   annotations: JsonObject | null;
   schemaHash: string;
   syncedAt: string;
-  enabled: boolean;
+  enabled: boolean | null;
   readOnly: boolean;
 }
 
 export interface McpDetail {
   integration: IntegrationSummary;
   tools: McpToolItem[];
+  toolsTruncated?: boolean;
   cliCommands: {
     importCmd: string;
     loginCmd: string;
@@ -74,6 +76,8 @@ export interface AiJobItem {
   task: string | null;
   ai: string;
   account: string;
+  operatorEmail?: string | null;
+  operatorClient?: string | null;
   /** The requested model; null when the job named none. */
   model: string | null;
   /** The exact model the worker reported; null = unknown. */
@@ -119,15 +123,18 @@ export interface AiConversationItem {
  * Tools per provider in `mcp_tools` (written by `farm mcp sync`; owner-readable under RLS). Returns null when the
  * table cannot be read, so the cards show "—" instead of a false 0. A provider missing from the map has no rows.
  */
-async function countSyncedTools(): Promise<Map<string, number> | null> {
+async function countSyncedTools(providers: string[]): Promise<Map<string, number> | null> {
   try {
     const supabase = await createClient();
-    const result = await supabase.from("mcp_tools").select("provider").limit(10000);
-    if (result.error) return null;
     const counts = new Map<string, number>();
-    for (const row of result.data ?? []) {
-      const provider = (row as { provider: string }).provider;
-      counts.set(provider, (counts.get(provider) ?? 0) + 1);
+    for (const provider of providers) {
+      const result = await supabase
+        .from("mcp_tools")
+        .select("provider", { head: true, count: "exact" })
+        .eq("tenant_id", getTenantId())
+        .eq("provider", provider);
+      if (result.error || result.count === null) return null;
+      counts.set(provider, result.count);
     }
     return counts;
   } catch {
@@ -147,7 +154,16 @@ export async function getIntegrationsList(filter?: {
   const { FixturesFarmData } = await import("./fixtures/source");
   const isFixtures = farmData instanceof FixturesFarmData;
 
-  const syncedTools = isFixtures ? null : await countSyncedTools();
+  const syncedTools = isFixtures
+    ? null
+    : await countSyncedTools(pools.filter((p) => p.executor === "mcp").map((p) => p.provider_id));
+  const configs = new Map<string, JsonObject>();
+  if (!isFixtures) {
+    const db = await createClient();
+    const response = await db.from("providers").select("id,config").eq("tenant_id", getTenantId());
+    if (response.error) throw new Error("Could not read integration settings");
+    for (const row of response.data ?? []) configs.set(row.id, row.config as JsonObject);
+  }
   const results: IntegrationSummary[] = [];
 
   for (const pool of pools) {
@@ -180,9 +196,9 @@ export async function getIntegrationsList(filter?: {
       const synced = syncedTools?.get(pool.provider_id) ?? 0;
       toolCount = synced > 0 ? synced : null;
     }
-    let transport = "stdio";
-    const namespace = pool.provider_id;
-    let exposeMode: "direct" | "discovery" | "auto" | "n/a" = "direct";
+    let transport = isFixtures ? "stdio" : "unknown";
+    let namespace = pool.provider_id;
+    let exposeMode: "direct" | "discovery" | "auto" | "n/a" = isFixtures ? "direct" : "n/a";
     let lastSyncAt: string | null = null;
     let config: JsonObject = {};
 
@@ -237,6 +253,20 @@ export async function getIntegrationsList(filter?: {
       }
     }
 
+    if (!isFixtures) {
+      const block = configs.get(pool.provider_id)?.mcp;
+      if (block && typeof block === "object" && !Array.isArray(block)) {
+        const mcp = block as JsonObject;
+        if (typeof mcp.transport === "string") transport = mcp.transport;
+        if (typeof mcp.namespace === "string") namespace = mcp.namespace;
+        if (mcp.expose === "auto" || mcp.expose === "direct" || mcp.expose === "discovery") exposeMode = mcp.expose;
+        const tools = mcp.tools;
+        if (tools && typeof tools === "object" && !Array.isArray(tools)) {
+          const rules = tools as JsonObject;
+          config = { tools: { allow: rules.allow ?? ["*"], deny: rules.deny ?? [] } };
+        }
+      } else if (isAi) transport = "cli";
+    }
     results.push({
       id: pool.provider_id,
       name: pool.provider_name,
@@ -286,6 +316,7 @@ export async function getMcpServerDetail(providerId: string): Promise<McpDetail 
   const isFixtures = farmData instanceof FixturesFarmData;
 
   let tools: McpToolItem[] = [];
+  let toolsTruncated = false;
 
   if (isFixtures) {
     const { buildWorld } = await import("./fixtures/world");
@@ -308,6 +339,31 @@ export async function getMcpServerDetail(providerId: string): Promise<McpDetail 
           readOnly: t.readOnly,
         }));
     }
+  } else {
+    const db = await createClient();
+    const result = await db
+      .from("mcp_tools")
+      .select("name,description,input_schema,output_schema,annotations,schema_hash,synced_at")
+      .eq("tenant_id", getTenantId())
+      .eq("provider", providerId)
+      .order("name")
+      .limit(1000);
+    if (result.error) throw new Error("Could not read this MCP catalogue");
+    tools = (result.data ?? []).map((row) => ({
+      id: `${providerId}:${row.name}`,
+      provider: providerId,
+      name: row.name,
+      description: row.description ?? "",
+      inputSchema: row.input_schema as JsonObject,
+      outputSchema: row.output_schema as JsonObject | null,
+      annotations: row.annotations as JsonObject | null,
+      schemaHash: row.schema_hash,
+      syncedAt: row.synced_at,
+      readOnly: row.annotations?.readOnlyHint === true,
+      enabled: mcpToolAllowed(integration.config.tools, row.name),
+    }));
+    toolsTruncated = integration.toolCount !== null && integration.toolCount > tools.length;
+    if (tools.length) integration.lastSyncAt = tools[0].syncedAt;
   }
 
   const cliCommands = {
@@ -321,6 +377,7 @@ export async function getMcpServerDetail(providerId: string): Promise<McpDetail 
   return {
     integration,
     tools,
+    toolsTruncated,
     cliCommands,
   };
 }
@@ -331,13 +388,15 @@ export async function getMcpServerDetail(providerId: string): Promise<McpDetail 
 
 const AI_JOB_COLUMNS =
   "id, conversation_id, ai, account, model, resolved_model, requested_effort, effective_effort, selection_source, " +
-  "mode, state, tokens, cost_usd, duration_s, error_kind, created_at, updated_at";
+  "mode, state, tokens, cost_usd, duration_s, error_kind, created_at, updated_at, operator_email, operator_client";
 
 interface AiJobRow {
   id: string;
   conversation_id: string | null;
   ai: string;
   account: string;
+  operator_email: string | null;
+  operator_client: string | null;
   model: string | null;
   resolved_model: string | null;
   requested_effort: string | null;
@@ -368,6 +427,8 @@ async function readAiJobs(): Promise<AiJobItem[]> {
     task: null,
     ai: row.ai,
     account: row.account,
+    operatorEmail: row.operator_email,
+    operatorClient: row.operator_client,
     model: row.model,
     resolvedModel: row.resolved_model,
     requestedEffort: row.requested_effort,
@@ -451,7 +512,34 @@ export async function getAiConversationsList(filter?: { ai?: string; search?: st
   const farmData = await getFarmData();
   const { FixturesFarmData } = await import("./fixtures/source");
   if (!(farmData instanceof FixturesFarmData)) {
-    return [];
+    const db = await createClient();
+    let query = db
+      .from("ai_conversations")
+      .select("id,ai,account,native_session_id,turns,tokens,cost,last_job_id,created_at,updated_at")
+      .eq("tenant_id", getTenantId())
+      .order("updated_at", { ascending: false })
+      .limit(200);
+    if (filter?.ai && filter.ai !== "all") query = query.eq("ai", filter.ai);
+    const result = await query;
+    if (result.error) throw new Error(`Could not read AI conversations: ${result.error.message}`);
+    const rows: AiConversationItem[] = (result.data ?? []).map((row) => ({
+      id: String(row.id),
+      ai: String(row.ai),
+      account: String(row.account),
+      nativeSessionId: row.native_session_id ?? "",
+      turns: Number(row.turns),
+      tokens: Number(row.tokens),
+      costUsd: Number(row.cost),
+      lastJobId: row.last_job_id ?? "",
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+    }));
+    const search = filter?.search?.toLowerCase();
+    return search
+      ? rows.filter((row) =>
+          [row.id, row.account, row.nativeSessionId].some((value) => value.toLowerCase().includes(search)),
+        )
+      : rows;
   }
 
   const { buildWorld } = await import("./fixtures/world");

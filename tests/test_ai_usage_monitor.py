@@ -35,7 +35,10 @@ async def test_snapshot_rls_and_error_preserve_last_success(pool, two_tenants, m
             async with tenant_connection(pool) as conn:
                 await conn.execute(
                     "insert into public.ai_usage_snapshots(connection_id,provider_id,status,observed_at,checked_at,snapshot) "
-                    "values(%s,'codex','ok',now()-interval '1 hour',now()-interval '1 hour',%s)",
+                    "values(%s,'codex','ok',now()-interval '1 hour',now()-interval '1 hour',%s) "
+                    "on conflict(tenant_id,connection_id) do update set provider_id=excluded.provider_id, "
+                    "status=excluded.status, observed_at=excluded.observed_at, "
+                    "checked_at=excluded.checked_at, snapshot=excluded.snapshot",
                     (conn_id, Jsonb({"rate_limits": {"primary": {"usedPercent": 15}}})),
                 )
                 cur = await conn.execute(

@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import time
 import traceback
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -364,7 +365,11 @@ async def _provider_of(pool: DbPool, connection_id: str) -> str | None:
 def request_hash(capability: str, params: Mapping[str, Any]) -> str:
     """Identity of a request (CONTEXT section 4): equal capability + equal params = the same request."""
     canonical = json.dumps(params, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)
-    return hashlib.sha256(f"{capability}|{canonical}".encode()).hexdigest()
+    from farm.tenancy import current_user
+
+    actor = current_user.get()
+    prefix = f"actor:{actor}|" if actor is not None else ""
+    return hashlib.sha256(f"{prefix}{capability}|{canonical}".encode()).hexdigest()
 
 
 def skip_reason(candidate: Candidate, scope: str, now: datetime) -> str | None:
@@ -516,6 +521,7 @@ class _Call:
     models: Models | None
     session_pinned: bool = False
     selection_exempt: bool = False
+    retry_safe: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -654,6 +660,9 @@ class _Chain:
 
     async def _try_pool(self, provider_pool: ProviderPool, budgets: Budgets) -> _Settled | None:
         ctx, call = self.ctx, self.call
+        if os.environ.get("FARM_SHARED_INSTANCE") == "1" and provider_pool.executor == "cli_agent":
+            await self._skip(provider_pool, None, "personal_instance_required")
+            return None
         if not provider_pool.enabled:
             await self._skip(provider_pool, None, "provider_disabled")
             return None
@@ -948,7 +957,12 @@ class _Chain:
             await traj.event("execute", candidate.id, provider=provider_pool.id, timeout_s=timeout_s)
             self.last_provider, self.last_connection = provider_pool.id, candidate.id
 
-            is_idempotent = getattr(call.cap, "idempotent", None)
+            # MCP safety is per tool. A provider-wide flag cannot make every tool a read.
+            is_idempotent = False if call.capability.startswith("mcp:") else None
+            if call.retry_safe is not None:
+                is_idempotent = call.retry_safe
+            if is_idempotent is None:
+                is_idempotent = getattr(call.cap, "idempotent", None)
             if is_idempotent is None:
                 if "idempotent" in candidate.meta:
                     is_idempotent = bool(candidate.meta["idempotent"])
@@ -1007,6 +1021,25 @@ class _Chain:
             else None
         )
         await self._on_failure(provider_pool, candidate, result)
+        if result.error_kind is ErrorKind.BAD_REQUEST and (
+            call.capability.startswith("mcp:") or call.capability == "ask_ai"
+        ):
+            return self.settled_failure(
+                _error("bad_request", result.error or "invalid request", self.attempts)
+            )
+        if not is_idempotent and result.request_sent is not False and (
+            call.capability.startswith("mcp:")
+            or (call.capability == "ask_ai" and call.params.get("mode") == "edit")
+        ):
+            return self.settled_failure(
+                _error(
+                    "outcome_unknown",
+                    f"The call failed ({(result.error_kind or ErrorKind.UNKNOWN).value}) and may have "
+                    "taken effect. No other account was tried; reconcile the outcome "
+                    "before retrying this write.",
+                    self.attempts,
+                )
+            )
         if call.session_pinned:
             error = _error(
                 (result.error_kind or ErrorKind.UNKNOWN).value,
@@ -1030,7 +1063,8 @@ class _Chain:
         elif candidate.circuit != "closed":
             # An empty answer changes nothing for a healthy account, but it still ends a half-open probe.
             await _best_effort(
-                health.record_failure(ctx.pool, candidate.id, ErrorKind.EMPTY, result.error, now=ctx.clock()),
+                health.record_failure(ctx.pool, candidate.id, ErrorKind.EMPTY,
+                    self._health_error(result.error, ErrorKind.EMPTY), now=ctx.clock()),
                 "health.probe_empty",
             )
         await self.traj.event(
@@ -1101,7 +1135,7 @@ class _Chain:
                 ctx.pool,
                 candidate.id,
                 kind,
-                result.error,
+                self._health_error(result.error, kind),
                 now=ctx.clock(),
                 retry_after_s=result.retry_after_s,
                 reset_at=result.reset_at,
@@ -1136,6 +1170,13 @@ class _Chain:
                 message=_clip(result.error),
             )
         )
+
+    def _health_error(self, error: str | None, kind: ErrorKind) -> str | None:
+        # Pool health is visible to the whole tenant. Upstream errors can echo a person's tool inputs;
+        # keep those in their private trajectory, never in shared pool metadata.
+        if os.environ.get("FARM_SHARED_INSTANCE") == "1" and self.call.capability.startswith("mcp:"):
+            return f"MCP call failed ({kind.value}); inspect your private run for details"
+        return error
 
     async def _reserve(self, provider_pool: ProviderPool, candidate: Candidate) -> list[_Held] | None:
         """Reserve every unit with an estimate, all or nothing. ``None`` = skipped (``reserve_failed``)."""
@@ -1201,15 +1242,19 @@ class _Chain:
 
     async def _execute(self, executor: Executor, request: ExecRequest, timeout_s: float) -> ExecResult:
         started = time.monotonic()
+        entered = False
         try:
             async with asyncio.timeout(timeout_s):
-                result = await executor.execute(request)
+                async with self.ctx.execution_gate:
+                    entered = True
+                    result = await executor.execute(request)
         except TimeoutError:
-            return _failed(
+            failure = _failed(
                 ErrorKind.TIMEOUT,
                 f"no answer within {timeout_s:g}s (the router cut the call off)",
                 latency_ms=int((time.monotonic() - started) * 1000),
             )
+            return failure if entered else failure.model_copy(update={"request_sent": False})
         except Exception as exc:
             # Executors must not raise for provider faults; if one does it is a bug. Treat it as a failed
             # attempt (so a fallback can still answer) and make the bug loud in the log.
@@ -1323,6 +1368,7 @@ async def route(
     caller: str,
     scope: str = "internal",
     selection_exempt: bool = False,
+    retry_safe: bool | None = None,
 ) -> RouteOutcome:
     """Serve one capability call and return its envelope (see the module docstring for the flow).
 
@@ -1349,7 +1395,9 @@ async def route(
         strategy="pin" if pin is not None else strategy or cap.default_strategy,
     )
     try:
-        return await _route(ctx, cap, traj, params, strategy, pin, caller, scope, selection_exempt)
+        return await _route(
+            ctx, cap, traj, params, strategy, pin, caller, scope, selection_exempt, retry_safe
+        )
     except Exception as exc:
         # A bug, not a provider fault. The run is finalised and the caller still gets an envelope that
         # names the run (so the owner can find the traceback in the log); only cancellation propagates.
@@ -1392,6 +1440,7 @@ async def _route(
     caller: str,
     scope: str,
     selection_exempt: bool = False,
+    retry_safe: bool | None = None,
 ) -> RouteOutcome:
     models = CAPABILITY_MODELS.get(cap.name)
     try:
@@ -1457,6 +1506,7 @@ async def _route(
         models=models,
         session_pinned=session_pinned,
         selection_exempt=selection_exempt,
+        retry_safe=retry_safe,
     )
 
     if pin is not None:

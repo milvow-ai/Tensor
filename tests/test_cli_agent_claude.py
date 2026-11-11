@@ -43,7 +43,7 @@ async def test_claude_success_answer_mode(fake_harness: FakeCliHarness) -> None:
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
-        params={"task": "say hello", "mode": "answer"},
+        params={"task": "say hello", "mode": "answer", "model": "sonnet"},
         connection=conn,
     )
 

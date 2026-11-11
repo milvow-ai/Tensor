@@ -4,6 +4,8 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+User=farm
+Group=farm
 EnvironmentFile=/etc/harness-farm/farm.env
 ExecStart=/opt/harness-farm/scripts/linux/backup-state.sh
 Nice=10
@@ -13,4 +15,4 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/backups/harness-farm
+ReadWritePaths=/var/backups/harness-farm /var/lib/harness-farm

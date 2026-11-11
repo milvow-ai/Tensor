@@ -212,7 +212,7 @@ async def test_a_quota_failure_shows_the_account_limited_until_the_reset_then_us
     reset = datetime.now(UTC) + timedelta(hours=91, minutes=35, seconds=7)  # the CLI's relative reset
 
     async with aip.client() as client:
-        reply = await call(client, "ask_ai", ai="gemini", task="research")
+        reply = await call(client, "ask_ai", ai="gemini", model="gemini-3.8-flash-high", task="research")
         during = await call(client, "list_ais")
     guide_during = await format_ai_section(aip.pool, aip.clock())
 
@@ -248,7 +248,7 @@ async def test_an_expired_claude_login_marks_the_account_needs_login(
         stdout=claude_ok("from claude-03"), per_account={"claude-02": answer(load("claude", "oauth_expired"))}
     )
     async with aip.client() as client:
-        reply = await call(client, "ask_ai", ai="claude", task="hello")
+        reply = await call(client, "ask_ai", ai="claude", model="sonnet", effort="high", task="hello")
         listing = await call(client, "list_ais")
 
     assert reply["ok"] is True and reply["result"]["connection_id"] == "claude-03"
@@ -268,7 +268,7 @@ async def test_a_success_clears_the_last_error(aip_factory: Callable[..., Awaita
         stdout=claude_ok("fine"), per_account={"claude-02": {"stderr": "segfault", "exit_code": 139}}
     )
     async with aip.client() as client:
-        first = await call(client, "ask_ai", ai="claude", task="one")  # claude-02 crashes, claude-03 answers
+        first = await call(client, "ask_ai", ai="claude", model="sonnet", effort="high", task="one")
         failed = account(await call(client, "list_ais"), "claude-02")
         aip.harness.set_response(stdout=claude_ok("fine"))
         job = await start(client, ai="claude", account="claude-02", task="two")

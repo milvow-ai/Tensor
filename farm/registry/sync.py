@@ -20,6 +20,7 @@ Semantics (deliberate; the report and the audit log make every effect visible):
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -334,6 +335,10 @@ async def sync_registry(
     pool: DbPool, registry: Registry, *, actor: str = "registry-sync", dry_run: bool = False
 ) -> SyncReport:
     """Apply ``registry`` to the database atomically; see the module docstring for the semantics."""
+    if os.environ.get("FARM_SHARED_INSTANCE") == "1" and any(
+        provider.executor == "cli_agent" for provider in registry.providers.values()
+    ):
+        raise RegistryError("Native CLI accounts belong in personal instances, not the shared tools gateway")
     report = SyncReport(dry_run=dry_run)
     provider_rows = [_provider_row(pid, spec) for pid, spec in registry.providers.items()]
     connection_rows = [_connection_row(pid, c) for pid, c in registry.iter_connections()]

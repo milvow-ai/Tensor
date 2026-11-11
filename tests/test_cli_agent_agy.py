@@ -46,7 +46,7 @@ async def test_agy_success_answer_mode(fake_harness: FakeCliHarness) -> None:
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
-        params={"task": "explain code", "mode": "answer"},
+        params={"task": "explain code", "mode": "answer", "model": "gemini-3.8-flash-low"},
         connection=conn,
     )
 

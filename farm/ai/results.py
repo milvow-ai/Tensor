@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from farm.ai.completions import sync_directory
 from farm.capabilities.schemas import json_schema_errors
 from farm.executors.cli_agent.base import parse_json_or_none, run_cli_process
 from farm.settings import data_dir
@@ -61,12 +62,16 @@ class StoredResult:
 def store_result(job_id: UUID, text: str) -> StoredResult:
     """Write ``text`` unmodified to the job's result file (blocking: run it in a thread)."""
     path = result_file(job_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     payload = text.encode(_TEXT_ENCODING, errors=_TEXT_ERRORS)
     temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        temp.write_bytes(payload)
+        with open(os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temp, path)
+        sync_directory(path.parent)
     finally:
         temp.unlink(missing_ok=True)
     return StoredResult(path=path, chars=len(text), sha256=hashlib.sha256(payload).hexdigest())

@@ -52,7 +52,8 @@ if [[ -n "$(ls -A "$dest")" ]]; then
     echo "$dest is not empty" >&2
     exit 2
 fi
-tar --extract --file "$work/state.tar" -C "$dest"
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+python3 "$script_dir/extract-state.py" "$work/state.tar" "$dest"
 (cd "$dest" && sha256sum --quiet -c MANIFEST.sha256) || { echo "restored files do not match the manifest" >&2; exit 1; }
 files=$(wc -l <"$dest/MANIFEST.sha256")
 for expected in secrets.env registry.yaml ai tokens; do

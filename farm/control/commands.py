@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import UUID, uuid4
@@ -548,6 +549,8 @@ async def execute_provider_command(
             existing_provider = await cur.fetchone()
 
         if is_ai:
+            if os.environ.get("FARM_SHARED_INSTANCE") == "1":
+                return "rejected", {"error": "Native CLI accounts belong in a personal Farm instance"}
             driver = cmd.cli or provider_id
             account_id = cmd.account_id or cmd.connection_id or f"{provider_id}-01"
             label = cmd.label or account_id
@@ -617,7 +620,18 @@ async def execute_provider_command(
                         Jsonb(meta),
                     ),
                 )
-                # Ensure capability routes for ask_ai and agent_task
+                # Blank installations must be usable after adding their first CLI account.
+                # Existing operator configuration is retained, including disabled routes.
+                from farm.capabilities.schemas import AskAiIn, AskAiOut
+
+                await conn.execute(
+                    "insert into public.capabilities(name,kind,description,input_schema,output_schema,"
+                    "default_strategy,cache_ttl_seconds) values('ask_ai','ai',%s,%s,%s,'failover',0) "
+                    "on conflict(name) do nothing",
+                    ("Ask an AI worker to complete a task", Jsonb(AskAiIn.model_json_schema()),
+                     Jsonb(AskAiOut.model_json_schema())),
+                )
+                # Ensure capability routes for ask_ai and any configured agent_task.
                 for cap_name in ("ask_ai", "agent_task"):
                     cur_cap = await conn.execute(
                         "select name from public.capabilities where name = %s",
@@ -1666,7 +1680,7 @@ async def execute_command(
                 config = row[0] or {}
                 mcp_block = config.get("mcp") or {}
                 tools_spec = mcp_block.get("tools") or {}
-                allow_list = list(tools_spec.get("allow") or ["*"])
+                allow_list = list(tools_spec.get("allow", ["*"]))
                 deny_list = list(tools_spec.get("deny") or [])
 
                 before = {
@@ -1676,6 +1690,9 @@ async def execute_command(
 
                 if payload.enabled:
                     deny_list = [d for d in deny_list if d != payload.tool]
+                    if any(fnmatchcase(payload.tool, pattern) for pattern in deny_list):
+                        return "rejected", {"error": "A broader deny rule still blocks this tool; "
+                            "review the provider's tool policy before allowing it"}
                     if "*" not in allow_list and payload.tool not in allow_list:
                         allow_list.append(payload.tool)
                 else:

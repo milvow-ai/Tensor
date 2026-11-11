@@ -205,6 +205,24 @@ async def test_set_mcp_tool_access_command(pool: DbPool) -> None:
         assert "dangerous_action" not in deny_list
 
 
+async def test_allowing_one_tool_cannot_silently_override_a_broader_deny_rule(pool: DbPool) -> None:
+    async with pool.connection() as conn:
+        await conn.execute(
+            "insert into providers(id,name,kind,executor,config) values('policy','Policy','tool','mcp',%s)",
+            (Jsonb({"mcp": {"tools": {"allow": [], "deny": ["write_*", "write_one"]}}}),),
+        )
+        job = uuid4()
+        await conn.execute(
+            "insert into farm_commands(id,kind,payload,created_by) values(%s,'set_mcp_tool_access',%s,'local')",
+            (job, Jsonb({"provider_id": "policy", "tool": "write_one", "enabled": True})),
+        )
+    status, _ = await process_command(pool, job)
+    assert status == "rejected"
+    async with pool.connection() as conn:
+        row = await (await conn.execute("select config from providers where id='policy'")).fetchone()
+    assert row and row[0]["mcp"]["tools"] == {"allow": [], "deny": ["write_*", "write_one"]}
+
+
 @pytest.mark.asyncio
 async def test_sync_mcp_tools_command(pool: DbPool) -> None:
     # sync_mcp_tools with non-existent or empty provider

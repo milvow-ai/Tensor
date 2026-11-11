@@ -41,7 +41,7 @@ async def test_codex_success_answer_mode_jsonl(fake_harness: FakeCliHarness) -> 
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
-        params={"task": "implement algorithm", "mode": "answer"},
+        params={"task": "implement algorithm", "mode": "answer", "model": "o3"},
         connection=conn,
     )
 

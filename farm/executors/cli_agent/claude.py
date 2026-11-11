@@ -22,7 +22,7 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
         config_dir = meta.get("config_dir")
 
         task = req.params.get("task") or req.params.get("prompt", "")
-        # Only the request's explicit choice (farm.ai.selection resolved it): legacy meta defaults never apply.
+        # Explicit choice resolved by farm.ai.selection; legacy defaults never apply.
         model = req.params.get("model")
         effort = req.params.get("effort")
         mode = req.params.get("mode", "answer")

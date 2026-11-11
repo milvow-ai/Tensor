@@ -103,7 +103,7 @@ test.describe("C3 — Console Control & Deploy Acceptance Tests", () => {
     // Verify success toast and the post-save step: status plus the exact next command
     await expect(page.locator("[data-sonner-toast]", { hasText: 'MCP server "test-service" registered.' })).toBeVisible();
     await expect(dialog.getByRole("heading", { name: "Integration Added" })).toBeVisible();
-    await expect(dialog.getByText("Next Step on Farm PC:")).toBeVisible();
+    await expect(dialog.getByText("Run on your Farm worker")).toBeVisible();
     await expect(dialog.getByText("farm mcp sync")).toBeVisible();
 
     // Close the dialog: the new integration is on the page
@@ -220,7 +220,7 @@ test.describe("C3 — Console Control & Deploy Acceptance Tests", () => {
 
     const paths = [
       "/overview",
-      "/billing",
+      "/usage",
       "/routing",
       "/integrations",
       "/memory",
@@ -231,6 +231,7 @@ test.describe("C3 — Console Control & Deploy Acceptance Tests", () => {
 
     for (const path of paths) {
       await page.goto(path);
+      await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
       await settle(page);
       const errors = problems().filter(
         (p) =>

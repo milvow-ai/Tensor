@@ -579,7 +579,7 @@ async def test_usage_cost_and_whether_the_cost_is_estimated_are_recorded(aip: Ai
         ra, rb = await finish(client, [a["job_id"], b["job_id"]])
     assert (ra["tokens"], ra["usage"]["input_tokens"], ra["cost_usd"], ra["cost_estimated"]) == (150, 100.0, 0.0123, False)
     assert (rb["tokens"], rb["cost_usd"], rb["cost_estimated"]) == (10, 0.0, True)  # agy reports no cost
-    assert ra["model"] is None and ra["duration_s"] is not None and ra["run_id"] and rb["run_id"]
+    assert ra["model"] == "sonnet" and ra["duration_s"] is not None and ra["run_id"] and rb["run_id"]
 
 
 # --- the queue: one job per account, per-account and per-pool limits ----------------------------------------------
@@ -665,7 +665,7 @@ async def test_a_pool_cap_limits_the_jobs_of_all_its_accounts(aip_factory: Calla
     aip.harness.set_response(stdout=claude_ok("x"), delay_s=0.6)
     async with aip.client() as client:
         reply = await call(
-            client, "ai_start_many", jobs=[{"task": "a", "ai": "claude"}, {"task": "b", "ai": "claude"}]
+            client, "ai_start_many", jobs=[with_choice({"task": task, "ai": "claude"}) for task in ("a", "b")]
         )
         assert [j["account"] for j in reply["jobs"]] == ["claude-02", "claude-03"]  # two accounts ...
         await finish(client, [j["job_id"] for j in reply["jobs"]])
@@ -676,7 +676,7 @@ async def test_a_pool_cap_limits_the_jobs_of_all_its_accounts(aip_factory: Calla
 async def test_a_job_waits_for_an_account_that_a_blocking_call_holds_instead_of_failing(aip: Aip) -> None:
     aip.harness.set_response(stdout=claude_ok("shared"), delay_s=1.0)
     async with aip.client() as client:
-        blocking = asyncio.create_task(client.call_tool("ask_ai", {"ai": "claude", "task": "blocking"}))
+        blocking = asyncio.create_task(client.call_tool("ask_ai", with_choice({"ai": "claude", "task": "blocking"})))
         await eventually(lambda: aip.harness.events())  # the blocking call is running on claude-02
         started = await start(client, ai="claude", account="claude-02")
         (result,) = await finish(client, [started["job_id"]])
@@ -787,14 +787,14 @@ async def test_start_without_a_usable_account_is_refused_with_the_reason_and_the
                 (account, RESET_AT),
             )
     async with aip.client() as client:
-        refused = await call(client, "ai_start", task="t", ai="claude")
+        refused = await call(client, "ai_start", **with_choice({"task": "t", "ai": "claude"}))
         assert refused["ok"] is False
         error = refused["error"]
         assert error["kind"] == "account_unavailable" and error["ai"] == "claude"
         assert datetime.fromisoformat(error["retry_at"]) == RESET_AT
         assert "claude-02 (exhausted, back" in error["message"]
-        wrong_model = await call(client, "ai_start", task="t", ai="claude", model="gpt-9")
-        assert wrong_model["error"]["kind"] == "account_unavailable"
+        wrong_model = await call(client, "ai_start", task="t", ai="claude", model="gpt-9", effort="high")
+        assert wrong_model["error"]["kind"] == "invalid_selection"
     assert await fetch(aip.pool, "select count(*) from public.ai_jobs") == [(0,)]
 
 
@@ -803,7 +803,7 @@ async def test_a_batch_that_cannot_get_its_distinct_accounts_starts_nothing(aip:
         await conn.execute("update public.connections set status = 'needs_login' where id = 'claude-04'")
     async with aip.client() as client:
         refused = await call(
-            client, "ai_start_many", jobs=[{"task": f"job {i}", "ai": "claude"} for i in range(3)]
+            client, "ai_start_many", jobs=[with_choice({"task": f"job {i}", "ai": "claude"}) for i in range(3)]
         )
     assert refused["ok"] is False and refused["error"]["kind"] == "not_enough_accounts"
     assert "only 2 usable (claude-02, claude-03" in refused["error"]["message"]
@@ -1087,7 +1087,9 @@ async def test_a_dead_owners_jobs_fail_as_farm_restart_a_live_owners_do_not_and_
     await live.drain()
     row = await aip.job(str(orphan.job_id))
     assert (row["state"], row["error_kind"], row["result_path"]) == ("failed", "farm_restart", None)
-    assert not (Path(os.environ["FARM_DATA_DIR"]) / "ai-results" / f"{orphan.job_id}.txt").exists()
+    # A late answer must not overwrite the DB verdict, but remains available for reconciliation.
+    assert (Path(os.environ["FARM_DATA_DIR"]) / "ai-results" / f"{orphan.job_id}.txt").exists()
+    assert list((Path(os.environ["FARM_DATA_DIR"]) / "ai-completions").glob("*/*.conflict"))
     assert (await aip.job(str(healthy.job_id)))["state"] == "succeeded"
     assert await live.recover() == 0 and await dead.recover() == 0  # nothing left to sweep
 
@@ -1186,8 +1188,8 @@ async def test_the_ai_tools_are_listed_beside_the_capability_and_infra_tools(aip
 async def test_the_blocking_ask_tools_still_work_beside_the_job_tools(aip: Aip) -> None:
     aip.harness.set_response(stdout=claude_ok("blocking answer"))
     async with aip.client() as client:
-        single = await call(client, "ask_ai", ai="claude", task="t")
-        batch = await call(client, "ask_ai_batch", tasks=[{"ai": "claude", "task": "a"}, {"ai": "claude", "task": "b"}])
+        single = await call(client, "ask_ai", **with_choice({"ai": "claude", "task": "t"}))
+        batch = await call(client, "ask_ai_batch", tasks=[with_choice({"ai": "claude", "task": t}) for t in ("a", "b")])
     assert single["ok"] is True and single["result"]["text"] == "blocking answer"
     assert batch["ok"] is True and [t["result"]["text"] for t in batch["tasks"]] == ["blocking answer"] * 2
 
@@ -1483,6 +1485,27 @@ async def test_recovery_refuses_cancelled_succeeded_and_running_jobs(aip: Aip, s
         await manager.recover_job(parent.id, caller="test")
 
 
+async def test_adding_first_worker_to_blank_capability_table_can_execute_a_real_job(
+    aip_factory: Callable[..., Awaitable[Aip]], tmp_path: Path,
+) -> None:
+    from farm.control.commands import execute_provider_command
+
+    world = await aip_factory(claude=1, gemini=0)
+    async with world.pool.connection() as conn:
+        await conn.execute("delete from capability_routes where capability='ask_ai'")
+        await conn.execute("delete from capabilities where name='ask_ai'")
+    status, _ = await execute_provider_command(world.pool, "add_provider", {
+        "provider_id": "claude", "kind": "ai", "cli": "claude", "account_id": "claude-added",
+        "models": ["sonnet"], "status": "active",
+    }, registry_path=tmp_path / "registry.yaml")
+    assert status == "done"
+    world.harness.set_response(stdout=claude_ok("first worker works"))
+    async with world.client() as client:
+        job = await start(client, ai="claude", account="claude-added")
+        (result,) = await finish(client, [job["job_id"]])
+    assert result["ok"] is True and result["text"] == "first worker works"
+
+
 async def test_cross_provider_recovery_requires_operator_grant_and_records_actor(
     aip_factory: Callable[..., Awaitable[Aip]],
 ) -> None:
@@ -1494,7 +1517,8 @@ async def test_cross_provider_recovery_requires_operator_grant_and_records_actor
     assert denied.value.kind == "approval_required"
     child = await manager.recover_job(
         parent.id, caller="test", ai="codex", approve_provider_change=True,
-        approval_authorized=True, approval_actor="token:operator:ops",
+        approval_authorized=True, approval_actor="token:operator:ops", model="gpt-5", effort="high",
+        approve_model_change=True,
     )
     row = await manager.store.get(child.job_id)
     assert row is not None and row.ai == "codex" and row.recovery_approval_actor == "token:operator:ops"
@@ -1745,13 +1769,16 @@ def test_under_supabase_a_member_may_read_the_ai_tables_and_nobody_else_may_touc
     command.upgrade(alembic_config(url), "head")
     with psycopg.connect(url, autocommit=True) as conn:
         seed_console_users(conn)
+        owner = conn.execute("select id from public.users where auth_subject=%s", (MEMBER_SUB,)).fetchone()
+        assert owner is not None
         conv = conn.execute(
-            "insert into public.ai_conversations (ai, account) values ('claude', 'claude-02') returning id"
+            "insert into public.ai_conversations (ai, account, operator_user_id) "
+            "values ('claude', 'claude-02', %s) returning id", (owner[0],)
         ).fetchone()
         assert conv is not None
         conn.execute(
-            "insert into public.ai_jobs (conversation_id, turn, ai, account) values (%s, 1, 'claude', 'claude-02')",
-            (conv[0],),
+            "insert into public.ai_jobs (conversation_id, turn, ai, account, operator_user_id) "
+            "values (%s, 1, 'claude', 'claude-02', %s)", (conv[0], owner[0]),
         )
         _as(conn, "authenticated", "member@example.com", MEMBER_SUB)
         assert conn.execute("select count(*) from public.ai_jobs").fetchone() == (1,)

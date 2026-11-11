@@ -341,10 +341,16 @@ class McpExecutor:
         """Call ``params['tool']`` with ``params['arguments']`` and relay the server's answer untouched."""
         started = time.perf_counter()
         conn = req.connection
+        request_sent = False
+
+        def dispatched() -> None:
+            nonlocal request_sent
+            request_sent = True
 
         def failed(failure: McpFailure) -> ExecResult:
             return ExecResult(
                 ok=False,
+                request_sent=request_sent,
                 error_kind=failure.kind,
                 error=f"[{conn.id}] {failure.kind.value}: {failure.message}",
                 retry_after_s=failure.retry_after_s,
@@ -366,7 +372,8 @@ class McpExecutor:
             held = await self._acquire(conn)
             tap = held.begin_call()
             result = await relay.call_tool(
-                held.client, tool, arguments, timeout_s=timeout_s, meta=None if tap is None else tap.meta
+                held.client, tool, arguments, timeout_s=timeout_s, meta=None if tap is None else tap.meta,
+                on_dispatch=dispatched,
             )
         except Exception as exc:
             rejection = relay.rejecting_error(exc)

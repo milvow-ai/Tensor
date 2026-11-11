@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
+
 import { usePathname } from "next/navigation";
+
 import {
   Activity,
   Brain,
@@ -10,7 +12,7 @@ import {
   LayoutDashboard,
   PanelLeft,
   Settings,
-  ShieldCheck,
+  Users,
   Webhook,
   Wrench,
   X,
@@ -59,8 +61,8 @@ const SIDEBAR_SECTIONS: AppSidebarSection[] = [
     id: "manage",
     items: [
       { title: "Usage & Cost", href: "/usage", icon: Zap },
+      { title: "Team usage", href: "/team", icon: Users },
       { title: "Memory", href: "/memory", icon: Brain },
-      { title: "Approvals", href: "/approvals", icon: ShieldCheck },
     ],
   },
   {
@@ -78,6 +80,7 @@ function resolveActiveHref(pathname: string): string {
   if (pathname.startsWith("/pools/tools") || pathname.startsWith("/pools/")) return "/pools/tools";
   if (pathname.startsWith("/integrations")) return "/integrations";
   if (pathname.startsWith("/usage") || pathname.startsWith("/billing")) return "/usage";
+  if (pathname.startsWith("/team")) return "/team";
   if (pathname.startsWith("/memory")) return "/memory";
   if (pathname.startsWith("/approvals")) return "/approvals";
   if (pathname.startsWith("/settings") || pathname.startsWith("/policies") || pathname.startsWith("/routing")) {
@@ -86,12 +89,7 @@ function resolveActiveHref(pathname: string): string {
   return pathname;
 }
 
-export function MainShell({
-  user,
-  defaultCollapsed = false,
-  openAlertsCount = 0,
-  children,
-}: MainShellProps) {
+export function MainShell({ user, defaultCollapsed = false, openAlertsCount = 0, children }: MainShellProps) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -130,12 +128,7 @@ export function MainShell({
 
       {/* Mobile drawer backdrop and overlay */}
       {mobileOpen && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Navigation menu"
-          className="fixed inset-0 z-50 flex md:hidden"
-        >
+        <div role="dialog" aria-modal="true" aria-label="Navigation menu" className="fixed inset-0 z-50 flex md:hidden">
           <button
             type="button"
             className="fixed inset-0 bg-black/50 backdrop-blur-xs transition-opacity"
@@ -193,8 +186,12 @@ export function MainShell({
         </header>
 
         {/* Page content */}
-        {/* biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must be keyboard-focusable (axe scrollable-region-focusable) */}
-        <main tabIndex={0} aria-label="Page content" className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 md:p-6">
+        <main
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: this scrollable region must be keyboard-focusable
+          tabIndex={0}
+          aria-label="Page content"
+          className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 md:p-6"
+        >
           {children}
         </main>
       </div>

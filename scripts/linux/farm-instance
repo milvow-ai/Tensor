@@ -1,0 +1,51 @@
+#!/usr/bin/python3
+"""Run the Farm CLI under one managed profile's identity and environment (root admin entry point)."""
+
+import json
+import os
+import pwd
+import re
+import stat
+import sys
+from pathlib import Path
+
+
+def main() -> None:
+    if os.geteuid() != 0 or len(sys.argv) < 3 or not re.fullmatch(r"[a-z][a-z0-9-]{0,19}", sys.argv[1]):
+        raise ValueError("usage: sudo farm-instance PROFILE FARM_COMMAND [ARGS...]")
+    name = sys.argv[1]
+    settings = Path("/etc/harness-farm/instances") / name
+    for path in (settings, *settings.parents):
+        info = path.stat()
+        if path.is_symlink() or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError("managed settings must be root-controlled")
+    for path in (settings / "profile.json", settings / "runtime.env"):
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_nlink != 1 or info.st_mode & 0o022:
+            raise ValueError("invalid managed settings file")
+    profile = json.loads((settings / "profile.json").read_text())
+    if profile["name"] != name:
+        raise ValueError("profile identity mismatch")
+    account = pwd.getpwnam(f"hf-{name}")
+    if account.pw_uid == 0 or account.pw_dir != f"/var/lib/harness-farm-instances/{name}":
+        raise ValueError("invalid service identity")
+    env = {"USER": account.pw_name, "LOGNAME": account.pw_name}
+    allowed = {"HOME", "PATH", "LANG"}
+    for line in (settings / "runtime.env").read_text().splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or not (key in allowed or key.startswith("FARM_")) or key in env:
+            raise ValueError("invalid managed runtime environment")
+        env[key] = value
+    os.initgroups(account.pw_name, account.pw_gid)
+    os.setgid(account.pw_gid)
+    os.setuid(account.pw_uid)
+    os.chdir(account.pw_dir)
+    command = "/opt/harness-farm/.venv/bin/farm"
+    os.execve(command, [command, *sys.argv[2:]], env)
+
+
+try:
+    main()
+except Exception as exc:
+    print(f"Instance command refused ({type(exc).__name__}); check the managed profile.", file=sys.stderr)
+    sys.exit(2)

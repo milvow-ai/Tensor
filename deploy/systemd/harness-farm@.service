@@ -1,0 +1,35 @@
+[Unit]
+Description=Harness Farm private instance %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=60
+TimeoutStartSec=120
+User=hf-%i
+Group=hf-%i
+WorkingDirectory=/opt/harness-farm
+EnvironmentFile=/etc/harness-farm/instances/%i/runtime.env
+ExecStart=/opt/harness-farm/.venv/bin/farm run
+Restart=always
+RestartSec=10
+TimeoutStopSec=90
+UMask=0077
+MemoryHigh=1G
+MemoryMax=2G
+TasksMax=256
+OOMPolicy=stop
+KillMode=control-group
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/harness-farm-instances/%i
+LimitNOFILE=16384
+
+[Install]
+WantedBy=multi-user.target

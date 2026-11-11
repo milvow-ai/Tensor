@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import hashlib
 import hmac
+import os
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -159,6 +160,8 @@ class LoginService:
         self, tenant_id: UUID, connection_id: str, actor: str, method: str | None = None
     ) -> UUID:
         """Start signing ``connection_id`` in; returns the session id (the running one if there is one)."""
+        if os.environ.get("FARM_SHARED_INSTANCE") == "1":
+            raise LoginError("Sign CLI accounts into a personal Farm; the shared gateway is for shared tools")
         if method is not None and method not in METHODS:
             raise LoginError(f"unknown sign-in method '{method}'")
         with use_tenant(tenant_id):
@@ -362,6 +365,7 @@ class LoginService:
             return
         account_hash = self._account_hash(run.tenant_id, run.provider_id, identity.provider_account_id)
         shown = _identity_json(identity, account_hash)
+        shown["verified_at"] = self._clock().isoformat()
         twin = await self._twin(run, account_hash)
         if twin is not None:
             await self._finish(
@@ -538,6 +542,9 @@ class LoginService:
 def _identity_json(identity: Identity, account_hash: str) -> dict[str, Any]:
     return {
         "account_hash": account_hash,
+        "email": identity.email or None,
+        "display_name": identity.display_name,
+        "source": "provider_login",
         "email_masked": identity.masked_email() if identity.email else None,
         "plan": identity.plan,
         "org": identity.org,

@@ -74,7 +74,7 @@ test("Add your first MCP server enqueues add_provider and the integration appear
 
   await expect(toast(page, 'MCP server "fake-probe" registered.')).toBeVisible();
   await expect(dialog.getByRole("heading", { name: "Integration Added" })).toBeVisible();
-  await expect(dialog.getByText("Next Step on Farm PC:")).toBeVisible();
+  await expect(dialog.getByText("Run on your Farm worker")).toBeVisible();
   await expect(dialog.getByText("farm mcp sync")).toBeVisible();
   await dialog.getByRole("button", { name: "Done" }).click();
 
@@ -101,6 +101,7 @@ test("Add AI account opens its sign-in card and the account needs a login", asyn
   await expect(dialog.getByRole("heading", { name: "Add AI CLI Account" })).toBeVisible();
   await dialog.locator("#ai-acc-id").fill("claude-02");
   await dialog.locator("#ai-label").fill("Claude (second login)");
+  await dialog.locator("#ai-models").fill("sonnet");
 
   const enqueued = page.waitForRequest(
     (request) => request.method() === "POST" && (request.postData() ?? "").includes("add_provider"),

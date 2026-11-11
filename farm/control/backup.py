@@ -7,15 +7,20 @@ Pure check function validates that the latest backup is less than 26 hours old.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
+import psycopg
 import structlog
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
@@ -31,6 +36,40 @@ log = structlog.get_logger(__name__)
 BACKUP_PREFIX = "farm_backup_"
 BACKUP_SUFFIX = ".dump"
 BACKUP_TIMESTAMP_FMT = "%Y%m%d_%H%M%S"
+
+
+def check_state_backup(backup_directory: Path, *, require_offsite: bool = True) -> CheckResult:
+    """An archive/delivery failure cannot be hidden by a fresh intermediate pg_dump."""
+    from farm.control.doctor import CheckResult
+
+    try:
+        path = backup_directory / "state-success.json"
+        if path.is_symlink() or path.stat().st_size > 4096:
+            raise ValueError("invalid backup receipt")
+        value = json.loads(path.read_text(encoding="utf-8"))
+        attempt = backup_directory / "state-attempt.json"
+        if attempt.exists():
+            if attempt.is_symlink() or attempt.stat().st_size > 4096:
+                raise ValueError("invalid backup attempt receipt")
+            last_attempt = json.loads(attempt.read_text(encoding="utf-8"))
+            if not isinstance(last_attempt, dict) or last_attempt.get("success") is not True:
+                raise ValueError("latest backup attempt failed")
+        completed = datetime.fromisoformat(value["completed_at"])
+        age = (datetime.now(UTC) - completed).total_seconds()
+        if age < -300 or age >= 26 * 3600 or value.get("database_included") is not True:
+            raise ValueError("stale or incomplete backup")
+        if require_offsite and value.get("offsite") is not True:
+            raise ValueError("no offsite receipt")
+    except (OSError, ValueError, TypeError, KeyError):
+        return CheckResult(
+            name="encrypted_state_backup", status="WARN",
+            detail="No recent complete encrypted database/state backup with required delivery",
+            fix_hint="Inspect the backup timer and off-host delivery; run an isolated restore drill",
+        )
+    return CheckResult(
+        name="encrypted_state_backup", status="PASS",
+        detail=f"Complete encrypted backup/delivery succeeded {max(0, age) / 3600:.1f}h ago",
+    )
 
 
 @dataclass
@@ -63,6 +102,35 @@ def split_password(url: str) -> tuple[str, str | None]:
     return make_conninfo("", **params), None if password is None else str(password)
 
 
+def restore_public_dump(archive: Path, db_url: str, *, executable: str | Path = "pg_restore") -> None:
+    """Restore into an initialized public schema without dropping it or replacing existing Farm data."""
+    with psycopg.connect(db_url, connect_timeout=5) as conn:
+        present = conn.execute("select to_regclass('public.farm_settings') is not null").fetchone()
+        if present is None or present[0]:
+            raise ValueError("The restore database must be empty of Farm tables")
+    dsn, password = split_password(db_url)
+    env = os.environ.copy()
+    env.pop("PGPASSWORD", None)
+    if password is not None:
+        env["PGPASSWORD"] = password
+    entries = subprocess.run(
+        [str(executable), "--list", str(archive)], capture_output=True, check=True, timeout=60,
+    ).stdout
+    # A scoped pg_dump emits CREATE SCHEMA public even though the target already has that schema.
+    with tempfile.TemporaryDirectory(prefix="farm-restore-") as directory:
+        toc = Path(directory) / "toc.list"
+        create_public = re.compile(rb"\d+;\s+\d+\s+\d+\s+SCHEMA - public ")
+        selected_entries = [line for line in entries.splitlines() if not create_public.match(line)]
+        toc.write_bytes(b"\n".join(selected_entries) + b"\n")
+        restored = subprocess.run(
+            [str(executable), "--exit-on-error", "--single-transaction", "--no-owner", "--schema=public",
+             "--use-list", str(toc), "--dbname", dsn, str(archive)],
+            env=env, capture_output=True, text=True, timeout=600,
+        )
+        if restored.returncode:
+            raise RuntimeError("PostgreSQL rejected the restore. Check target roles, schema and server logs.")
+
+
 def find_pg_dump(db_url: str | None = None, force_local: bool = False) -> Path:
     """Locate the pg_dump executable.
 
@@ -70,7 +138,9 @@ def find_pg_dump(db_url: str | None = None, force_local: bool = False) -> Path:
     For remote URLs, requires pg_dump to be present on the system PATH.
     """
     url = db_url or get_db_url(force_local=force_local)
-    local = force_local or (is_local_url(url) if db_url else is_local_db())
+    local = os.environ.get("FARM_REQUIRE_EXTERNAL_DB") != "1" and (
+        force_local or (is_local_url(url) if db_url else is_local_db())
+    )
 
     if local:
         try:
@@ -112,7 +182,7 @@ def rotate_backups(
     removed: list[Path] = []
 
     for item in b_dir.iterdir():
-        if not item.is_file() or not item.name.startswith(BACKUP_PREFIX):
+        if not (item.is_file() and item.name.startswith(BACKUP_PREFIX) and item.name.endswith(BACKUP_SUFFIX)):
             continue
         try:
             mtime = datetime.fromtimestamp(item.stat().st_mtime, tz=UTC)
@@ -132,7 +202,7 @@ def get_last_backup_info(backup_directory: Path | None = None) -> BackupInfo | N
     candidates: list[tuple[datetime, Path, int]] = []
 
     for item in b_dir.iterdir():
-        if not item.is_file() or not item.name.startswith(BACKUP_PREFIX):
+        if not (item.is_file() and item.name.startswith(BACKUP_PREFIX) and item.name.endswith(BACKUP_SUFFIX)):
             continue
         try:
             st = item.stat()
@@ -163,6 +233,8 @@ def create_backup(
     backup_directory: Path | None = None,
     force_local: bool = False,
     timeout_s: float = 300.0,
+    *,
+    schema: str | None = None,
 ) -> Path:
     """Create a pg_dump backup and enforce 14-day retention rotation.
 
@@ -173,7 +245,8 @@ def create_backup(
 
     b_dir = _backups_dir(backup_directory)
     timestamp = datetime.now(UTC).strftime(BACKUP_TIMESTAMP_FMT)
-    target_file = b_dir / f"{BACKUP_PREFIX}{timestamp}{BACKUP_SUFFIX}"
+    target_file = b_dir / f"{BACKUP_PREFIX}{timestamp}_{uuid4().hex[:8]}{BACKUP_SUFFIX}"
+    partial_file = target_file.with_suffix(".part")
 
     # pg_dump --dbname <connection without its password> -F c -f <target_file>; the password travels in
     # PGPASSWORD, never on the command line (every user of a server can read each process's arguments).
@@ -181,7 +254,9 @@ def create_backup(
     dbname, password = split_password(resolved_url)
     if password is not None:
         env["PGPASSWORD"] = password
-    cmd = [str(pg_dump_bin), "--dbname", dbname, "-F", "c", "-f", str(target_file)]
+    cmd = [str(pg_dump_bin), "--dbname", dbname, "-F", "c", "-f", str(partial_file)]
+    if schema is not None:
+        cmd.append(f"--schema={schema}")
 
     log.info("backup.started", target=str(target_file))
     try:
@@ -195,19 +270,33 @@ def create_backup(
         )
         if res.returncode != 0:
             err = redact(res.stderr.strip() or f"pg_dump exited with code {res.returncode}")
-            if target_file.is_file():
+            if partial_file.is_file():
                 try:
-                    target_file.unlink()
+                    partial_file.unlink()
                 except OSError:
                     pass
             raise RuntimeError(f"Database backup failed: {err}")
     except subprocess.TimeoutExpired:
-        if target_file.is_file():
+        if partial_file.is_file():
             try:
-                target_file.unlink()
+                partial_file.unlink()
             except OSError:
                 pass
         raise TimeoutError(f"Database backup timed out after {timeout_s}s") from None
+
+    if partial_file.stat().st_size == 0:
+        partial_file.unlink()
+        raise RuntimeError("Database backup is empty")
+    partial_file.chmod(0o600)
+    with partial_file.open("r+b") as stream:
+        os.fsync(stream.fileno())
+    os.replace(partial_file, target_file)
+    if os.name == "posix":
+        directory = os.open(b_dir, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
     # Rotate old backups
     rotate_backups(backup_directory=b_dir, max_age_days=14)

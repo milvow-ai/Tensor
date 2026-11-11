@@ -28,7 +28,7 @@ Server workers operate on server workspaces. A remote `cwd=D:/project` cannot ac
 
 Use three personal instances and one shared team instance on the same VPS. They reuse one read-only code installation, but each has a separate Linux service identity, PostgreSQL database and database role, state/home directory, secrets file, registry, CLI profiles, workspaces and loopback port. This is the chosen first-release boundary because today's process-wide settings, provider IDs and credential storage cannot safely represent private per-person resources inside one shared process.
 
-Each IDE connects to its person's Farm. Each personal Farm may register the team Farm as an upstream HTTP MCP, using a distinct membership-bound token and namespace. Only explicitly shared accounts live in the team Farm. The team Farm never connects back to the personal Farms. Do not copy personal logins into team pools without an explicit owner grant.
+Each IDE connects to its person's Farm. Each personal Farm may register the team Farm as an upstream HTTP MCP, using a distinct membership-bound token and namespace. The shared instance supports explicitly shared external MCP/API resources. Native CLI pools and project memory remain in personal instances: a shared CLI's Linux identity could read other sessions/files. The team Farm never connects back to the personal Farms.
 
 Central administrative usage reporting must use a bounded, read-only reporting interface that returns counters and freshness, not personal prompts, results, credentials or inference tokens. Provisioning, reporting and project-memory APIs must be implemented and tested before this architecture is called ready.
 

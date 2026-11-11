@@ -27,6 +27,9 @@ from tests.farm_helpers import EMAIL, fetch, only_reoon_01
 type Make = Callable[..., Awaitable[FarmContext]]
 
 AI_JOB_TOOLS = {
+    "ai_attention",
+    "ai_options",
+    "ai_recover",
     "ai_cancel",
     "ai_conversations",
     "ai_reply",
@@ -70,6 +73,7 @@ async def test_claude_calls_verify_email_gets_the_envelope_reads_the_trajectory_
             "ask_ai",
             "ask_ai_batch",
             "list_ais",
+            "search_tools", "describe_tool", "call_tool", "list_server_tools",
             *AI_JOB_TOOLS,
             *INFRA_TOOLS,
         }  # no admin tool
@@ -82,7 +86,8 @@ async def test_claude_calls_verify_email_gets_the_envelope_reads_the_trajectory_
 
         envelope = reply.structured_content
         assert envelope is not None
-        assert set(envelope) == {"ok", "result", "error", "run_id", "source", "cost"}
+        assert set(envelope) == {"ok", "result", "error", "run_id", "source", "cost", "partial_result"}
+        assert envelope["partial_result"] is None
         assert envelope["ok"] is True and envelope["error"] is None
         assert envelope["result"]["email"] == EMAIL and envelope["result"]["status"] == "valid"
         assert envelope["result"]["provider"] == "reoon"

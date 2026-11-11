@@ -5,7 +5,6 @@ No network. Uses fake stdio MCP server and simulated CLI connections.
 
 from __future__ import annotations
 
-import shutil
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -42,7 +41,7 @@ REGISTRY_PATH = Path(__file__).parent.parent / "config" / "registry.yaml"
 def owner_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A throw-away copy of the owner's blank registry file: the self-serve commands rewrite it."""
     path = tmp_path / "registry.yaml"
-    shutil.copyfile(REGISTRY_PATH, path)
+    path.write_text('settings:\n  owner_email: owner@example.com\nproviders: {}\ncapabilities: {}\n')
     monkeypatch.setenv("FARM_REGISTRY_PATH", str(path))
     return path
 
@@ -59,10 +58,10 @@ def _make_context(pool: DbPool) -> FarmContext:
     )
 
 
-async def test_accept_open2_blank_registry_start(pool: DbPool) -> None:
+async def test_accept_open2_blank_registry_start(pool: DbPool, owner_registry: Path) -> None:
     """Blank registry -> migrate + sync -> 0 providers; gateway lists infra + AI tools only; ask_ai exists."""
     # 1. Load the owner's blank registry file
-    reg = load_registry(REGISTRY_PATH)
+    reg = load_registry(owner_registry)
     assert len(reg.providers) == 0, f"Expected 0 providers in blank registry, got {len(reg.providers)}"
 
     # 2. Sync to test database
@@ -76,8 +75,9 @@ async def test_accept_open2_blank_registry_start(pool: DbPool) -> None:
         cur_conn = await conn.execute("select count(*) from public.connections")
         assert (await cur_conn.fetchone())[0] == 0
 
-        cur_cap = await conn.execute("select name from public.capabilities where name = 'ask_ai'")
-        assert await cur_cap.fetchone() is not None
+        # The MCP AI tools are always available; adding the first worker creates its executable route.
+        cur_cap = await conn.execute("select count(*) from public.capabilities")
+        assert await cur_cap.fetchone() == (0,)
 
     # 4. Gateway lists infra + AI job tools only, no provider tools
     ctx = _make_context(pool)
@@ -174,7 +174,7 @@ async def test_accept_open2_add_provider_stdio_fake_mcp_dynamic_echo(pool: DbPoo
             # Verify registry contains the provider
             owner_reg = load_registry(owner_registry)
             assert "fake-probe" in owner_reg.providers
-            assert set(owner_reg.capabilities) == {"ask_ai", "agent_task"}  # the owner's own are kept
+            assert set(owner_reg.capabilities) == set(reg.capabilities)  # the original capabilities are kept
 
             # 6. Clean up with remove_provider
             rm_cmd_id = uuid4()

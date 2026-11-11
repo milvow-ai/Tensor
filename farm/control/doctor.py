@@ -489,7 +489,7 @@ async def run_doctor(
     bifrost_url: str | None = None,
 ) -> list[CheckResult]:
     """Execute all doctor checks and return the list of CheckResults."""
-    from farm.control.backup import check_last_backup
+    from farm.control.backup import check_last_backup, check_state_backup
     from farm.control.heartbeat import check_heartbeat
     from farm.control.keepawake import check_keepawake
 
@@ -544,6 +544,11 @@ async def run_doctor(
 
     # 10. Last backup age (< 26 h)
     results.append(check_last_backup(backup_directory=data_dir / "backups"))
+    results.append(check_completion_evidence(data_dir))
+    if os.environ.get("FARM_EXPECT_STATE_BACKUP") == "1":
+        results.append(check_state_backup(
+            data_dir / "backups", require_offsite=os.environ.get("FARM_EXPECT_OFFSITE_BACKUP") == "1"
+        ))
 
     # 11. Keep-awake active
     results.append(check_keepawake(data_directory=data_dir))
@@ -565,6 +570,17 @@ def format_doctor_report(results: list[CheckResult]) -> str:
     fail_cnt = sum(1 for r in results if r.status == "FAIL")
     lines.append(f"\nResult: {pass_cnt} passed, {warn_cnt} warnings, {fail_cnt} failed")
     return "\n".join(lines)
+
+
+def check_completion_evidence(data_directory: Path) -> CheckResult:
+    base = data_directory / "ai-completions"
+    quarantined = any(base.glob("*/*.invalid")) or any(base.glob("*/*.conflict"))
+    pending = any(base.glob("*/*.json"))
+    return CheckResult(
+        name="completion_evidence", status="WARN" if quarantined or pending else "PASS",
+        detail=("Terminal completion evidence needs database/manual reconciliation; do not replay workers"
+            if quarantined or pending else "No pending or quarantined terminal completions"),
+    )
 
 
 def doctor_exit_code(results: list[CheckResult]) -> int:

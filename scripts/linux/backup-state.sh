@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Encrypted snapshot of the server's own state (harness-farm-backup.timer, daily; update.sh before an update):
 # the CLI logins (ai/), the MCP OAuth token stores (tokens/), the secrets file, the registry, Hermes and Bifrost
-# config and AI job results. The database is on Supabase (`farm db backup` dumps it before a migration);
+# config, AI job results and a fresh PostgreSQL dump in the same encrypted archive;
 # binaries, caches, logs and workspaces are left out (install-server.sh reinstalls the binaries).
 #
 # The archive is encrypted with age to the public keys in FARM_BACKUP_RECIPIENTS: the server can write a backup
@@ -14,17 +14,31 @@ BACKUP_DIR="${FARM_BACKUP_DIR:-/var/backups/harness-farm}"
 RECIPIENTS="${FARM_BACKUP_RECIPIENTS:-/etc/harness-farm/backup-recipients.txt}"
 KEEP_DAYS="${FARM_BACKUP_KEEP_DAYS:-14}"
 AGE="${AGE_BIN:-age}"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+FARM_PYTHON="${FARM_PYTHON:-/opt/harness-farm/.venv/bin/python}"
+work=""
+cleanup() {
+    local rc=$?
+    trap - EXIT
+    if [[ $rc -ne 0 ]]; then
+        python3 "$SCRIPT_DIR/backup-status.py" failed >/dev/null 2>&1 || true
+    fi
+    [[ -z "$work" ]] || rm -rf -- "$work"
+    exit "$rc"
+}
+trap cleanup EXIT
 
 [[ -s "$RECIPIENTS" ]] || { echo "no age recipients in $RECIPIENTS (docs/RUNBOOK-SERVER.md, Backups)" >&2; exit 2; }
 [[ -d "$FARM_DATA_DIR" ]] || { echo "no state directory $FARM_DATA_DIR" >&2; exit 2; }
 command -v "$AGE" >/dev/null || { echo "age is not installed (apt install age)" >&2; exit 2; }
 umask 077
 mkdir -p "$BACKUP_DIR"
+exec 9>"$BACKUP_DIR/.backup.lock"
+flock -n 9 || { echo "another state backup is running" >&2; exit 2; }
 
-stamp=$(date -u +%Y%m%dT%H%M%SZ)
+stamp=$(date -u +%Y%m%dT%H%M%S%NZ)
 out="$BACKUP_DIR/farm-state-$stamp.tar.gz.age"
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
 
 excludes=(
     --exclude=./logs --exclude=./workspaces --exclude=./backups --exclude=./heartbeats --exclude=./watchdog
@@ -39,9 +53,15 @@ if [[ $rc -gt 1 ]]; then
     exit 1
 fi
 
+# A fresh database dump travels inside the same encrypted archive. A failure aborts the backup.
+if [[ "${FARM_BACKUP_DATABASE:-1}" == "1" ]]; then
+    "$FARM_PYTHON" "$SCRIPT_DIR/backup-database.py" "$work/database"
+    tar --append --file "$work/state.tar" -C "$work" database
+fi
+
 # The manifest is computed from the archive itself, so it matches what a restore gets back.
 mkdir "$work/tree"
-tar --extract --file "$work/state.tar" -C "$work/tree"
+python3 "$SCRIPT_DIR/extract-state.py" "$work/state.tar" "$work/tree"
 (cd "$work/tree" && find . -type f -print0 | sort -z | xargs -0 -r sha256sum) >"$work/MANIFEST.sha256"
 tar --append --file "$work/state.tar" -C "$work" MANIFEST.sha256
 files=$(wc -l <"$work/MANIFEST.sha256")
@@ -50,5 +70,12 @@ gzip -c "$work/state.tar" | "$AGE" --encrypt --recipients-file "$RECIPIENTS" --o
 mv "$out.part" "$out"
 (cd "$BACKUP_DIR" && sha256sum "$(basename "$out")" >"$(basename "$out").sha256")
 
+# Optional off-host delivery. Configure a restricted rclone remote; no remote deletion is performed.
+if [[ -n "${FARM_BACKUP_REMOTE:-}" ]]; then
+    timeout --kill-after=5s 120s rclone copyto --immutable "$out" "${FARM_BACKUP_REMOTE%/}/$(basename "$out")"
+    timeout --kill-after=5s 120s rclone copyto --immutable "$out.sha256" "${FARM_BACKUP_REMOTE%/}/$(basename "$out").sha256"
+fi
+
+python3 "$SCRIPT_DIR/backup-status.py" success "$out"
 find "$BACKUP_DIR" -maxdepth 1 -name 'farm-state-*.tar.gz.age*' -mtime +"$KEEP_DAYS" -delete
 echo "state backup $out ($files files, $(du -h "$out" | cut -f1))"

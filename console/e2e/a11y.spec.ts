@@ -11,6 +11,9 @@ const PAGES = [
   { name: "pool-claude", path: "/pools/ai/claude" },
   { name: "billing", path: "/billing" },
   { name: "login", path: "/login" },
+  { name: "tasks", path: "/tasks" },
+  { name: "memory", path: "/memory" },
+  { name: "team", path: "/team" },
 ];
 
 async function useTheme(page: Page, theme: "light" | "dark") {

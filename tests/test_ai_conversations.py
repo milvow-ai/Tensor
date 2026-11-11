@@ -161,7 +161,7 @@ async def test_a_conversation_whose_first_turn_failed_has_no_session_to_reply_to
 ) -> None:
     aip.harness.set_response(per_account={"claude-02": CRASH})
     async with aip.client() as client:
-        first = await start(client, ai="claude", account="claude-02")
+        first = await start(client, ai="claude", account="claude-02", retry_other_account=False)
         (failed,) = await finish(client, [first["job_id"]])
         assert failed["ok"] is False and failed["error"]["kind"] == "crash"
         (thread,) = await conversations(client)
@@ -208,12 +208,8 @@ async def test_unknown_conversations_are_not_found_and_the_ai_and_account_cannot
         other_account = await call(
             client, "ai_start", task="t", conversation_id=first["conversation_id"], account="claude-03"
         )
-        retry = await call(
-            client, "ai_start", task="t", conversation_id=first["conversation_id"], retry_other_account=True
-        )
     assert other_ai["error"]["kind"] == "bad_request" and "is a claude conversation, not gemini" in other_ai["error"]["message"]
     assert other_account["error"]["kind"] == "bad_request" and "lives on account 'claude-02'" in other_account["error"]["message"]
-    assert retry["error"]["kind"] == "bad_request" and "first turns only" in retry["error"]["message"]
     assert await fetch(aip.pool, "select count(*) from public.ai_jobs") == [(1,)]
 
 
@@ -226,7 +222,7 @@ async def test_a_conversation_never_moves_to_another_account_it_waits_for_the_on
     wrong = {"stdout": claude_ok("WRONG ACCOUNT", session="sess-B")}
     aip.harness.set_response(per_account={"claude-02": {"stdout": claude_ok("one", session="sess-A")}, "claude-03": wrong})
     async with aip.client() as client:
-        first = await start(client, ai="claude")
+        first = await start(client, ai="claude", retry_other_account=False)
         await finish(client, [first["job_id"]])
 
         # 1. the account reaches its usage limit during the reply: the reply fails, with the time it is back
@@ -274,7 +270,7 @@ async def test_a_reply_to_a_logged_out_account_is_refused_with_no_time_to_wait_f
 async def test_a_logout_during_a_reply_asks_for_the_login_command(aip: Aip) -> None:
     aip.harness.set_response(stdout=claude_ok("one", session="sess-A"))
     async with aip.client() as client:
-        first = await start(client, ai="claude")
+        first = await start(client, ai="claude", retry_other_account=False)
         await finish(client, [first["job_id"]])
         aip.harness.set_response(stdout=json.dumps({"result": "Not logged in", "is_error": True}), exit_code=1)
         reply = await call(client, "ai_reply", conversation_id=first["conversation_id"], message="two")
@@ -291,7 +287,7 @@ async def test_a_failed_turn_adds_no_turn_and_the_totals_add_up(aip: Aip) -> Non
     ok = {"stdout": claude_ok("fine", session="sess-A", cost=0.01, usage=(10, 5))}
     aip.harness.set_response(per_account={"claude-02": ok})
     async with aip.client() as client:
-        first = await start(client, ai="claude")
+        first = await start(client, ai="claude", retry_other_account=False)
         await finish(client, [first["job_id"]])
         aip.harness.set_response(per_account={"claude-02": CRASH})
         broken = await call(client, "ai_reply", conversation_id=first["conversation_id"], message="two")

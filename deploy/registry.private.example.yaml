@@ -1,0 +1,7 @@
+# Make a separate copy for each instance and set that console owner's email.
+settings:
+  owner_email: owner@example.com
+providers: {}
+capabilities: {}
+budgets:
+  global_monthly_usd: 0

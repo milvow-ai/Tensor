@@ -300,11 +300,21 @@ def test_every_unit_starts_a_file_of_this_repo_and_every_timer_names_its_unit() 
         assert _starts_something_real(start), f"{unit.name}: {start}"
     for timer in sorted(UNITS.glob("*.timer")):
         target = _unit(timer.name)["Timer"]["Unit"][0]
-        assert (UNITS / target).is_file(), f"{timer.name}: {target}"
+        assert (UNITS / target.replace("%i", "")).is_file(), f"{timer.name}: {target}"
     watchdog = (LINUX / "farm-watchdog.sh").read_text(encoding="utf-8")
     for unit_name in re.findall(r'_UNIT="\$\{[A-Z_]+_UNIT:-([a-z-]+)\}"', watchdog):
         assert (UNITS / f"{unit_name}.service").is_file(), unit_name
     assert "runuser -u" in watchdog  # the alert is sent as the Farm's user, never as root
+
+
+def test_privileged_watchdog_never_uses_worker_executables_or_worker_owned_state() -> None:
+    unit = _unit("harness-farm-watchdog.service")["Service"]
+    assert unit["StateDirectory"] == ["harness-farm-watchdog"]
+    wrapper = (LINUX / "watchdog-service.sh").read_text()
+    assert "export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" in wrapper
+    assert "WATCHDOG_STATE_DIR=/var/lib/harness-farm-watchdog" in wrapper
+    assert "WATCHDOG_LOG_FILE=/var/lib/harness-farm-watchdog/watchdog.log" in wrapper
+    assert ".local/bin" not in wrapper
 
 
 def test_the_settings_file_has_no_secrets_and_keeps_the_farm_on_loopback() -> None:
@@ -337,7 +347,9 @@ def test_the_server_files_are_lf_and_the_scripts_executable_in_git() -> None:
     for row in _git("ls-files", "-s", "--", "scripts/linux").splitlines():  # "<mode> <sha> <stage>\t<path>"
         info, _, path = row.partition("\t")
         modes[path] = info.split()[0]
-    scripts = [path for path in modes if path.endswith(".sh") or path == "scripts/linux/farm"]
+    scripts = [path for path in modes if path.endswith(".sh") or path in {
+        "scripts/linux/farm", "scripts/linux/farm-instance",
+    }]
     assert scripts and all(modes[path] == "100755" for path in scripts), modes
 
 
@@ -443,6 +455,7 @@ def test_on_a_server_codex_logs_in_with_a_device_code_and_agy_without_a_session_
     launched: list[tuple[list[str], dict[str, str]]] = []
     monkeypatch.setattr("subprocess.run", lambda argv, **kw: launched.append((argv, kw["env"])))
     monkeypatch.setattr("farm.control.cli._headless", lambda: True)
+    monkeypatch.setattr("farm.control.cli._resolve_cli", lambda argv: argv)
 
     outputs = [CliRunner().invoke(cli_app, ["ai", "login", conn_id]) for conn_id in ("codex-01", "agy-02")]
     assert [o.exit_code for o in outputs] == [0, 0], [o.output for o in outputs]
@@ -594,6 +607,7 @@ def test_a_state_backup_restores_byte_for_byte_and_leaves_caches_out(tmp_path: P
         "FARM_DATA_DIR": str(data),
         "FARM_BACKUP_DIR": str(backups),
         "FARM_BACKUP_RECIPIENTS": str(tmp_path / "recipients.txt"),
+        "FARM_BACKUP_DATABASE": "0",  # this test exercises state transfer; DB restore is tested separately
     }
 
     made = subprocess.run(["bash", str(LINUX / "backup-state.sh")], env=env, capture_output=True, text=True, timeout=60)

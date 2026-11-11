@@ -51,7 +51,6 @@ from farm.control.heartbeat import HeartbeatWriter
 from farm.control.keepawake import disable_keepawake, enable_keepawake
 from farm.db.pool import DbPool, get_db_url, system_connection, tenant_connection
 from farm.executors.mcp.client import McpExecutor
-from farm.gateway.ai_tools import register_ai_tools
 from farm.gateway.middleware import (
     IDENTITY_SCOPE_KEY,
     AuthMiddleware,
@@ -143,11 +142,13 @@ async def create_token(
     if not client_name.strip():
         raise ValueError("client name must not be empty")
     if not scopes or any(
-        scope not in {"*", "mcp", "ai:recovery:approve"}
+        scope not in {"*", "mcp", "ai:recovery:approve", "reports:usage"}
         and re.fullmatch(r"tool:[A-Za-z0-9_.:-]+", scope) is None
         for scope in scopes
     ):
-        raise ValueError("scopes must contain *, mcp, ai:recovery:approve or tool:<exact tool name>")
+        raise ValueError(
+            "scopes must be *, mcp, ai:recovery:approve, reports:usage or tool:<exact tool name>"
+        )
     tenant_id = require_tenant()
     raw_token = f"{TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
     # Hold the membership lock until insertion: removal must revoke this token too.
@@ -344,6 +345,40 @@ class FarmAuthMiddleware:
             await unauth_resp(scope, receive, send)
             return
 
+        if path.rstrip("/") == "/reports/usage":
+            if scope.get("method") != "GET":
+                await JSONResponse({"error": "get_required"}, status_code=405)(scope, receive, send)
+                return
+            if os.environ.get("FARM_REPORTING_ENABLED") != "1":
+                await JSONResponse({"error": "reporting_disabled"}, status_code=404)(scope, receive, send)
+                return
+            if "reports:usage" not in identity.scopes:
+                await JSONResponse({"error": "reporting_scope_required"}, status_code=403)(
+                    scope, receive, send
+                )
+                return
+            from datetime import UTC, datetime
+
+            from farm.manager.team_usage import snapshot
+
+            try:
+                with use_tenant(identity.tenant_id, identity.user_id):
+                    async with asyncio.timeout(5):
+                        report = await snapshot(
+                            self.pool, datetime.now(UTC), os.environ.get("FARM_INSTANCE_ID", "farm")
+                        )
+                await JSONResponse(report, headers={"Cache-Control": "private, no-store"})(
+                    scope, receive, send
+                )
+            except Exception as exc:
+                log.warning("reporting.unavailable", error=type(exc).__name__)
+                await JSONResponse({"error": "reporting_unavailable"}, status_code=503)(scope, receive, send)
+            return
+
+        if all(s == "reports:usage" for s in identity.scopes):
+            await JSONResponse({"error": "reporting_only_token"}, status_code=403)(scope, receive, send)
+            return
+
         if path.rstrip("/") == "/ready":
             checks: dict[str, bool] = {"runtime": False}
             if self.readiness is not None:
@@ -359,6 +394,9 @@ class FarmAuthMiddleware:
             )(scope, receive, send)
             return
 
+        if os.environ.get("FARM_SHARED_INSTANCE") == "1" and identity.user_id is None:
+            await JSONResponse({"error": "user_bound_token_required"}, status_code=403)(scope, receive, send)
+            return
         scope[IDENTITY_SCOPE_KEY] = identity  # read per MCP request by TenantMiddleware
         tok = authenticated_client_name.set(identity.name)
         try:
@@ -405,7 +443,7 @@ async def create_farm_app(
     endpoint_path = path or http_path()
     limit, pinned = _mcp_exposure()
 
-    server = await build_server(ctx, mcp_direct_limit=limit, mcp_pinned=pinned)
+    server = await build_server(ctx, mcp_direct_limit=limit, mcp_pinned=pinned, job_manager=job_manager)
 
     # Replace AuthMiddleware and TrajectoryMiddleware with token-aware middlewares
     server.middleware = [
@@ -413,10 +451,6 @@ async def create_farm_app(
     ]
     server.middleware.insert(0, TenantMiddleware())
     server.middleware.append(TokenTrajectoryMiddleware())
-
-    # Wire JobManager to AI tools if provided
-    if job_manager is not None:
-        await register_ai_tools(server, ctx, routing_argument="routing_strategy", manager=job_manager)
 
     # Build the FastMCP streamable-http app
     base_app = server.http_app(transport="streamable-http", path=endpoint_path)
@@ -477,8 +511,7 @@ async def run_farm(
             ),
         })
 
-    # One tool surface per process until the per-tenant catalogue (A1, D51): it is built from tenant #1's MCP
-    # providers. Calls through it still run for the caller's tenant (TenantMiddleware sets it per request).
+    # Initial setup uses the instance's configured tenant. The live MCP catalogue is read per request.
     with use_tenant(MILVOW_TENANT_ID):
         app = await create_farm_app(ctx, job_manager=job_manager, path=target_path, readiness=check_readiness)
 
@@ -524,6 +557,11 @@ async def run_farm(
         server.should_exit = True
 
     shutdown_task = asyncio.create_task(_monitor_shutdown())
+    from farm.control.systemd import supervise
+
+    systemd_task = asyncio.create_task(
+        supervise(lambda: server.started, lambda: server.should_exit), name="systemd-liveness"
+    )
 
     log.info(
         "farm_run.started",
@@ -539,6 +577,8 @@ async def run_farm(
         log.info("farm_run.shutting_down")
         stop_event.set()
         shutdown_task.cancel()
+        systemd_task.cancel()
+        await asyncio.gather(systemd_task, return_exceptions=True)
         if not mcp_sync_task.done():
             mcp_sync_task.cancel()
 

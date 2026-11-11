@@ -50,6 +50,7 @@ class Identity:
     email: str
     plan: str | None = None
     org: str | None = None
+    display_name: str | None = None
 
     def masked_email(self) -> str:
         """Return masked email: first character + ••••• + @domain."""

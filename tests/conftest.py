@@ -305,6 +305,7 @@ async def farm_ctx(farm_factory: Callable[..., Awaitable[FarmContext]], registry
 # --- F1B: two tenants with identical data shapes (isolation suite) -----------------------------------------
 
 SEEDS: dict[str, tuple[str, str]] = {
+    "project_memory": ("project, key, body", "'project', 'key', %(msg)s"),
     # table -> (columns, values); %(name)s are per-tenant parameters from ``tenant_params``. Ordered for FKs.
     "providers": ("id, name, kind, executor", "%(pid)s, %(msg)s, 'tool', 'api'"),
     "connections": ("id, provider_id", "%(conn)s, %(pid)s"),
@@ -334,6 +335,13 @@ SEEDS: dict[str, tuple[str, str]] = {
     "evidence": ("sha256, path", "%(sha)s, 'p'"),
     "ai_conversations": ("id, ai, account", "%(cv)s, 'claude', %(conn)s"),
     "ai_jobs": ("id, conversation_id, turn, ai, account", "%(jid)s, %(cv)s, 1, 'claude', %(conn)s"),
+    "ai_job_inputs": ("job_id,payload,sha256", "%(jid)s, convert_to(%(msg)s,'UTF8'), %(sha)s"),
+    "ai_job_checkpoints": (
+        "job_id,attempt,from_account,to_account,payload,sha256",
+        "%(jid)s,2,%(conn)s,%(conn)s,convert_to(%(msg)s,'UTF8'),%(sha)s",
+    ),
+    "ai_usage_settings": ("id", "1"),
+    "ai_usage_snapshots": ("connection_id,provider_id,status", "%(conn)s,%(pid)s,'unsupported'"),
     "integration_requests": ("name, kind, purpose", "%(msg)s, 'mcp', 'why'"),
     "mcp_tools": (
         "provider, name, input_schema, definition, schema_hash",

@@ -50,6 +50,8 @@ class ExecRequest(BaseModel):
 
 class ExecResult(BaseModel):
     ok: bool
+    request_sent: bool | None = None
+    """MCP transport evidence: False only when tools/call was never dispatched; None means unknown."""
     data: dict[str, Any] | None = None
     found: bool | None = None
     units_used: dict[str, float] = Field(default_factory=dict)

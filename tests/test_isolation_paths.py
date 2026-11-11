@@ -20,6 +20,7 @@ from farm.context import FarmContext
 from farm.control.commands import PAYLOAD_VALIDATORS, poll_and_execute_queued, process_command
 from farm.db.pool import DbPool, system_connection, tenant_connection
 from farm.gateway.ai_tools import AI_TOOLS
+from farm.gateway.mcp_tools import DISCOVERY_TOOLS
 from farm.gateway.server import INFRA_TOOLS, build_server
 from farm.registry import Registry
 from farm.tenancy import use_tenant
@@ -149,7 +150,7 @@ async def test_every_mcp_tool_has_an_isolation_scenario(pool: DbPool, farm_facto
     server = await build_server(ctx)
     async with Client(server) as client:
         listed = {t.name for t in await client.list_tools()}
-    capability_tools = listed - set(INFRA_TOOLS) - set(AI_TOOLS)
+    capability_tools = listed - set(INFRA_TOOLS) - set(AI_TOOLS) - set(DISCOVERY_TOOLS)
     assert capability_tools, "no capability tools were generated"
     assert {"verify_email"} <= capability_tools
     # every capability tool is the same generated class, so the verify_email scenario below covers its path
@@ -157,6 +158,7 @@ async def test_every_mcp_tool_has_an_isolation_scenario(pool: DbPool, farm_facto
         assert type(await server.get_tool(name)).__name__ == "CapabilityTool", name
     assert set(INFRA_CASES) == set(INFRA_TOOLS)
     assert set(AI_CASES) == set(AI_TOOLS)
+    assert set(DISCOVERY_CASES) == set(DISCOVERY_TOOLS)
 
 
 async def _text(result: Any) -> str:
@@ -199,10 +201,16 @@ def _plain(tool: str, args: dict[str, Any] | Callable[[dict[str, Any]], dict[str
 
 INFRA_CASES: dict[str, Case] = {
     "farm_guide": _plain("farm_guide", {}),
+    "farm_operator": _plain("farm_operator", {}),
     "get_capacity": _plain("get_capacity", {}),
     "list_resources": _plain("list_resources", {}),
     "get_run": _infra_get_run,
     "get_usage": _plain("get_usage", {"days": 30}),
+    "get_ai_usage": _plain("get_ai_usage", {}),
+    "memory_get": _plain("memory_get", {"project": "project", "key": "key"}),
+    "memory_list": _plain("memory_list", {"project": "project"}),
+    "memory_put": _plain("memory_put", {"project": "project", "key": "key", "body": "A's note", "expected_version": 1}),
+    "memory_delete": _plain("memory_delete", {"project": "project", "key": "key", "expected_version": 1}),
     "request_integration": _infra_integration,
     "list_integration_requests": _plain("list_integration_requests", {}),
 }
@@ -210,6 +218,9 @@ INFRA_CASES: dict[str, Case] = {
 
 AI_CASES: dict[str, Case] = {
     "list_ais": _plain("list_ais", {}),
+    "ai_options": _plain("ai_options", lambda b: {"account": b["conn"]}),
+    "ai_attention": _plain("ai_attention", {}),
+    "ai_recover": _plain("ai_recover", lambda b: {"job_id": str(b["jid"])}),
     "ask_ai_batch": _plain("ask_ai_batch", lambda b: {"tasks": [{"task": "hi", "account": b["conn"]}]}),
     "ai_start": _plain("ai_start", lambda b: {"task": "hi", "ai": "claude", "account": b["conn"]}),
     "ai_start_many": _plain(
@@ -223,15 +234,21 @@ AI_CASES: dict[str, Case] = {
     "ai_conversations": _plain("ai_conversations", {}),
 }
 
+DISCOVERY_CASES: dict[str, Case] = {
+    "search_tools": _plain("search_tools", {"query": "available tools"}),
+    "list_server_tools": _plain("list_server_tools", lambda b: {"server": b["pid"]}),
+    "describe_tool": _plain("describe_tool", lambda b: {"name": f"{b['pid']}__tool"}),
+    "call_tool": _plain("call_tool", lambda b: {"name": f"{b['pid']}__tool", "arguments": {}}),
+}
 
-@pytest.mark.parametrize("tool", sorted(set(INFRA_TOOLS) | set(AI_TOOLS)))
+@pytest.mark.parametrize("tool", sorted(set(INFRA_TOOLS) | set(AI_TOOLS) | set(DISCOVERY_TOOLS)))
 async def test_a_tool_called_as_a_never_shows_or_changes_bs_data(
     pool: DbPool, farm_factory: Make, registry: Registry, two_tenants: TwoTenants, tool: str
 ) -> None:
     ctx = await farm_factory(registry, executors={"api": ScriptedExecutor(lambda req: ok_result())})
     server = await build_server(ctx)
     before_b = await snapshot(pool, two_tenants.b)
-    case = INFRA_CASES.get(tool) or AI_CASES[tool]
+    case = INFRA_CASES.get(tool) or AI_CASES.get(tool) or DISCOVERY_CASES[tool]
     with use_tenant(two_tenants.a):
         async with Client(server) as client:
             await case(client, two_tenants.params[two_tenants.b])

@@ -49,6 +49,7 @@ from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Literal, LiteralString, Protocol
 from uuid import UUID, uuid4
 
@@ -58,7 +59,7 @@ from psycopg.rows import class_row, dict_row
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel
 
-from farm.ai import recovery, results, selection
+from farm.ai import completions, recovery, results, selection
 from farm.ai.accounts import (
     ASK_AI,
     AccountInfo,
@@ -94,6 +95,7 @@ from farm.db.pool import DbPool, system_connection, tenant_connection
 from farm.resources.router import MAX_PARTIAL_CHARS, UnknownCapability, route
 from farm.secrets import redact
 from farm.tenancy import require_tenant, use_tenant
+from farm.tenancy.provenance import operator_snapshot, recorded_operator
 
 log = structlog.get_logger(__name__)
 
@@ -132,6 +134,9 @@ class JobRecord(BaseModel):
     timeout_s: int
     retry_other_account: bool
     caller: str
+    operator_user_id: UUID | None = None
+    operator_email: str | None = None
+    operator_client: str | None = None
     task_chars: int
     json_schema: dict[str, Any] | None
     resume_session_id: str | None
@@ -173,7 +178,7 @@ class JobRecord(BaseModel):
 
 _JOB_COLUMNS: LiteralString = (
     "id, conversation_id, turn, ai, account, model, effort, mode, cwd, state, timeout_s, "
-    "retry_other_account, caller, "
+    "retry_other_account, caller, operator_user_id, operator_email, operator_client, "
     "task_chars, json_schema, resume_session_id, native_session_id, owner_id, heartbeat_at, "
     "cancel_requested_at, attempts, run_id, result_path, result_chars, json_valid, json_errors, "
     "files_changed, usage, tokens, cost_usd, cost_estimated, duration_s, error_kind, error_message, "
@@ -208,6 +213,25 @@ class Finish:
     """The job moved to another account by automatic failover (its native session is a fresh one)."""
     resolved_model: str | None = None
     """The exact model the worker reported (None: unknown)."""
+
+
+class Completion(BaseModel):
+    """Only a terminal database write: no prompt, credentials, or executable assignment."""
+
+    version: Literal[1] = 1
+    tenant_id: UUID
+    job_id: UUID
+    owner_id: UUID
+    completed_at: datetime
+    finish: Finish
+
+
+def _result_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 class JobStore:
@@ -281,12 +305,14 @@ class JobStore:
                           timeout_s, retry_other_account, caller, task_chars, json_schema,
                           resume_session_id, owner_id, heartbeat_at, created_at, input_sha256,
                           recovery_parent_id, recovery_depth, recovery_approval_actor,
-                          effective_effort, selection_source)
+                          effective_effort, selection_source, operator_user_id,
+                          operator_email, operator_client)
                         values (
                           %(id)s, %(conversation)s, %(turn)s, %(ai)s, %(account)s, %(model)s,
                           %(effort)s, %(mode)s, %(cwd)s, %(timeout)s, %(retry)s, %(caller)s,
                           %(chars)s, %(schema)s, %(resume)s, %(owner)s, %(now)s, %(now)s, %(digest)s,
-                          %(parent)s, %(depth)s, %(approval_actor)s, %(effective)s, %(source)s)
+                          %(parent)s, %(depth)s, %(approval_actor)s, %(effective)s, %(source)s,
+                          %(operator_user_id)s, %(operator_email)s, %(operator_client)s)
                         """
                         + _JOB_RETURNING,
                         {
@@ -308,6 +334,8 @@ class JobStore:
                             "timeout": spec.timeout_s,
                             "retry": spec.retry_other_account,
                             "caller": caller,
+                            **dict(zip(("operator_user_id", "operator_email", "operator_client"),
+                                       operator_snapshot(), strict=True)),
                             "chars": len(spec.task),
                             "schema": None if spec.json_schema is None else Jsonb(spec.json_schema),
                             "resume": resume,
@@ -1009,6 +1037,8 @@ class JobManager:
         self._changed = asyncio.Event()
         self._closing = False
         self._last_sweep = float("-inf")
+        self._completion_lock = asyncio.Lock()
+        self._completion_pending = False
 
     @property
     def clock(self) -> Callable[[], datetime]:
@@ -1284,6 +1314,8 @@ class JobManager:
         """Start every queued job whose account and pool have a free slot, oldest first."""
         now = time.monotonic()
         for work in list(self._pending):
+            if sum(self._active_by_account.values()) >= getattr(self.ctx, "max_parallel", 64):
+                break
             if work.not_before > now:
                 continue
             if self._active_by_account.get(work.account, 0) >= work.limit:
@@ -1327,7 +1359,9 @@ class JobManager:
     # --- running one job ----------------------------------------------------------------------------------
 
     async def _run(self, work: _Work) -> None:
-        with use_tenant(work.tenant_id):
+        with use_tenant(work.tenant_id, work.record.operator_user_id), recorded_operator(
+            work.record.operator_user_id, work.record.operator_email, work.record.operator_client
+        ):
             await self._run_for_tenant(work)
 
     async def _run_for_tenant(self, work: _Work) -> None:
@@ -1531,19 +1565,128 @@ class JobManager:
             handed_off=work.handed_off,
             resolved_model=None if not data.get("resolved_model") else str(data["resolved_model"]),
         )
-        if await self._commit(record, fin):
+        if await self._commit(record, fin) == "persisted":
             log.info("ai.job_finished", job=str(work.job_id), state="succeeded", account=attempt.account)
-        else:
-            await asyncio.to_thread(results.discard_result, stored.path)
 
-    async def _commit(self, record: JobRecord, fin: Finish) -> bool:
-        """Write a finished answer. A cancel that arrives while it is being written has lost the race: the
-        write is let through, because the worker's answer was already complete and its quota already spent."""
-        write = asyncio.ensure_future(self.store.finish(record, self.instance_id, fin, self.clock()))
+    async def _commit(self, record: JobRecord, fin: Finish) -> Literal["persisted", "pending", "conflict"]:
+        """Save the verdict before SQL. Database retries never rerun the worker."""
+        write = asyncio.ensure_future(self._save_completion(record, fin))
         try:
             return await asyncio.shield(write)
         except asyncio.CancelledError:
             return await write
+
+    async def _save_completion(
+        self, record: JobRecord, fin: Finish
+    ) -> Literal["persisted", "pending", "conflict"]:
+        async with self._completion_lock:
+            tenant_id = require_tenant()
+            item = Completion(
+                tenant_id=tenant_id, job_id=record.id, owner_id=self.instance_id,
+                completed_at=self.clock(), finish=fin,
+            )
+            path = completions.root() / str(tenant_id) / f"{record.id}.json"
+            if not path.exists():  # the first verdict wins over a later shutdown/cancel
+                await asyncio.to_thread(
+                    completions.write, tenant_id, record.id, item.model_dump_json().encode()
+                )
+            self._completion_pending = True
+            try:
+                outcome = await self._apply_completion(path)
+            except psycopg.Error as exc:
+                log.warning("ai.completion_pending", job=str(record.id), error=type(exc).__name__)
+                outcome = "pending"
+            if outcome == "pending" and not self._closing:
+                self._ensure_ticker()
+            return outcome
+
+    async def _apply_completion(self, path: Path) -> Literal["persisted", "pending", "conflict"]:
+        try:
+            payload = await asyncio.to_thread(completions.read, path)
+            item = Completion.model_validate_json(payload)
+            if item.tenant_id != UUID(path.parent.name) or item.job_id != UUID(path.stem):
+                raise ValueError("terminal identity mismatch")
+            stored = item.finish.stored
+            if stored is not None:
+                expected = results.result_file(item.job_id)
+                if stored.path != expected or expected.is_symlink():
+                    raise ValueError("terminal result path mismatch")
+                digest = await asyncio.to_thread(_result_digest, expected)
+                if digest != stored.sha256:
+                    raise ValueError("terminal result checksum mismatch")
+        except (ValueError, KeyError, TypeError, OSError) as exc:
+            log.error("ai.completion_invalid", error=type(exc).__name__)
+            await self._fail_invalid_completion(path)
+            await asyncio.to_thread(completions.quarantine, path, "invalid")
+            return "conflict"
+        with use_tenant(item.tenant_id):
+            record = await self.store.get(item.job_id)
+            if record is None or record.owner_id != item.owner_id:
+                await asyncio.to_thread(completions.quarantine, path, "conflict")
+                log.error("ai.completion_conflict", job=str(item.job_id))
+                return "conflict"
+            if record.finished:
+                same = record.state == item.finish.state and record.finished_at == item.completed_at and (
+                    (stored is None and record.result_path is None)
+                    or (stored is not None and record.result_path == str(stored.path))
+                )
+                if not same:
+                    await asyncio.to_thread(completions.quarantine, path, "conflict")
+                    log.error("ai.completion_conflict", job=str(item.job_id))
+                    return "conflict"
+            else:
+                try:
+                    committed = await self.store.finish(record, item.owner_id, item.finish, item.completed_at)
+                except psycopg.IntegrityError:
+                    # A restored snapshot can lack a referenced run/session. Retain the verified answer,
+                    # close the row without those references, and require manual reconciliation.
+                    fallback = Finish(
+                        state="failed", account=record.account, attempts=[], stored=stored,
+                        failure=Failure("outcome_unknown", "Completed output needs manual reconciliation; "
+                            "database references changed. The answer and completion evidence are preserved. "
+                            "No worker was replayed."),
+                    )
+                    committed = await self.store.finish(record, item.owner_id, fallback, item.completed_at)
+                    if not committed:
+                        return "pending"
+                    await asyncio.to_thread(completions.quarantine, path, "conflict")
+                    self._notify()
+                    return "conflict"
+                if not committed:
+                    return "pending"  # a terminal race is checked on the next pass
+        await asyncio.to_thread(completions.discard, path)
+        self._notify()
+        return "persisted"
+
+    async def _fail_invalid_completion(self, path: Path) -> None:
+        """Close only this process's job, using trusted DB state, never corrupted envelope fields.
+
+        Do this before quarantine so a DB outage keeps the entry in the retry set. Other processes'
+        rows remain subject to the normal lease/orphan sweep. Output files are kept for manual review.
+        """
+        try:
+            tenant, job_id = UUID(path.parent.name), UUID(path.stem)
+        except ValueError:
+            return
+        with use_tenant(tenant):
+            record = await self.store.get(job_id)
+            if record is None or record.finished or record.owner_id != self.instance_id:
+                return
+            fin = Finish(state="failed", account=record.account, attempts=[], failure=Failure(
+                "outcome_unknown", "Completion evidence is damaged. Output files were retained for manual "
+                "reconciliation; the worker was not replayed."
+            ))
+            if not await self.store.finish(record, self.instance_id, fin, self.clock()):
+                raise psycopg.OperationalError("completion reconciliation raced a terminal update")
+            self._notify()
+
+    async def _flush_completions(self) -> None:
+        async with self._completion_lock:
+            for path in await asyncio.to_thread(completions.entries):
+                await self._apply_completion(path)
+            self._completion_pending = bool(await asyncio.to_thread(completions.entries))
+        if self._completion_pending and not self._closing:
+            self._ensure_ticker()
 
     async def _finish_failure(self, work: _Work, attempt: Attempt, failure: Failure) -> None:
         partial = attempt.partial_text
@@ -1563,7 +1706,7 @@ class JobManager:
                 else None
             ),
         )
-        if await self.store.finish(work.record, self.instance_id, fin, self.clock()):
+        if await self._commit(work.record, fin) == "persisted":
             log.info(
                 "ai.job_finished",
                 job=str(work.job_id),
@@ -1571,11 +1714,9 @@ class JobManager:
                 kind=failure.kind,
                 account=attempt.account,
             )
-        elif stored is not None:
-            await asyncio.to_thread(results.discard_result, stored.path)
 
     async def _conclude_interrupted(self, work: _Work) -> None:
-        with use_tenant(work.tenant_id):
+        with use_tenant(work.tenant_id, work.record.operator_user_id):
             await self._conclude_interrupted_for_tenant(work)
 
     async def _conclude_interrupted_for_tenant(self, work: _Work) -> None:
@@ -1599,9 +1740,7 @@ class JobManager:
             cost_usd=work.cost,
             failure=failure,
         )
-        if await self.store.finish(work.record, self.instance_id, fin, self.clock()):
-            # The job owns no answer now: remove a file the interrupted write may have left.
-            await asyncio.to_thread(results.discard_result, results.result_file(work.job_id))
+        if await self._commit(work.record, fin) == "persisted":
             log.info("ai.job_finished", job=str(work.job_id), state=fin.state, kind=failure.kind)
 
     async def _conclude_crashed(self, work: _Work, exc: Exception) -> None:
@@ -1610,7 +1749,7 @@ class JobManager:
         )
         fin = Finish(state="failed", account=work.account, attempts=work.attempts, failure=failure)
         try:
-            await self.store.finish(work.record, self.instance_id, fin, self.clock())
+            await self._commit(work.record, fin)
         except psycopg.Error as db_exc:
             log.error("ai.job_unrecorded", job=str(work.job_id), error=type(db_exc).__name__)
 
@@ -1697,7 +1836,7 @@ class JobManager:
                 attempts=work.attempts,
                 failure=Failure("cancelled", "cancelled by the caller before it started"),
             )
-            await self.store.finish(work.record, self.instance_id, fin, self.clock())
+            await self._commit(work.record, fin)
             self._live.pop(job_id, None)
             self._notify()
         elif work.handle is not None:
@@ -1727,9 +1866,10 @@ class JobManager:
 
     async def _tick_loop(self) -> None:
         last_beat = time.monotonic()  # a job's row got its heartbeat when it was created
-        while self._live and not self._closing:
+        while (self._live or self._completion_pending) and not self._closing:
             await asyncio.sleep(self.tick_s)
             try:
+                await self._flush_completions()
                 self._pump()
                 now = time.monotonic()
                 if now - last_beat >= self.heartbeat_s:
@@ -1744,7 +1884,7 @@ class JobManager:
                 log.error("ai.tick_failed", error=f"{type(exc).__name__}: {redact(str(exc))}")
 
     async def _cancel_for_tenant(self, work: _Work) -> None:
-        with use_tenant(work.tenant_id):
+        with use_tenant(work.tenant_id, work.record.operator_user_id):
             await self.cancel(work.job_id)
 
     def _spawn(self, work: Coroutine[Any, Any, Any]) -> None:
@@ -1762,6 +1902,9 @@ class JobManager:
 
     async def recover(self) -> int:
         """Fail every job whose owner stopped renewing its heartbeat: ``farm_restart``, not re-run."""
+        await self._flush_completions()
+        if self._completion_pending:
+            return 0  # finish the bounded spool backlog before orphaning any of its jobs
         swept = await self.store.sweep_orphans(self.instance_id, self.clock(), self.lease_s)
         for record in swept:
             log.warning(

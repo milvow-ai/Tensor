@@ -63,7 +63,7 @@ if ! id "$FARM_USER" >/dev/null 2>&1; then
 fi
 install -d -m 0700 -o "$FARM_USER" -g "$FARM_USER" "$DATA" "$DATA/ai" "$DATA/tokens" "$DATA/workspaces" \
     "$DATA/logs" "$DATA/bifrost" "$DATA/.local" "$DATA/.local/bin"
-install -d -m 0700 "$BACKUPS"
+install -d -m 0700 -o "$FARM_USER" -g "$FARM_USER" "$BACKUPS"
 
 step "code $APP ($branch)"
 if [[ ! -d "$APP/.git" ]]; then

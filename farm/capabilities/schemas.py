@@ -532,7 +532,8 @@ class AskAiOut(BaseModel):
 JobState = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 TERMINAL_STATES: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
 FailureKind = Literal[
-    "limit", "auth", "timeout", "crash", "bad_request", "cancelled", "farm_restart", "account_unavailable"
+    "limit", "auth", "timeout", "crash", "bad_request", "cancelled", "farm_restart", "account_unavailable",
+    "outcome_unknown"
 ]
 FAILURE_KINDS: tuple[str, ...] = get_args(FailureKind)
 RequestErrorKind = Literal[
@@ -794,16 +795,6 @@ class CapabilityModelsDict(dict[str, tuple[type[BaseModel], type[BaseModel]]]):
         return super().__getitem__(key)
 
     def get(self, key: str, default: Any = None) -> Any:
-        import inspect
-
-        frame = inspect.currentframe()
-        try:
-            caller_file = frame.f_back.f_code.co_filename if frame and frame.f_back else ""
-            if "sync.py" in caller_file and key == "ask_ai":
-                return default
-        finally:
-            del frame
-
         if key in self._ai_models:
             return self._ai_models[key]
         return super().get(key, default)

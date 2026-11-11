@@ -64,7 +64,7 @@ def test_every_tenant_table_has_tenant_id_fk_and_leading_index(db_url: str) -> N
 
 
 def test_tenant_one_is_milvow(db_url: str) -> None:
-    assert _rows(db_url, "select id::text, slug, name, cell_id, plan, status from public.tenants") == [
+    assert _rows(db_url, "select id::text, slug, name, cell_id, plan, status from public.tenants where id=%s", (MILVOW,)) == [
         (MILVOW, "milvow", "Milvow", "cell-1", "beta", "active")
     ]
 
@@ -146,7 +146,10 @@ def test_downgrade_upgrade_round_trip_with_data(scratch_db: Callable[[], str]) -
         assert _rows(url, "select tenant_id::text, rr_cursor from public.pool_state") == [(MILVOW, 3)]
         assert _rows(url, "select tenant_id::text from public.integration_requests") == [(MILVOW,)]
         assert _rows(url, "select tenant_id::text from public.capability_requests") == [(MILVOW,)]
-        assert _tenant_tables(url) == sorted([*tables_before, "memberships", "budget_reservations", "api_tokens", "login_sessions"])
+        assert _tenant_tables(url) == sorted([
+            *tables_before, "memberships", "budget_reservations", "api_tokens", "login_sessions",
+            "ai_job_inputs", "ai_usage_settings", "ai_usage_snapshots", "ai_job_checkpoints", "project_memory",
+        ])
 
         command.downgrade(cfg, "0013")
         assert _rows(url, "select to_regclass('public.tenants')::text") == [(None,)]

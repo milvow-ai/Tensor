@@ -12,11 +12,13 @@ Tools
   ``farm.gateway.ai_tools``.
 
 ``build_server`` reads the capability table when the server starts; a registry change that adds a capability
-shows up after a restart (``farm serve`` is cheap to restart; the tool list is not hot-reloaded).
+shows up after a restart for typed API capabilities. Synced external MCP tools use a live database-backed
+provider: additions, policy changes and removals apply without restarting the gateway.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 from uuid import UUID
@@ -27,6 +29,7 @@ from fastmcp.exceptions import ToolError
 from fastmcp.tools import Tool, ToolResult
 from pydantic import BaseModel, Field, PrivateAttr, create_model
 
+from farm.ai.jobs import JobManager
 from farm.capabilities.schemas import CAPABILITY_MODELS
 from farm.context import FarmContext
 from farm.control.integration_requests import (
@@ -39,12 +42,14 @@ from farm.db.pool import system_connection
 from farm.gateway.ai_tools import ask_ai_selection_gate, register_ai_tools
 from farm.gateway.guide import Section, generate_guide
 from farm.gateway.mcp_tools import register_mcp_tools
+from farm.gateway.memory_tools import MEMORY_TOOLS, register_memory_tools
 from farm.gateway.middleware import (
     AuthMiddleware,
     PolicyCheck,
     PolicyMiddleware,
     TrajectoryMiddleware,
     current_caller,
+    current_identity,
 )
 from farm.gateway.usage_tools import register_usage_tools
 from farm.registry.models import MCP_CAPABILITY_PREFIX, STRATEGIES
@@ -57,6 +62,7 @@ log = structlog.get_logger(__name__)
 SERVER_NAME = "harness-farm"
 INFRA_TOOLS = (
     "farm_guide",
+    "farm_operator",
     "get_capacity",
     "list_resources",
     "get_run",
@@ -64,6 +70,7 @@ INFRA_TOOLS = (
     "get_ai_usage",
     "request_integration",
     "list_integration_requests",
+    *MEMORY_TOOLS,
 )
 ROUTING_ARGUMENT = "routing_strategy"
 
@@ -129,6 +136,19 @@ class CapabilityTool(Tool):
 
 
 def _register_infra_tools(server: FastMCP, ctx: FarmContext) -> None:
+    @server.tool(annotations={"readOnlyHint": True})
+    async def farm_operator() -> dict[str, Any]:
+        """Identify the authenticated Farm operator separately from the IDE name or worker account."""
+        identity = current_identity.get()
+        return {
+            "client": identity.name if identity else current_caller.get(),
+            "email": identity.user_email if identity else None,
+            "user_id": str(identity.user_id) if identity and identity.user_id else None,
+            "identity_source": (
+                "farm_token_membership" if identity and identity.user_id else "service_or_local"
+            ),
+        }
+
     @server.tool(annotations={"readOnlyHint": True})
     async def farm_guide(section: Section = "all") -> str:
         """Harness Farm capability and worker guide: MCP servers, AI workers, rules, and recipes."""
@@ -247,6 +267,7 @@ async def build_server(
     policy: PolicyCheck | None = None,
     mcp_direct_limit: int = 40,
     mcp_pinned: Sequence[str] = (),
+    job_manager: JobManager | None = None,
 ) -> FastMCP:
     """The ``harness-farm`` server for ``ctx``.
 
@@ -274,8 +295,16 @@ async def build_server(
             log.info("gateway.capability_without_tool", capability=name, reason="no input/output models yet")
             continue
         server.add_tool(CapabilityTool.create(ctx, name, description or name, *models))
+    shared = os.environ.get("FARM_SHARED_INSTANCE") == "1"
+    if not shared and not any(name == "ask_ai" for name, _ in capabilities):
+        # A blank gateway stays usable when its first worker is enrolled, without a restart.
+        server.add_tool(CapabilityTool.create(
+            ctx, "ask_ai", "Ask an AI worker to complete a task.", *CAPABILITY_MODELS["ask_ai"]
+        ))
     _register_infra_tools(server, ctx)
     register_usage_tools(server, ctx)
-    await register_ai_tools(server, ctx, routing_argument=ROUTING_ARGUMENT)
+    if not shared:
+        register_memory_tools(server, ctx)
+    await register_ai_tools(server, ctx, routing_argument=ROUTING_ARGUMENT, manager=job_manager)
     await register_mcp_tools(server, ctx, direct_limit=mcp_direct_limit, pinned=mcp_pinned)
     return server

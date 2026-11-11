@@ -11,6 +11,8 @@ from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from farm.context import FarmContext
 from farm.db.pool import DbPool
 from farm.executors.base import ErrorKind
@@ -112,16 +114,29 @@ async def test_waiters_join_a_leader_whose_answer_is_not_cached(pool: DbPool) ->
     assert outcome.stored is not None and outcome.stored.data == {"status": "unknown"}
 
 
-async def test_a_waiter_that_comes_too_late_for_the_grace_period_does_not_join(pool: DbPool) -> None:
+async def test_a_waiter_that_comes_too_late_for_the_grace_period_does_not_join(
+    pool: DbPool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     clock = FakeClock()
     run1, run2 = await _two_runs(pool)
     leader = await flight.claim(pool, clock, run_id=run1, **COMMON)  # type: ignore[arg-type]
     assert isinstance(leader, flight.Leader)
+    parked = asyncio.Event()
+    resume = asyncio.Event()
+
+    async def wait_for_release(_: float) -> None:
+        parked.set()
+        await resume.wait()
+
+    monkeypatch.setattr(flight, "asyncio", SimpleNamespace(sleep=wait_for_release))
     waiter = asyncio.create_task(flight.claim(pool, clock, run_id=run2, **COMMON))  # type: ignore[arg-type]
-    await asyncio.sleep(0.2)
-    stored = flight.StoredResult(data={}, provider="p", connection_id="c", found=False)
-    clock.advance(flight.JOIN_GRACE_S + 1)  # the waiter was stalled for longer than the grace period
-    assert await flight.finish_success(pool, leader.request_id, run1, stored, clock() - timedelta(seconds=60))  # type: ignore[arg-type]
+    try:
+        await asyncio.wait_for(parked.wait(), 5)
+        stored = flight.StoredResult(data={}, provider="p", connection_id="c", found=False)
+        assert await flight.finish_success(pool, leader.request_id, run1, stored, clock())  # type: ignore[arg-type]
+        clock.advance(flight.JOIN_GRACE_S + 1)
+    finally:
+        resume.set()
 
     outcome = await asyncio.wait_for(waiter, 5)
 

@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+import { useRouter } from "next/navigation";
 
 import {
   Bot,
@@ -14,16 +16,16 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
-import { toast } from "sonner";
 
+import { CommandChip } from "@/components/farm/command-chip";
+import { useCommands } from "@/components/farm/use-command";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { submitCommand } from "@/lib/farm/actions";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fmtAbsolute, fmtInt } from "@/lib/farm/format";
 import type { AiConversationItem, AiJobItem } from "@/lib/farm/integrations-data";
 import type { Connection } from "@/lib/farm/types";
@@ -37,14 +39,21 @@ export function AiOrchestrationView({
   initialConversations: AiConversationItem[];
   accounts: Connection[];
 }) {
-  const [jobs, setJobs] = useState<AiJobItem[]>(initialJobs);
-  const [conversations, _setConversations] = useState<AiConversationItem[]>(initialConversations);
-  const [accountList, setAccountList] = useState<Connection[]>(accounts);
+  const jobs = initialJobs;
+  const conversations = initialConversations;
+  const accountList = accounts;
+  const { run, pending } = useCommands();
+  const router = useRouter();
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") router.refresh();
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [router]);
 
   const [activeTab, setActiveTab] = useState<"jobs" | "conversations" | "concurrency">("jobs");
   const [jobSearch, setJobSearch] = useState("");
   const [jobStateFilter, setJobStateFilter] = useState("all");
-  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
   // Filter jobs
   const filteredJobs = jobs.filter((j) => {
@@ -65,52 +74,23 @@ export function AiOrchestrationView({
 
   // Handle Cancel Job
   async function handleCancelJob(jobId: string) {
-    setCancellingId(jobId);
-    try {
-      const res = await submitCommand("cancel_ai_job", { job_id: jobId });
-      if (res.ok) {
-        setJobs((prev) =>
-          prev.map((j) =>
-            j.id === jobId
-              ? {
-                  ...j,
-                  state: "cancelled",
-                  error: { kind: "cancelled", message: "Cancelled by owner via Console" },
-                }
-              : j,
-          ),
-        );
-        toast.success(`AI job ${jobId} cancelled.`);
-      } else {
-        toast.error(res.error);
-      }
-    } catch {
-      toast.error("Failed to cancel job.");
-    } finally {
-      setCancellingId(null);
-    }
+    await run("cancel_ai_job", { job_id: jobId }, { key: jobId, label: "Request job cancellation" });
   }
 
   // Handle Update Concurrency (max_parallel)
   async function handleConcurrencyChange(accountId: string, maxParallel: number) {
-    try {
-      const res = await submitCommand("set_max_parallel", { connection_id: accountId, max_parallel: maxParallel });
-      if (res.ok) {
-        setAccountList((prev) => prev.map((acc) => (acc.id === accountId ? { ...acc, concurrency: maxParallel } : acc)));
-        toast.success(`Concurrency for ${accountId} set to ${maxParallel}.`);
-      } else {
-        toast.error(res.error);
-      }
-    } catch {
-      toast.error("Failed to update concurrency limit.");
-    }
+    await run(
+      "set_max_parallel",
+      { connection_id: accountId, max_parallel: maxParallel },
+      { key: accountId, label: "Update worker concurrency" },
+    );
   }
 
   function renderJobStateBadge(state: AiJobItem["state"]) {
     switch (state) {
       case "running":
         return (
-          <Badge className="animate-pulse gap-1 border-primary/30 bg-primary/15 font-medium text-[11px] text-primary">
+          <Badge className="gap-1 border-primary/30 bg-primary/15 font-medium text-[11px] text-foreground">
             <RotateCw className="size-3 animate-spin" />
             <span>Running</span>
           </Badge>
@@ -147,29 +127,27 @@ export function AiOrchestrationView({
   }
 
   return (
-    <div className="space-y-6">
+    <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="min-w-0 space-y-6">
       {/* Navigation tabs */}
       <div className="flex items-center justify-between border-b pb-3">
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)}>
-          <TabsList className="h-8">
-            <TabsTrigger value="jobs" className="gap-1.5 px-3 text-xs">
-              <Zap className="size-3.5" />
-              <span>Live Jobs ({jobs.length})</span>
-            </TabsTrigger>
-            <TabsTrigger value="conversations" className="gap-1.5 px-3 text-xs">
-              <MessageSquare className="size-3.5" />
-              <span>Conversations ({conversations.length})</span>
-            </TabsTrigger>
-            <TabsTrigger value="concurrency" className="gap-1.5 px-3 text-xs">
-              <Sliders className="size-3.5" />
-              <span>Concurrency Limits</span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+        <TabsList className="h-auto max-w-full flex-wrap">
+          <TabsTrigger value="jobs" className="gap-1.5 px-3 text-xs">
+            <Zap className="size-3.5" />
+            <span>Live Jobs ({jobs.length})</span>
+          </TabsTrigger>
+          <TabsTrigger value="conversations" className="gap-1.5 px-3 text-xs">
+            <MessageSquare className="size-3.5" />
+            <span>Conversations ({conversations.length})</span>
+          </TabsTrigger>
+          <TabsTrigger value="concurrency" className="gap-1.5 px-3 text-xs">
+            <Sliders className="size-3.5" />
+            <span>Concurrency Limits</span>
+          </TabsTrigger>
+        </TabsList>
       </div>
 
       {/* Tab 1: Live Jobs Table */}
-      {activeTab === "jobs" && (
+      <TabsContent value="jobs">
         <Card>
           <CardHeader className="pb-3">
             <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
@@ -182,7 +160,7 @@ export function AiOrchestrationView({
 
               <div className="flex items-center gap-2">
                 <Select value={jobStateFilter} onValueChange={setJobStateFilter}>
-                  <SelectTrigger className="h-8 w-[120px] text-xs">
+                  <SelectTrigger aria-label="Filter job state" className="h-8 w-[120px] text-xs">
                     <SelectValue placeholder="State" />
                   </SelectTrigger>
                   <SelectContent>
@@ -197,6 +175,9 @@ export function AiOrchestrationView({
                     </SelectItem>
                     <SelectItem value="succeeded" className="text-xs">
                       Succeeded
+                    </SelectItem>
+                    <SelectItem value="failed" className="text-xs">
+                      Failed
                     </SelectItem>
                     <SelectItem value="cancelled" className="text-xs">
                       Cancelled
@@ -248,6 +229,9 @@ export function AiOrchestrationView({
                       </TableCell>
                       <TableCell>
                         <span className="font-mono text-xs">{job.account}</span>
+                        <div className="text-muted-foreground text-xs" title={job.operatorClient ?? undefined}>
+                          Operator: {job.operatorEmail ?? "Service / local"}
+                        </div>
                       </TableCell>
                       <TableCell className="max-w-[320px]">
                         <div className="truncate font-medium text-xs">{job.task ?? job.id}</div>
@@ -273,7 +257,7 @@ export function AiOrchestrationView({
                             variant="ghost"
                             size="sm"
                             className="h-7 text-destructive text-xs hover:bg-destructive/10"
-                            disabled={cancellingId === job.id}
+                            disabled={Boolean(pending[job.id])}
                             onClick={() => handleCancelJob(job.id)}
                           >
                             <span>Cancel</span>
@@ -281,6 +265,7 @@ export function AiOrchestrationView({
                         ) : (
                           <span className="text-muted-foreground text-xs">—</span>
                         )}
+                        <CommandChip command={pending[job.id]} />
                       </TableCell>
                     </TableRow>
                   ))
@@ -289,10 +274,10 @@ export function AiOrchestrationView({
             </Table>
           </CardContent>
         </Card>
-      )}
+      </TabsContent>
 
       {/* Tab 2: Conversations List (Metadata only, no transcripts) */}
-      {activeTab === "conversations" && (
+      <TabsContent value="conversations">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="font-semibold text-base">Active AI Conversations</CardTitle>
@@ -340,10 +325,10 @@ export function AiOrchestrationView({
             </Table>
           </CardContent>
         </Card>
-      )}
+      </TabsContent>
 
       {/* Tab 3: Per-Account Concurrency Limits (max_parallel) */}
-      {activeTab === "concurrency" && (
+      <TabsContent value="concurrency">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="font-semibold text-base">Account Concurrency Control</CardTitle>
@@ -375,9 +360,13 @@ export function AiOrchestrationView({
                       <div className="flex items-center justify-end gap-1.5">
                         <Select
                           value={String(acc.concurrency)}
+                          disabled={Boolean(pending[acc.id])}
                           onValueChange={(val) => handleConcurrencyChange(acc.id, Number.parseInt(val, 10))}
                         >
-                          <SelectTrigger className="h-7 w-24 font-mono text-xs">
+                          <SelectTrigger
+                            aria-label={`Concurrency for ${acc.id}`}
+                            className="h-7 w-24 font-mono text-xs"
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -395,6 +384,7 @@ export function AiOrchestrationView({
                             </SelectItem>
                           </SelectContent>
                         </Select>
+                        <CommandChip command={pending[acc.id]} />
                       </div>
                     </TableCell>
                   </TableRow>
@@ -403,7 +393,7 @@ export function AiOrchestrationView({
             </Table>
           </CardContent>
         </Card>
-      )}
-    </div>
+      </TabsContent>
+    </Tabs>
   );
 }

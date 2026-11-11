@@ -21,6 +21,7 @@ const cspDirectives = [
 ];
 
 const nextConfig = {
+  experimental: { cpus: 2 },
   reactCompiler: true,
   compiler: {
     // Keep console.error and console.warn: they carry real failures (startup guard, render errors).

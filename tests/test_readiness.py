@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -14,6 +15,7 @@ from farm.control import doctor as diagnostics
 from farm.control import run as runtime
 from farm.control.cli import app
 from farm.db.pool import DbPool
+from farm.tenancy import MILVOW_TENANT_ID, TokenIdentity
 
 
 async def _unused(scope: Any, receive: Any, send: Any) -> None:
@@ -39,7 +41,9 @@ async def test_readiness_requires_auth_and_liveness_survives_database_failure(
 async def test_readiness_reports_dependency_failure_and_does_not_expose_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(runtime, "verify_token", AsyncMock(return_value=object()))
+    identity = TokenIdentity(token_id=uuid4(), tenant_id=MILVOW_TENANT_ID, user_id=None,
+                             name="test", scopes=("mcp",))
+    monkeypatch.setattr(runtime, "verify_token", AsyncMock(return_value=identity))
     probe = AsyncMock(return_value={"database": True, "scheduler": False})
     gateway = runtime.FarmAuthMiddleware(_unused, None, readiness=probe)  # type: ignore[arg-type]
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway), base_url="http://farm") as client:

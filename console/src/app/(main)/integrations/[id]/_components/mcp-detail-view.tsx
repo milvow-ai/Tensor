@@ -5,10 +5,11 @@ import { useState } from "react";
 import Link from "next/link";
 
 import { ArrowLeft, CheckCircle2, Code, Lock, Play, RefreshCw, Search, Terminal, Wrench } from "lucide-react";
-import { toast } from "sonner";
 
-import { MeterBar, StatusChip } from "@/components/kit";
+import { CommandChip } from "@/components/farm/command-chip";
 import { CopyCommand } from "@/components/farm/copy-command";
+import { useCommands } from "@/components/farm/use-command";
+import { MeterBar, StatusChip } from "@/components/kit";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,18 +17,18 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { submitCommand } from "@/lib/farm/actions";
 import { fmtAbsolute } from "@/lib/farm/format";
 import type { McpDetail, McpToolItem } from "@/lib/farm/integrations-data";
 import type { Connection } from "@/lib/farm/types";
 
 export function McpDetailView({ initialDetail, connections }: { initialDetail: McpDetail; connections: Connection[] }) {
-  const [detail, _setDetail] = useState<McpDetail>(initialDetail);
-  const [tools, setTools] = useState<McpToolItem[]>(initialDetail.tools);
+  const detail = initialDetail;
+  const tools = initialDetail.tools;
   const [toolSearch, setToolSearch] = useState("");
   const [inspectingSchemaTool, setInspectingSchemaTool] = useState<McpToolItem | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [testing, setTesting] = useState(false);
+  const { run, pending } = useCommands();
+  const syncing = Boolean(pending.sync);
+  const testing = Boolean(pending.test);
 
   const filteredTools = tools.filter((tool) => {
     if (toolSearch) {
@@ -38,54 +39,26 @@ export function McpDetailView({ initialDetail, connections }: { initialDetail: M
   });
 
   async function handleToggleTool(tool: McpToolItem, enabled: boolean) {
-    // Optimistic update
-    setTools((prev) => prev.map((t) => (t.id === tool.id ? { ...t, enabled } : t)));
-    try {
-      const res = await submitCommand("set_mcp_tool_access", {
+    await run(
+      "set_mcp_tool_access",
+      {
         provider_id: detail.integration.id,
         tool: tool.name,
         enabled,
         access: enabled ? "allow" : "deny",
-      });
-      if (!res.ok) {
-        throw new Error(res.error);
-      }
-      toast.success(`Tool "${tool.name}" ${enabled ? "enabled" : "disabled"}.`);
-    } catch {
-      setTools((prev) => prev.map((t) => (t.id === tool.id ? { ...t, enabled: !enabled } : t)));
-      toast.error(`Failed to update tool "${tool.name}".`);
-    }
+      },
+      { key: tool.id, label: `${enabled ? "Allow" : "Deny"} ${tool.name}` },
+    );
   }
 
   async function handleSyncTools() {
-    setSyncing(true);
-    try {
-      const res = await submitCommand("sync_mcp_tools", { provider_id: detail.integration.id });
-      if (!res.ok) {
-        throw new Error(res.error);
-      }
-      toast.success(
-        `Tools for ${detail.integration.name} synced with remote server (${tools.length} tools registered).`,
-      );
-    } catch {
-      toast.error(`Failed to sync tools for ${detail.integration.name}.`);
-    } finally {
-      setSyncing(false);
-    }
+    await run("sync_mcp_tools", { provider_id: detail.integration.id }, { key: "sync", label: "Sync MCP tools" });
   }
 
   async function handleTest() {
     const acc = detail.integration.accounts[0];
     if (!acc) return;
-    setTesting(true);
-    try {
-      await submitCommand("test_connection", { connection_id: acc.id });
-      toast.success(`Test connection succeeded for ${acc.label}.`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Test call failed.");
-    } finally {
-      setTesting(false);
-    }
+    await run("test_connection", { connection_id: acc.id }, { key: "test", label: "Test MCP connection" });
   }
 
   return (
@@ -100,6 +73,8 @@ export function McpDetailView({ initialDetail, connections }: { initialDetail: M
         </Button>
 
         <div className="flex items-center gap-2">
+          <CommandChip command={pending.test} />
+          <CommandChip command={pending.sync} />
           <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={handleTest} disabled={testing}>
             <Play className="size-3" />
             <span>{testing ? "Testing..." : "Test Connection"}</span>
@@ -139,10 +114,10 @@ export function McpDetailView({ initialDetail, connections }: { initialDetail: M
         <CardHeader className="pb-3">
           <div className="flex items-center gap-2">
             <Terminal className="size-4 text-primary" />
-            <CardTitle className="font-semibold text-sm">Local Farm PC Commands</CardTitle>
+            <CardTitle className="font-semibold text-sm">Farm worker commands</CardTitle>
           </div>
           <CardDescription className="text-xs">
-            Harness Farm keeps logins and secret tokens strictly on the local PC. Run these commands in your shell:
+            Run these commands as your Farm worker user on the machine hosting this instance.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
@@ -185,6 +160,9 @@ export function McpDetailView({ initialDetail, connections }: { initialDetail: M
         </CardHeader>
         <CardContent className="p-0">
           <div className="px-4 pt-3">
+            {detail.toolsTruncated ? (
+              <p role="status">Showing the first 1,000 tools. Use MCP discovery for the full catalogue.</p>
+            ) : null}
             <MeterBar
               value={detail.integration.accounts.filter((account) => account.status === "active").length}
               max={detail.integration.accounts.length}
@@ -246,10 +224,15 @@ export function McpDetailView({ initialDetail, connections }: { initialDetail: M
                     </TableCell>
                     <TableCell className="text-right">
                       <Switch
-                        checked={tool.enabled}
+                        checked={tool.enabled === true}
+                        disabled={tool.enabled === null || Boolean(pending[tool.id])}
                         onCheckedChange={(checked) => handleToggleTool(tool, checked)}
                         aria-label={`Toggle tool ${tool.name}`}
                       />
+                      {tool.enabled === null ? (
+                        <span className="text-muted-foreground text-xs">Advanced policy</span>
+                      ) : null}
+                      <CommandChip command={pending[tool.id]} />
                     </TableCell>
                   </TableRow>
                 ))
@@ -285,19 +268,42 @@ export function McpDetailView({ initialDetail, connections }: { initialDetail: M
                 const connection = connections.find((item) => item.id === acc.id);
                 const usage = connection?.units.find((unit) => unit.limit !== null);
                 const failed = Boolean(connection?.health.lastError);
-                const status = acc.status === "active" ? "ready" : acc.status === "needs_login" ? "needs-login" : acc.status === "exhausted" ? "limited" : "waiting-for-you";
+                const status =
+                  acc.status === "active"
+                    ? "ready"
+                    : acc.status === "needs_login"
+                      ? "needs-login"
+                      : acc.status === "exhausted"
+                        ? "limited"
+                        : "waiting-for-you";
                 return (
                   <TableRow key={acc.id}>
                     <TableCell className="font-medium text-xs">{acc.label}</TableCell>
                     <TableCell className="font-mono text-xs">{acc.id}</TableCell>
                     <TableCell className="font-mono text-muted-foreground text-xs">{acc.authRef}</TableCell>
                     <TableCell className="text-xs">{acc.concurrency} parallel</TableCell>
-                    <TableCell className="text-muted-foreground text-xs">{acc.lastSuccessAt ? fmtAbsolute(acc.lastSuccessAt) : "Never"}</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {acc.lastSuccessAt ? fmtAbsolute(acc.lastSuccessAt) : "Never"}
+                    </TableCell>
                     <TableCell>
-                      {usage ? <MeterBar value={usage.used + usage.reserved} max={usage.limit ?? 1} label={`${usage.unit} used`} showValue caption={`${usage.used + usage.reserved} / ${usage.limit} ${usage.unit}`} /> : connection ? <span>{connection.callsToday} calls today</span> : "—"}
+                      {usage ? (
+                        <MeterBar
+                          value={usage.used + usage.reserved}
+                          max={usage.limit ?? 1}
+                          label={`${usage.unit} used`}
+                          showValue
+                          caption={`${usage.used + usage.reserved} / ${usage.limit} ${usage.unit}`}
+                        />
+                      ) : connection ? (
+                        <span>{connection.callsToday} calls today</span>
+                      ) : (
+                        "—"
+                      )}
                       {failed && <p className="mt-1 text-xs text-destructive">{connection?.health.lastError}</p>}
                     </TableCell>
-                    <TableCell className="text-right"><StatusChip status={status} label={acc.status.replaceAll("_", " ")} size="sm" /></TableCell>
+                    <TableCell className="text-right">
+                      <StatusChip status={status} label={acc.status.replaceAll("_", " ")} size="sm" />
+                    </TableCell>
                   </TableRow>
                 );
               })}

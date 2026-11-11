@@ -1,5 +1,9 @@
 # Linux server kit
 
+For the three-person release use [Private team deployment](../../docs/PRIVATE-TEAM-DEPLOY.md):
+`provision-team.py` (plan by default), `farm-instance`, `build-console.py`, and the `@` template units.
+The legacy installer/update/watchdog below manage a single instance and must not be used for profile cutover.
+
 The Farm on a Linux server for the Milvow team: [docs/RUNBOOK-SERVER.md](../../docs/RUNBOOK-SERVER.md) is the
 procedure. Scripts and units keep LF line endings and the executable bit in git (`.gitattributes`; checked by
 `tests/test_linux_server.py`).

@@ -118,6 +118,8 @@ def db_up() -> None:
     from farm.db.local import get_local_port
 
     try:
+        if os.environ.get("FARM_REQUIRE_EXTERNAL_DB") == "1":
+            raise RuntimeError("Embedded Postgres is disabled for private Farm profiles")
         print(f"local db ready on port {get_local_port()}")
     except Exception as exc:
         print(f"db up FAIL: {_safe(exc)}")
@@ -153,7 +155,7 @@ def db_reset_local() -> None:
     """Drop and recreate the LOCAL embedded database (refuses when the configured URL is not local)."""
     from farm.db.local import get_local_port, reset_local
 
-    if not is_local_db():
+    if os.environ.get("FARM_REQUIRE_EXTERNAL_DB") == "1" or not is_local_db():
         print("db reset-local REFUSED: FARM_DB_URL / SUPABASE_DB_URL points to a non-local database")
         raise typer.Exit(code=1)
     try:

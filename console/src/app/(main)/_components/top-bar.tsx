@@ -1,13 +1,13 @@
 "use client";
 
 import { Suspense, useEffect, useState } from "react";
+
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { CommandSearchButton, NotificationsBell, PeriodSelect } from "@/components/kit";
 
-const loadPalette = () =>
-  import("./header/search-palette").then((module) => module.SearchPalette);
+const loadPalette = () => import("./header/search-palette").then((module) => module.SearchPalette);
 const SearchPalette = dynamic(loadPalette, { ssr: false });
 
 export function TopBarSearch() {
@@ -35,7 +35,7 @@ export function TopBarSearch() {
         }}
         onPointerEnter={() => void loadPalette()}
         onFocus={() => void loadPalette()}
-        className="w-40 sm:w-56 md:w-64"
+        className="max-sm:justify-center! max-sm:w-9! max-sm:px-0! sm:w-56 md:w-64 max-sm:[&>span>span]:hidden max-sm:[&_kbd]:hidden"
       />
       {mounted ? <SearchPalette open={open} onOpenChange={setOpen} /> : null}
     </>
@@ -59,7 +59,18 @@ function PeriodSelectInner() {
 
 export function TopBarPeriodSelect() {
   return (
-    <Suspense fallback={<PeriodSelect value="7d" onChange={() => { /* fallback */ }} loading className="w-32 sm:w-36" />}>
+    <Suspense
+      fallback={
+        <PeriodSelect
+          value="7d"
+          onChange={() => {
+            /* fallback */
+          }}
+          loading
+          className="w-32 sm:w-36"
+        />
+      }
+    >
       <PeriodSelectInner />
     </Suspense>
   );
@@ -76,9 +87,7 @@ export function LiveDot() {
         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
         <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
       </span>
-      <span className="font-semibold text-[11px] text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">
-        live
-      </span>
+      <span className="font-semibold text-[11px] text-[var(--kit-text-primary,#111827)] dark:text-[#f0f6fc]">live</span>
     </div>
   );
 }

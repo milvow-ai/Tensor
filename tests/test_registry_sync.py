@@ -152,5 +152,8 @@ async def test_capability_schemas_are_stored_for_the_console(pool: DbPool, regis
             "from public.capabilities where name = 'verify_email'"
         )
         assert await cur.fetchone() == (True, True)
-        cur = await conn.execute("select input_schema from public.capabilities where name = 'ask_ai'")
-        assert await cur.fetchone() == ({},)  # no model yet: routable, but no generated tool
+        cur = await conn.execute(
+            "select input_schema->'properties' ?& array['task','model','effort'], "
+            "output_schema->'properties' ? 'text' from public.capabilities where name = 'ask_ai'"
+        )
+        assert await cur.fetchone() == (True, True)

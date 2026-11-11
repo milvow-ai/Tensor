@@ -27,11 +27,13 @@ FARM_HTTP_PORT="${FARM_HTTP_PORT:-8787}"
 FARM_URL="http://${FARM_HTTP_HOST}:${FARM_HTTP_PORT}"
 BIFROST_URL="${BIFROST_URL:-http://127.0.0.1:8080}"
 
-STATE_DIR="${FARM_DATA_DIR}/watchdog"
+STATE_DIR="${WATCHDOG_STATE_DIR:-${FARM_DATA_DIR}/watchdog}"
 STATE_FILE="${STATE_DIR}/state"
-LOG_FILE="${FARM_DATA_DIR}/logs/watchdog.log"
+LOG_FILE="${WATCHDOG_LOG_FILE:-${FARM_DATA_DIR}/logs/watchdog.log}"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")"
+exec 9>"$STATE_DIR/run.lock"
+flock -n 9 || exit 0
 
 log() {
     local line

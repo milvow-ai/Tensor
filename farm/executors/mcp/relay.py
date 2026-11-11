@@ -11,7 +11,7 @@ cooldown, circuit, login alert). Messages never hold a secret: they go through `
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Any
 
 import httpx2
@@ -135,11 +135,14 @@ async def call_tool(
     *,
     timeout_s: float,
     meta: dict[str, Any] | None = None,
+    on_dispatch: Callable[[], None] | None = None,
 ) -> mcp_types.CallToolResult:
     """``tools/call`` on a fresh or kept-alive session: the server's own ``CallToolResult``, untouched.
 
     ``meta`` rides in the request's ``_meta`` (the call's token for ``CallTap``)."""
     async with asyncio.timeout(timeout_s), client:
+        if on_dispatch is not None:
+            on_dispatch()
         return await client.call_tool_mcp(name, arguments, meta=meta)
 
 

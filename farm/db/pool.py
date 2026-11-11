@@ -29,7 +29,7 @@ from psycopg.types.string import StrDumperUnknown
 from psycopg_pool import AsyncConnectionPool
 
 from farm.settings import load_env
-from farm.tenancy.context import require_tenant
+from farm.tenancy.context import current_user, require_tenant
 
 log = structlog.get_logger(__name__)
 
@@ -86,6 +86,18 @@ def get_db_url(force_local: bool = False) -> str:
     ``farm db ... --local``).
     """
     url = None if force_local else _env_url()
+    if os.environ.get("FARM_REQUIRE_EXTERNAL_DB") == "1":
+        try:
+            info = conninfo_to_dict(url) if url else {}
+        except Exception:
+            raise RuntimeError("Invalid database settings for this private Farm profile") from None
+        if not (
+            info.get("host") and info.get("user") and info.get("password") and info.get("dbname")
+            and info.get("sslmode") in {"require", "verify-ca", "verify-full"}
+        ):
+            raise RuntimeError(
+                "Private Farm profiles require an authenticated PostgreSQL connection with TLS"
+            )
     if url:
         return url
     from farm.db.local import start_local
@@ -112,9 +124,9 @@ def is_local_db() -> bool:
 RUNTIME_ROLE = "farm_app"
 """Role every tenant-scoped checkout switches to: no BYPASSRLS, so the tenant policies apply."""
 SYSTEM_ROLE = "farm_system"
-"""Role of cross-tenant maintenance checkouts: BYPASSRLS, never used for request-scoped work."""
+"""Trusted cross-tenant maintenance role, never used for request-scoped work."""
 
-_RESET_SESSION = "reset role; reset app.tenant_id"
+_RESET_SESSION = "reset role; reset app.tenant_id; reset app.user_id"
 
 
 class _NulFreeStrDumper(StrDumperUnknown):
@@ -158,6 +170,8 @@ async def tenant_connection(pool: DbPool) -> AsyncIterator[Conn]:
     async with pool.connection() as conn:
         await conn.execute(f"set role {RUNTIME_ROLE}")
         await conn.execute("select set_config('app.tenant_id', %s, false)", (str(tenant),))
+        user = current_user.get()
+        await conn.execute("select set_config('app.user_id', %s, false)", (str(user) if user else "",))
         try:
             yield conn
         finally:
@@ -166,7 +180,7 @@ async def tenant_connection(pool: DbPool) -> AsyncIterator[Conn]:
 
 @asynccontextmanager
 async def system_connection(pool: DbPool) -> AsyncIterator[Conn]:
-    """A pooled connection for cross-tenant platform maintenance (``farm_system``: BYPASSRLS, no tenant).
+    """A pooled connection for cross-tenant platform maintenance (``farm_system``, no tenant).
 
     Only for code that deliberately spans tenants (claiming queued work, sweeps, token lookup before the
     tenant is known). Rows it inserts must name their ``tenant_id``: the column has no default here.
@@ -193,7 +207,7 @@ async def open_pool(db_url: str | None = None) -> DbPool:
         conninfo=url,
         min_size=1,
         max_size=10,
-        # prepare_threshold=None: stay compatible with transaction-mode poolers (Supabase Supavisor).
+        # Tenant/role context is session-scoped. Use a direct connection or a session-mode pooler.
         kwargs={"autocommit": True, "prepare_threshold": None},
         reset=reset_session,
         configure=_configure,

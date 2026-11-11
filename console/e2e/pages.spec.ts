@@ -21,6 +21,8 @@ const SCREENS: Screen[] = [
   { name: "policies", path: "/policies", heading: "Policies & Budgets" },
   { name: "billing", path: "/usage", heading: "Usage & Cost" },
   { name: "memory", path: "/memory", heading: "Memory & Evidence" },
+  { name: "tasks", path: "/tasks", heading: "Tasks" },
+  { name: "team", path: "/team", heading: "Team usage" },
   { name: "integrations", path: "/integrations", heading: "Integrations" },
   { name: "settings", path: "/settings", heading: "Settings" },
 ];
@@ -107,7 +109,7 @@ test("every nav entry opens its page", async ({ page }) => {
     ["APIs", "/integrations"],
     ["Usage & Cost", "/usage"],
     ["Memory", "/memory"],
-    ["Approvals", "/approvals"],
+    ["Team usage", "/team"],
     ["Settings", "/settings"],
     ["Overview", "/overview"],
   ] as const;

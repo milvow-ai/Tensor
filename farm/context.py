@@ -13,6 +13,7 @@ the dataclass directly with their own pool, executors and clock.
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -52,6 +53,19 @@ class FarmContext:
     """In-process single-flight: request hash -> the running execution (see ``farm.resources.router``)."""
     connection_semaphores: dict[str, asyncio.Semaphore] = field(default_factory=dict)
     """In-process concurrency gates: connection_id -> semaphore."""
+    max_parallel: int = 64
+    _execution_gate: asyncio.Semaphore | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.max_parallel <= 1024:
+            raise ValueError("max_parallel must be between 1 and 1024")
+        if self._execution_gate is None:
+            self._execution_gate = asyncio.Semaphore(self.max_parallel)
+
+    @property
+    def execution_gate(self) -> asyncio.Semaphore:
+        assert self._execution_gate is not None
+        return self._execution_gate
 
     async def aclose(self) -> None:
         """Wait for running executions, close executors that need it, and the pool if this context owns it."""
@@ -80,5 +94,6 @@ async def build_context(db_url: str | None = None) -> FarmContext:
             "cli_agent": CliAgentExecutor(),
         },
         owns_pool=True,
+        max_parallel=int(os.environ.get("FARM_MAX_PARALLEL", "4")),
     )
 

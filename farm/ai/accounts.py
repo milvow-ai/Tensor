@@ -426,6 +426,12 @@ def account_report(account: AccountInfo, now: datetime, calls_today: int) -> dic
         "status": account.status,
         "usable": reason is None,
     }
+    identity = account.meta.get("identity")
+    if isinstance(identity, dict) and identity.get("account_hash"):
+        entry["identity"] = {
+            key: identity[key] for key in ("email", "email_masked", "display_name", "verified_at")
+            if isinstance(identity.get(key), str)
+        }
     if reason is not None:
         entry["unusable"] = reason
         back = account.retry_at(now)
@@ -502,7 +508,7 @@ def option_entry(account: AccountInfo, now: datetime) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "account": account.id,
         "ai": account.ai,
-        "label": f"{account.ai} · {account.id}",
+        "label": account.label,
         "usable": reason is None,
     }
     if reason is not None:

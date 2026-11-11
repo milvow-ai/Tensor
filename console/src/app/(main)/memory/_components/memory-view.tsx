@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+
 import Link from "next/link";
 
 import {
@@ -20,14 +21,13 @@ import { toast } from "sonner";
 
 import { EmptyState } from "@/components/farm/states";
 import { FilterSelect, MetricCard, StatusChip } from "@/components/kit";
-
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { fmtAbsolute } from "@/lib/farm/format";
 import type { EvidenceRow, FactRow } from "@/lib/farm/types";
 
@@ -121,7 +121,7 @@ export function MemoryView({
   const attentionCount = initialFacts.length - freshCount;
 
   return (
-    <div className="space-y-6">
+    <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="min-w-0 space-y-6">
       <section aria-label="Memory overview" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Facts" value={initialFacts.length} icon={<Database className="size-4" />} />
         <MetricCard
@@ -179,21 +179,19 @@ export function MemoryView({
             </>
           )}
 
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "facts" | "evidence")}>
-            <TabsList className="h-8">
-              <TabsTrigger value="facts" className="px-3 text-xs">
-                Facts ({filteredFacts.length})
-              </TabsTrigger>
-              <TabsTrigger value="evidence" className="px-3 text-xs">
-                Evidence ({filteredEvidence.length})
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <TabsList className="h-8">
+            <TabsTrigger value="facts" className="px-3 text-xs">
+              Facts ({filteredFacts.length})
+            </TabsTrigger>
+            <TabsTrigger value="evidence" className="px-3 text-xs">
+              Evidence ({filteredEvidence.length})
+            </TabsTrigger>
+          </TabsList>
         </div>
       </div>
 
       {/* Facts View */}
-      {activeTab === "facts" && (
+      <TabsContent value="facts">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="font-semibold text-base">Knowledge Base Facts</CardTitle>
@@ -276,69 +274,69 @@ export function MemoryView({
             </Table>
           </CardContent>
         </Card>
-      )}
+      </TabsContent>
 
       {/* Evidence View */}
-      {activeTab === "evidence" && (
+      <TabsContent value="evidence">
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="font-semibold text-base">Captured Evidence & Artifacts</h3>
             <span className="text-muted-foreground text-xs">{filteredEvidence.length} items</span>
           </div>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {filteredEvidence.length === 0 ? (
-            <div className="col-span-full flex h-32 items-center justify-center rounded-lg border text-muted-foreground text-xs">
-              No evidence artifacts found matching search query.
-            </div>
-          ) : (
-            filteredEvidence.map((ev) => (
-              <Card key={ev.id} className="overflow-hidden transition-colors hover:border-primary/50">
-                <button
-                  type="button"
-                  className="group relative flex aspect-video w-full cursor-pointer items-center justify-center border-b bg-muted/60 text-left"
-                  onClick={() => setSelectedEvidence(ev)}
-                >
-                  <div className="flex flex-col items-center gap-1.5 text-muted-foreground transition-colors group-hover:text-primary">
-                    <ImageIcon className="size-8" />
-                    <span className="font-medium text-[11px]">Click to inspect capture</span>
-                  </div>
-                  <Badge variant="secondary" className="absolute top-2 right-2 gap-1 text-[10px]">
-                    <Shield className="size-2.5 text-emerald-600" />
-                    <span>Robots: {ev.robots_decision}</span>
-                  </Badge>
-                </button>
-                <CardHeader className="p-3 pb-1">
-                  <div className="flex items-center justify-between">
-                    <span className="max-w-[200px] truncate font-medium text-xs">{ev.url ?? ev.path}</span>
-                    <Badge variant="outline" className="text-[10px]">
-                      {ev.facts_count} facts
+            {filteredEvidence.length === 0 ? (
+              <div className="col-span-full flex h-32 items-center justify-center rounded-lg border text-muted-foreground text-xs">
+                No evidence artifacts found matching search query.
+              </div>
+            ) : (
+              filteredEvidence.map((ev) => (
+                <Card key={ev.id} className="overflow-hidden transition-colors hover:border-primary/50">
+                  <button
+                    type="button"
+                    className="group relative flex aspect-video w-full cursor-pointer items-center justify-center border-b bg-muted/60 text-left"
+                    onClick={() => setSelectedEvidence(ev)}
+                  >
+                    <div className="flex flex-col items-center gap-1.5 text-muted-foreground transition-colors group-hover:text-primary">
+                      <ImageIcon className="size-8" />
+                      <span className="font-medium text-[11px]">Click to inspect capture</span>
+                    </div>
+                    <Badge variant="secondary" className="absolute top-2 right-2 gap-1 text-[10px]">
+                      <Shield className="size-2.5 text-emerald-600" />
+                      <span>Robots: {ev.robots_decision}</span>
                     </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-2 p-3 pt-1">
-                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                    <span>Captured:</span>
-                    <span>{fmtAbsolute(ev.captured_at)}</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-1 rounded bg-muted/50 px-2 py-1 font-mono text-[11px]">
-                    <span className="truncate">SHA256: {ev.sha256.slice(0, 16)}...</span>
-                    <button
-                      type="button"
-                      onClick={() => copyText(ev.sha256, "SHA256 Hash")}
-                      className="text-muted-foreground hover:text-foreground"
-                      title="Copy full hash"
-                      aria-label="Copy full SHA256 hash"
-                    >
-                      <Copy className="size-3" />
-                    </button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))
-          )}
+                  </button>
+                  <CardHeader className="p-3 pb-1">
+                    <div className="flex items-center justify-between">
+                      <span className="max-w-[200px] truncate font-medium text-xs">{ev.url ?? ev.path}</span>
+                      <Badge variant="outline" className="text-[10px]">
+                        {ev.facts_count} facts
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-2 p-3 pt-1">
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                      <span>Captured:</span>
+                      <span>{fmtAbsolute(ev.captured_at)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-1 rounded bg-muted/50 px-2 py-1 font-mono text-[11px]">
+                      <span className="truncate">SHA256: {ev.sha256.slice(0, 16)}...</span>
+                      <button
+                        type="button"
+                        onClick={() => copyText(ev.sha256, "SHA256 Hash")}
+                        className="text-muted-foreground hover:text-foreground"
+                        title="Copy full hash"
+                        aria-label="Copy full SHA256 hash"
+                      >
+                        <Copy className="size-3" />
+                      </button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))
+            )}
           </div>
         </div>
-      )}
+      </TabsContent>
 
       {/* Evidence Lightbox Dialog */}
       <Dialog open={selectedEvidence !== null} onOpenChange={(open) => !open && setSelectedEvidence(null)}>
@@ -412,6 +410,6 @@ export function MemoryView({
           )}
         </DialogContent>
       </Dialog>
-    </div>
+    </Tabs>
   );
 }

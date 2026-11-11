@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from farm.db.pool import DbPool, system_connection, tenant_connection
 from farm.secrets import redact
+from farm.tenancy.provenance import operator_snapshot
 
 log = structlog.get_logger(__name__)
 
@@ -80,9 +81,10 @@ class Trajectory:
         run_id = uuid4()
         async with tenant_connection(pool) as conn:
             await conn.execute(
-                "insert into public.runs (id, capability, caller, strategy, status, started_at) "
-                "values (%s, %s, %s, %s, 'running', %s)",
-                (run_id, capability, caller, strategy, clock()),
+                "insert into public.runs (id, capability, caller, strategy, status, started_at, "
+                "operator_user_id, operator_email, operator_client) "
+                "values (%s, %s, %s, %s, 'running', %s, %s, %s, %s)",
+                (run_id, capability, caller, strategy, clock(), *operator_snapshot()),
             )
         return cls(pool, run_id, clock)
 

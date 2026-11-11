@@ -257,7 +257,7 @@ async def test_router_blocks_paid_call_when_hard_stop_exceeded(
         executors={"api": executor},
     )
 
-    now = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
+    now = ctx.clock()
 
     # Set unit_cost_usd to 0.01 so these are paid connections
     async with pool.connection() as conn:

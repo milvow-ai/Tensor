@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +23,7 @@ from farm.executors.base import ErrorKind
 from farm.gateway.middleware import caller_from_client_name
 from farm.gateway.server import INFRA_TOOLS, build_server
 from farm.registry import CapabilitySpec, Registry, load_registry
-from tests.conftest import REOON_URL, START, FakeClock, zerobounce_body
+from tests.conftest import REOON_URL, FakeClock, zerobounce_body
 from tests.farm_helpers import EMAIL, ScriptedExecutor, failure, fetch, ok_result, only_reoon_01
 
 type Make = Callable[..., Awaitable[FarmContext]]
@@ -75,11 +75,13 @@ async def test_a_tool_is_generated_for_every_capability_that_has_models_and_only
         "ai_reply",
         "ai_recover",
         "ai_attention",
+        "ai_options",
         "ai_result",
         "ai_start",
         "ai_start_many",
         "ai_status",
         "ai_wait",
+        "call_tool", "describe_tool", "list_server_tools", "search_tools",
         *INFRA_TOOLS,
     }
     assert "unmodelled" not in tools
@@ -211,7 +213,11 @@ async def test_over_http_without_a_configured_token_nothing_is_served(
 async def test_get_capacity_shows_state_remaining_and_the_next_reset(
     pool: DbPool, farm_factory: Make, registry: Registry, http: respx.MockRouter
 ) -> None:
-    clock = FakeClock()
+    # PostgreSQL's quota functions use its current clock. Use the same instant for the gateway.
+    async with pool.connection() as conn:
+        row = await (await conn.execute("select now()")).fetchone()
+        assert row is not None
+    clock = FakeClock(row[0])
     ctx = await farm_factory(only_reoon_01(registry), clock=clock)
     http.get(REOON_URL).respond(
         429, headers={"Retry-After": "90"}, json={"status": "error", "reason": "slow down"}
@@ -233,7 +239,7 @@ async def test_get_capacity_shows_state_remaining_and_the_next_reset(
         "cooldown",
         "rate_limited",
     )
-    assert reoon["cooldown_until"].startswith((START + timedelta(seconds=90)).strftime("%Y-%m-%dT%H:%M:%S"))
+    assert datetime.fromisoformat(reoon["cooldown_until"]) == row[0] + timedelta(seconds=90)
     (credits,) = reoon["units"]
     assert (credits["limit"], credits["used"], credits["remaining"], credits["period"]) == (
         20.0,
@@ -241,11 +247,13 @@ async def test_get_capacity_shows_state_remaining_and_the_next_reset(
         20.0,
         "day",
     )
-    assert credits["next_reset_at"].startswith("2026-10-05T00:00:00")  # daily, UTC
+    midnight = row[0].replace(hour=0, minute=0, second=0, microsecond=0)
+    assert datetime.fromisoformat(credits["next_reset_at"]) == midnight + timedelta(days=1)
     assert zerobounce["available"] is True
     (zb_credits,) = zerobounce["units"]
     assert (zb_credits["used"], zb_credits["remaining"], zb_credits["period"]) == (1.0, 99.0, "month")
-    assert zb_credits["next_reset_at"].startswith("2026-11-01T00:00:00")  # anchor day 1
+    next_month = (midnight.replace(day=1) + timedelta(days=32)).replace(day=1)
+    assert datetime.fromisoformat(zb_credits["next_reset_at"]) == next_month
 
 
 async def test_list_resources_describes_the_farm_without_any_credentials_reference(

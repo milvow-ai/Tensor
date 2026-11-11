@@ -82,6 +82,32 @@ async def test_a_listed_tool_is_the_servers_own_definition_byte_for_byte(mcp_wor
         assert _raw(mine) == _raw(tool) | {"name": f"fake__{name}"}
 
 
+async def test_live_gateway_discovers_new_server_and_removes_disabled_tools_without_restart(
+    mcp_world: WorldFactory,
+) -> None:
+    from farm.db.pool import tenant_connection
+    from farm.registry.sync import sync_registry
+
+    world = await mcp_world(mcp_registry(), {"fake-01": create_fake_rich_server("fake-01")})
+    gateway = await world.gateway()
+    async with Client(gateway) as client:
+        assert not any(t.name.startswith("fake__") for t in await client.list_tools())
+        await sync_registry(world.ctx.pool, mcp_registry(fake=mcp_provider()))
+        await world.sync()
+        assert "fake__echo" in {t.name for t in await client.list_tools()}
+        hits = await client.call_tool("search_tools", {"query": "fake echo message"})
+        assert "fake__echo" in str(hits)
+        answer = await client.call_tool("call_tool", {"name": "fake__echo", "arguments": {"message": "live"}})
+        assert answer.content[0].text == "echo: live"  # type: ignore[union-attr]
+        async with tenant_connection(world.ctx.pool) as conn:
+            await conn.execute("update providers set enabled=false where id='fake'")
+        assert "fake__echo" not in {t.name for t in await client.list_tools()}
+        with pytest.raises(ToolError, match="Unknown tool"):
+            await client.call_tool("call_tool", {"name": "fake__echo", "arguments": {"message": "gone"}})
+        listed = await client.call_tool("list_server_tools", {"server": "fake"})
+        assert "fake__echo" not in str(listed)
+
+
 async def test_every_kind_of_answer_comes_back_exactly_as_the_server_sent_it(mcp_world: WorldFactory) -> None:
     remote = create_fake_rich_server("fake-01")
     world = await mcp_world(mcp_registry(fake=mcp_provider()), {"fake-01": remote})
@@ -374,7 +400,8 @@ async def test_a_call_that_takes_longer_than_asked_fails_as_a_timeout_and_the_ne
     assert slow.is_error and "timeout" in slow.content[0].text  # type: ignore[union-attr]
     assert after.content[0].text == "echo: still here"  # type: ignore[union-attr]
     kinds = await fetch(world.ctx.pool, "select error_kind from runs where status = 'failed'")
-    assert kinds == [("timeout",)]
+    # slow is unannotated: a timeout cannot prove the operation had no external effect.
+    assert kinds == [("outcome_unknown",)]
 
 
 async def test_a_rate_limited_account_cools_down_for_as_long_as_it_asked_and_the_next_one_answers(

@@ -54,6 +54,7 @@ from tests.test_ai_jobs import (  # noqa: F401  (the fixtures are used by name)
     finish,
     pids_of,
     start,
+    with_choice,
 )
 
 SLOW = 60  # seconds a fake CLI sleeps when the test means to interrupt it
@@ -83,7 +84,7 @@ def per_account_outputs(delay_s: float = 0.0) -> dict[str, dict[str, Any]]:
 
 async def test_three_claude_and_two_gemini_accounts_run_in_parallel_and_return_their_exact_results(aip: Aip) -> None:
     aip.harness.set_response(per_account=per_account_outputs(delay_s=3.5))
-    jobs = [{"task": f"job {i}", "ai": ai} for i, ai in enumerate(["claude"] * 3 + ["gemini"] * 2)]
+    jobs = [with_choice({"task": f"job {i}", "ai": ai}) for i, ai in enumerate(["claude"] * 3 + ["gemini"] * 2)]
     async with aip.client() as client:
         started = await call(client, "ai_start_many", jobs=jobs, distinct_accounts=True)
         assert started["ok"] is True
@@ -107,7 +108,7 @@ async def test_more_jobs_than_accounts_queue_per_account_without_distinct_accoun
     aip.harness.set_response(per_account=per_account_outputs(delay_s=0.5))
     async with aip.client() as client:
         started = await call(
-            client, "ai_start_many", jobs=[{"task": f"job {i}", "ai": "gemini"} for i in range(5)], distinct_accounts=False
+            client, "ai_start_many", jobs=[with_choice({"task": f"job {i}", "ai": "gemini"}) for i in range(5)], distinct_accounts=False
         )
         accounts = [j["account"] for j in started["jobs"]]
         assert accounts == ["agy-01", "agy-02", "agy-01", "agy-02", "agy-01"]  # spread, then queued behind each other
@@ -129,7 +130,7 @@ async def test_a_worker_that_fails_is_named_with_the_reason_while_the_others_del
     aip.harness.set_response(per_account=outputs)
     async with aip.client() as client:
         started = await call(
-            client, "ai_start_many", jobs=[{"task": "same task", "ai": "claude"} for _ in range(3)]
+            client, "ai_start_many", jobs=[with_choice({"task": "same task", "ai": "claude"}) for _ in range(3)]
         )
         results = await finish(client, [j["job_id"] for j in started["jobs"]])
     good = [r for r in results if r["ok"]]
@@ -157,7 +158,7 @@ async def test_the_main_ai_finds_a_wrong_answer_and_iterates_with_the_same_worke
         started = await call(
             client,
             "ai_start_many",
-            jobs=[{"task": "Add 5 and 7. Answer as JSON.", "ai": "claude", "json_schema": schema} for _ in range(3)],
+            jobs=[with_choice({"task": "Add 5 and 7. Answer as JSON.", "ai": "claude", "json_schema": schema}) for _ in range(3)],
         )
         ids = [j["job_id"] for j in started["jobs"]]
         first_round = await finish(client, ids)
@@ -194,11 +195,11 @@ async def test_a_conversation_whose_account_got_limited_meanwhile_fails_with_acc
     wrong = {"stdout": claude_ok("WRONG ACCOUNT", session="s-B")}
     aip.harness.set_response(per_account={"claude-02": {"stdout": claude_ok("one", session="s-A")}, "claude-03": wrong})
     async with aip.client() as client:
-        talk = await start(client, ai="claude")
+        talk = await start(client, ai="claude", retry_other_account=False)
         await finish(client, [talk["job_id"]])
         # another piece of work uses up the account's limit while the conversation is idle
         aip.harness.set_response(per_account={"claude-02": {"stdout": claude_limit(), "exit_code": 1}, "claude-03": wrong})
-        other = await start(client, ai="claude", account="claude-02", task="unrelated work")
+        other = await start(client, ai="claude", account="claude-02", task="unrelated work", retry_other_account=False)
         (hit,) = await finish(client, [other["job_id"]])
         assert hit["error"]["kind"] == "limit" and datetime.fromisoformat(hit["error"]["retry_at"]) == RESET_AT
 
@@ -443,7 +444,7 @@ async def test_a_large_output_is_a_file_with_its_path_and_a_20000_character_prev
 async def test_the_blocking_tools_and_the_job_tools_share_the_same_accounts_and_ledger(aip: Aip) -> None:
     aip.harness.set_response(stdout=claude_ok("same pool"))
     async with aip.client() as client:
-        blocking = await call(client, "ask_ai", ai="claude", task="blocking")
+        blocking = await call(client, "ask_ai", **with_choice({"ai": "claude", "task": "blocking"}))
         job = await start(client, ai="claude", task="job")
         (result,) = await finish(client, [job["job_id"]])
         listing = await call(client, "list_ais")

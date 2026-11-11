@@ -88,8 +88,11 @@ def test_farm_serve_over_stdio_lists_the_tools_and_answers_verify_email(
     seen = asyncio.run(asyncio.wait_for(talk(url, EMAIL), STARTUP_TIMEOUT_S))
 
     assert seen["tools"] == [
+        "ai_attention",
         "ai_cancel",
         "ai_conversations",
+        "ai_options",
+        "ai_recover",
         "ai_reply",
         "ai_result",
         "ai_start",
@@ -98,14 +101,24 @@ def test_farm_serve_over_stdio_lists_the_tools_and_answers_verify_email(
         "ai_wait",
         "ask_ai",
         "ask_ai_batch",
+        "call_tool",
+        "describe_tool",
         "farm_guide",
+        "farm_operator",
+        "get_ai_usage",
         "get_capacity",
         "get_run",
         "get_usage",
         "list_ais",
         "list_integration_requests",
         "list_resources",
+        "list_server_tools",
+        "memory_delete",
+        "memory_get",
+        "memory_list",
+        "memory_put",
         "request_integration",
+        "search_tools",
         "verify_email",
     ]  # the AI tools included: the server no longer hides them from tests by test name
     envelope = seen["envelope"]

@@ -44,6 +44,7 @@ _KIND_OF_ROUTER_KIND: dict[str, FailureKind] = {
     "needs_login": "auth",
     "timeout": "timeout",
     "bad_request": "bad_request",
+    "outcome_unknown": "outcome_unknown",
     "session_unknown": "bad_request",
     "policy_blocked": "account_unavailable",
 }
@@ -71,7 +72,7 @@ class AiRequestError(Exception):
         self.account = account
         self.retry_at = retry_at
         self.choices = choices
-        """``selection_required`` / ``invalid_selection``: per job, what is missing and the accounts' menus."""
+        """Per-job missing choices and account menus for selection_required / invalid_selection."""
 
 
 @dataclass(frozen=True)

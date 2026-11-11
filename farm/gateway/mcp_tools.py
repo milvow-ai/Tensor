@@ -6,8 +6,8 @@ title, description, input and output schema, annotations, icons and ``_meta``: n
 byte for byte). Calling one goes through the router as the capability ``mcp:<provider>``: pool, strategy,
 health, quota, budget and run history apply, and the answer is the server's own ``CallToolResult``, all
 content blocks, ``structuredContent`` and ``isError`` included. A tool that reports ``isError`` is a result
-(the router does not fail over on it); only the path to the server can fail, and then the next account is
-tried and the error names each account and the kind of failure.
+(the router does not fail over on it). Transport failures can move to another account only when retries
+are safe or no call was dispatched; uncertain writes stop for reconciliation.
 
 Built on FastMCP's primitives: ``Tool`` / ``ToolResult.from_mcp_result`` for the relay, and the BM25
 ``search_tools`` / ``call_tool`` transform for discovery (tools that are not listed stay hidden, searchable
@@ -32,12 +32,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, cast
 from uuid import uuid4
+from weakref import WeakKeyDictionary
 
 import mcp_types
 import structlog
 from fastmcp import FastMCP
 from fastmcp.exceptions import NotFoundError, ToolError
 from fastmcp.server.context import Context
+from fastmcp.server.providers import Provider
 from fastmcp.server.transforms.search import BM25SearchTransform
 from fastmcp.server.transforms.search.base import _extract_searchable_text
 from fastmcp.server.transforms.search.bm25 import _BM25Index, _catalog_hash, _tokenize
@@ -65,6 +67,7 @@ SEARCH_MAX_RESULTS = int(os.environ.get("FARM_MCP_SEARCH_MAX_RESULTS", "25"))
 SEARCH_DEFAULT_RESULTS = 10
 DESCRIPTION_LIMIT = 160
 DESCRIBE_TOOL = "describe_tool"
+DISCOVERY_TOOLS = ("search_tools", DESCRIBE_TOOL, "call_tool", "list_server_tools")
 
 INSTRUCTIONS = (
     " The Farm also fronts MCP servers ({namespaces}): their tools are named <server>__<tool> and keep the "
@@ -72,7 +75,8 @@ INSTRUCTIONS = (
     "listed (name, server, short description, risk; no schemas), describe_tool(name) returns one tool's "
     "full definition and call_tool(name, arguments) runs any of them. Every call goes to the best account "
     "of that server, with "
-    "failover to the next one. A call's arguments may carry _farm: {{account, strategy, timeout_s}} "
+    "safe failover where the tool permits retries. Uncertain writes require reconciliation. "
+    "A call's arguments may carry _farm: {{account, strategy, timeout_s}} "
     "(all optional) to pick the account or strategy; it is removed before the server sees the call."
 )
 
@@ -138,6 +142,7 @@ class PassthroughTool(Tool):
     _ctx: FarmContext = PrivateAttr()
     _provider: store.McpProvider = PrivateAttr()
     _stored: store.StoredTool = PrivateAttr()
+    _direct: bool = PrivateAttr(default=False)
 
     @classmethod
     def create(cls, ctx: FarmContext, item: ExposedTool) -> PassthroughTool:
@@ -156,6 +161,7 @@ class PassthroughTool(Tool):
         tool._ctx = ctx
         tool._provider = item.provider
         tool._stored = item.stored
+        tool._direct = item.direct
         return tool
 
     def to_mcp_tool(self, **overrides: Any) -> mcp_types.Tool:
@@ -186,10 +192,15 @@ class PassthroughTool(Tool):
                 strategy=control.strategy,
                 pin=control.account,
                 caller=current_caller.get(),
+                # Idempotence under one account does not make a write safe in another account's workspace.
+                retry_safe=bool(
+                    self._stored.definition.annotations
+                    and self._stored.definition.annotations.read_only_hint is True
+                ),
             )
         except UnknownCapability:
             raise ToolError(
-                f"the Farm does not know '{self._provider.capability}' yet: restart `farm serve`"
+                f"the Farm has no route for '{self._provider.capability}': sync this MCP provider"
             ) from None
         except NotImplementedError as exc:
             raise ToolError(str(exc)) from None
@@ -206,10 +217,6 @@ class McpSurface:
     @property
     def listed(self) -> tuple[ExposedTool, ...]:
         return tuple(item for item in self.tools if item.direct)
-
-
-_LAST_SURFACE: McpSurface | None = None
-_LAST_POOL: DbPool | None = None
 
 
 def resolve_tool_in_catalog(name: str, catalog: Sequence[Tool]) -> Tool | None:
@@ -284,50 +291,18 @@ def hit_of(tool: Tool, score: float) -> SearchHit:
     )
 
 
-async def list_server_tools(server: str, pool: DbPool | None = None) -> list[dict[str, str]]:
+async def list_server_tools(server: str, pool: DbPool) -> list[dict[str, str]]:
     """Return every tool name and one-line description for one MCP server."""
-    global _LAST_SURFACE, _LAST_POOL
-    p_pool = pool or _LAST_POOL
-
-    if _LAST_SURFACE is not None:
-        matches = [
-            t for t in _LAST_SURFACE.tools
-            if t.provider.namespace == server or t.provider.id == server
-        ]
-        if matches:
-            return [
-                {
-                    "name": t.name,
-                    "description": (
-                        (t.stored.definition.description or "").splitlines()[0]
-                        if t.stored.definition.description
-                        else ""
-                    ),
-                }
-                for t in matches
-            ]
-
-    if p_pool is not None:
-        providers = await store.list_providers(p_pool, enabled_only=False)
-        target_providers = [p for p in providers if p.namespace == server or p.id == server]
-        if target_providers:
-            p = target_providers[0]
-            stored = await store.load_tools(p_pool, [p.id])
-            plan = plan_exposure([p], stored, direct_limit=len(stored) + 1)
-            name_map = {item.stored.name: item.name for item in plan}
-            return [
-                {
-                    "name": name_map.get(t.name, f"{p.namespace}__{t.name}"),
-                    "description": (
-                        (t.definition.description or "").splitlines()[0]
-                        if t.definition.description
-                        else ""
-                    ),
-                }
-                for t in stored
-            ]
-
-    return []
+    providers = await store.list_providers(pool)
+    provider = next((p for p in providers if p.namespace == server or p.id == server), None)
+    if provider is None:
+        return []
+    stored = await store.load_tools(pool, [provider.id])
+    plan = plan_exposure([provider], stored, direct_limit=len(stored) + 1)
+    return [
+        {"name": item.name, "description": one_line(item.stored.definition.description)}
+        for item in plan
+    ]
 
 
 class FarmBM25SearchTransform(BM25SearchTransform):
@@ -359,7 +334,11 @@ class FarmBM25SearchTransform(BM25SearchTransform):
         return [tool for tool in await self.get_tool_catalog(ctx) if tool.name not in synthetic]
 
     async def transform_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
-        return [*await super().transform_tools(tools), self._make_describe_tool()]
+        # Direct exposure is recomputed with the DB catalogue, including servers added after startup.
+        visible = [t for t in tools if t.name in self._always_visible or (
+            isinstance(t, PassthroughTool) and t._direct
+        )]
+        return [*visible, self._make_search_tool(), self._make_call_tool(), self._make_describe_tool()]
 
     async def _search(self, tools: Sequence[Tool], query: str) -> Sequence[Tool]:
         """FastMCP's BM25 search over a :class:`_ScoredIndex`, rebuilt only when the catalog changed."""
@@ -450,59 +429,76 @@ class FarmBM25SearchTransform(BM25SearchTransform):
         return res if isinstance(res, Tool) else None
 
 
+class LiveMcpProvider(Provider):
+    """Read the cached catalogue per request, without contacting an upstream on discovery.
+
+    No process-wide tool cache: every read retains the request's tenant and revocations/config changes
+    take effect on the next call. A missing tenant fails closed in tenant_connection.
+    """
+
+    def __init__(self, ctx: FarmContext, native: set[str], direct_limit: int, pinned: Sequence[str]) -> None:
+        super().__init__()
+        self.ctx, self.native, self.direct_limit, self.pinned = ctx, native, direct_limit, pinned
+
+    async def surface(self) -> McpSurface:
+        providers = await store.list_providers(self.ctx.pool)
+        stored = await store.load_tools(self.ctx.pool, [p.id for p in providers]) if providers else []
+        plan = plan_exposure(providers, stored, direct_limit=self.direct_limit, pinned=self.pinned)
+        return McpSurface(tuple(item for item in plan if item.name not in self.native))
+
+    async def _list_tools(self) -> Sequence[Tool]:
+        return [PassthroughTool.create(self.ctx, item) for item in (await self.surface()).tools]
+
+
+_LIVE_PROVIDERS: WeakKeyDictionary[FastMCP, LiveMcpProvider] = WeakKeyDictionary()
+
+
 async def register_mcp_tools(
     server: FastMCP,
     ctx: FarmContext,
     *,
     direct_limit: int = 40,
     pinned: Sequence[str] = (),
-) -> McpSurface | None:
-    """Publish the cached tools of every enabled pass-through provider; ``None`` when there is none.
+) -> McpSurface:
+    """Publish the live cached tools of every enabled pass-through provider.
 
     Reads the catalogue ``farm mcp sync`` stored: starting the server never waits for an MCP server. The
     listed tools are chosen by ``farm.mcp.expose``; the others stay reachable through ``search_tools`` /
-    ``call_tool``, which exist whenever a provider is configured.
+    ``call_tool``, which also exist before the first provider is added.
     """
+    existing = _LIVE_PROVIDERS.get(server)
+    if existing is not None:
+        if existing.ctx.pool is not ctx.pool:
+            raise ValueError("cannot rebind a live gateway to a different database")
+        return await existing.surface()
     providers = await store.list_providers(ctx.pool)
-    if not providers:
-        return None
-    if "mcp" not in ctx.executors:
+    if providers and "mcp" not in ctx.executors:
         log.warning("mcp.no_executor", providers=[p.id for p in providers])
     for provider in providers:
         await store.ensure_capability(ctx.pool, provider)
-
-    stored = await store.load_tools(ctx.pool, [p.id for p in providers])
-    plan = plan_exposure(providers, stored, direct_limit=direct_limit, pinned=pinned)
-    native = {tool.name for tool in await server.list_tools(run_middleware=False)}
-    surface: list[ExposedTool] = []
-    for item in plan:
-        if item.name in native:
-            log.warning("mcp.name_collision", tool=item.name, provider=item.provider.id)
-            continue
-        server.add_tool(PassthroughTool.create(ctx, item))
-        surface.append(item)
 
     @server.tool(name="list_server_tools", annotations={"readOnlyHint": True})
     async def list_server_tools_tool(server: str) -> list[dict[str, str]]:
         """List all tools and one-line descriptions for one MCP server."""
         return await list_server_tools(server, pool=ctx.pool)
 
-    listed = native | {item.name for item in surface if item.direct}
+    native = {tool.name for tool in await server.list_tools(run_middleware=False)}
+    native |= {"search_tools", "describe_tool", "call_tool"}
+    live_provider = LiveMcpProvider(ctx, native, direct_limit, pinned)
+    server.add_provider(live_provider)
+    _LIVE_PROVIDERS[server] = live_provider
+    result_surface = await live_provider.surface()
     server.add_transform(
-        FarmBM25SearchTransform(max_results=SEARCH_MAX_RESULTS, always_visible=sorted(listed))
+        FarmBM25SearchTransform(max_results=SEARCH_MAX_RESULTS, always_visible=sorted(native))
     )
     namespaces = ", ".join(sorted(provider.namespace for provider in providers))
     server.instructions = (server.instructions or "") + INSTRUCTIONS.format(namespaces=namespaces)
     log.info(
         "mcp.registered",
         providers=len(providers),
-        tools=len(surface),
-        listed=sum(1 for item in surface if item.direct),
+        tools=len(result_surface.tools),
+        listed=sum(1 for item in result_surface.tools if item.direct),
     )
-    result_surface = McpSurface(tuple(surface))
-    global _LAST_SURFACE, _LAST_POOL
-    _LAST_SURFACE = result_surface
-    _LAST_POOL = ctx.pool
     return result_surface
 
 

@@ -1,0 +1,8 @@
+{
+  "profiles": [
+    {"name": "owner", "kind": "personal", "port": 8791, "public_url": "https://owner.farm.example.com/mcp", "secrets": "/root/farm-input/owner.env", "registry": "/root/farm-input/owner.yaml"},
+    {"name": "member-a", "kind": "personal", "port": 8792, "public_url": "https://member-a.farm.example.com/mcp", "secrets": "/root/farm-input/member-a.env", "registry": "/root/farm-input/member-a.yaml"},
+    {"name": "member-b", "kind": "personal", "port": 8793, "public_url": "https://member-b.farm.example.com/mcp", "secrets": "/root/farm-input/member-b.env", "registry": "/root/farm-input/member-b.yaml"},
+    {"name": "team", "kind": "shared", "port": 8794, "public_url": "https://team.farm.example.com/mcp", "secrets": "/root/farm-input/team.env", "registry": "/root/farm-input/team.yaml"}
+  ]
+}

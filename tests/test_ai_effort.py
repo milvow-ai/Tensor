@@ -279,20 +279,13 @@ async def test_agy_and_hermes_ignore_effort(tmp_path: Path) -> None:
     assert "model_reasoning_effort" not in " ".join(calls_hermes[0]["argv"])
 
 
-async def test_agy_job_end_to_end_ignores_effort(aip: Aip) -> None:
-    """End-to-end Gemini (agy) job through FastMCP server ignores effort."""
+async def test_agy_job_end_to_end_refuses_unsupported_effort_before_execution(aip: Aip) -> None:
+    """Unsupported choices must never be silently ignored at the gateway."""
     aip.harness.set_response(stdout=agy_ok("gemini finished"))
     async with aip.client() as client:
-        started = await start(client, ai="gemini", effort="high")
-        assert started["effort"] == "high"
-        (result,) = await finish(client, [started["job_id"]])
-    assert result["ok"] is True
-    assert result["effort"] == "high"
-    assert result["effort_applied"] is False
-
-    event = aip.harness.events()[-1]
-    assert "--effort" not in event["argv"]
-    assert "model_reasoning_effort" not in " ".join(event["argv"])
+        reply = await call(client, "ai_start", task="work", ai="gemini", model="gemini-3.8-flash-high", effort="high")
+    assert reply["ok"] is False and reply["error"]["kind"] == "invalid_selection"
+    assert not aip.harness.events()
 
 
 # --- Acceptance Test: ai_reply carries effort over and allows override -------------------------
@@ -352,7 +345,7 @@ async def test_list_ais_shows_supported_efforts(aip_factory: Callable[..., Await
 
     accounts = {acc["id"]: acc for acc in report["accounts"]}
     assert accounts["claude-02"]["efforts"] == ["low", "medium", "high", "xhigh", "max"]
-    assert accounts["codex-01"]["efforts"] == ["low", "medium", "high"]
+    assert accounts["codex-01"]["efforts"] == ["low", "medium", "high", "xhigh", "max"]
     assert accounts["agy-01"]["efforts"] == []
     assert accounts["hermes-01"]["efforts"] == []
 
@@ -364,7 +357,7 @@ async def test_ask_ai_blocking_tool_passes_effort(aip: Aip) -> None:
     """The blocking ask_ai tool accepts effort and passes it to the driver."""
     aip.harness.set_response(stdout=claude_ok("blocking answer"))
     async with aip.client() as client:
-        reply = await call(client, "ask_ai", task="answer immediately", ai="claude", effort="medium")
+        reply = await call(client, "ask_ai", task="answer immediately", ai="claude", model="sonnet", effort="medium")
     assert reply["ok"] is True
     assert reply["result"]["effort"] == "medium"
     assert reply["result"]["effort_applied"] is True

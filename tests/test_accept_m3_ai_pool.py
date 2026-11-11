@@ -191,7 +191,7 @@ async def test_case_1_ask_ai_claude_over_mcp(
     async with Client(server) as client:
         reply = await client.call_tool(
             "ask_ai",
-            {"ai": "claude", "model": "sonnet", "task": "What is the meaning of life?"},
+            {"ai": "claude", "model": "sonnet", "effort": "high", "task": "What is the meaning of life?"},
         )
         envelope = reply.structured_content
         assert envelope is not None
@@ -248,7 +248,7 @@ async def test_case_2_batch_spreads_across_accounts(
 
     server = await build_server(ai_ctx)
     async with Client(server) as client:
-        tasks = [{"ai": "claude", "model": "sonnet", "task": f"Task {i}"} for i in range(3)]
+        tasks = [{"ai": "claude", "model": "sonnet", "effort": "high", "task": f"Task {i}"} for i in range(3)]
         reply = await client.call_tool("ask_ai_batch", {"tasks": tasks})
         res = reply.structured_content
         assert res is not None
@@ -293,7 +293,7 @@ async def test_case_3_usage_limit_retries_and_sets_reset_at(
     async with Client(server) as client:
         reply = await client.call_tool(
             "ask_ai",
-            {"ai": "claude", "model": "sonnet", "task": "Do work that limits claude-02"},
+            {"ai": "claude", "model": "sonnet", "effort": "high", "task": "Do work that limits claude-02"},
         )
         envelope = reply.structured_content
         assert envelope is not None
@@ -344,7 +344,7 @@ async def test_case_4_session_stickiness_and_guards(
         # Step 1: Initial call lands on claude-02 and establishes session
         reply_1 = await client.call_tool(
             "ask_ai",
-            {"ai": "claude", "model": "sonnet", "task": "Turn 1"},
+            {"ai": "claude", "model": "sonnet", "effort": "high", "task": "Turn 1"},
         )
         env_1 = reply_1.structured_content
         assert env_1 is not None and env_1["ok"] is True
@@ -356,7 +356,7 @@ async def test_case_4_session_stickiness_and_guards(
 
         reply_2 = await client.call_tool(
             "ask_ai",
-            {"ai": "claude", "session_id": sess_id, "task": "Turn 2 follow-up"},
+            {"ai": "claude", "model": "sonnet", "effort": "high", "session_id": sess_id, "task": "Turn 2 follow-up"},
         )
         env_2 = reply_2.structured_content
         assert env_2 is not None and env_2["ok"] is True
@@ -375,7 +375,7 @@ async def test_case_4_session_stickiness_and_guards(
 
         reply_3 = await client.call_tool(
             "ask_ai",
-            {"ai": "claude", "session_id": sess_id, "task": "Turn 3 after exhaustion"},
+            {"ai": "claude", "model": "sonnet", "effort": "high", "session_id": sess_id, "task": "Turn 3 after exhaustion"},
             raise_on_error=False,
         )
         env_3 = reply_3.structured_content
@@ -386,7 +386,7 @@ async def test_case_4_session_stickiness_and_guards(
         # Step 4: Unknown session returns session_unknown
         reply_4 = await client.call_tool(
             "ask_ai",
-            {"ai": "claude", "session_id": "non-existent-session-000", "task": "Who am I?"},
+            {"ai": "claude", "model": "sonnet", "effort": "high", "session_id": "non-existent-session-000", "task": "Who am I?"},
             raise_on_error=False,
         )
         env_4 = reply_4.structured_content
@@ -417,7 +417,7 @@ async def test_case_5_auth_failure_triggers_alert(
         # Route to claude-02 (priority 1)
         reply = await client.call_tool(
             "ask_ai",
-            {"ai": "claude", "task": "Test auth failure"},
+            {"ai": "claude", "model": "sonnet", "effort": "high", "task": "Test auth failure"},
             raise_on_error=False,
         )
         envelope = reply.structured_content

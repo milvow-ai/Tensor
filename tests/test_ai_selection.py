@@ -34,6 +34,9 @@ from tests.test_ai_jobs import (  # noqa: F401  (the fixtures are used by name)
     start,
 )
 
+# Imported pytest fixtures are re-exported intentionally for this test module.
+__all__ = ["aip", "aip_factory"]
+
 CLAUDE_META: dict[str, Any] = {"models": ["sonnet", "opus"]}
 DEFAULTS: dict[str, Any] = {"enabled": True, "model": "opus", "effort": "high"}
 LEGACY: dict[str, Any] = {"model": "sonnet", "default_model": "opus", "effort": "low", "default_effort": "low"}
@@ -357,12 +360,14 @@ async def test_ask_ai_without_a_choice_answers_with_the_menu_before_the_router(a
 
 async def test_ai_options_lists_accounts_with_their_choices(aip: Aip) -> None:
     await set_meta(aip, "claude-02", {"verified_models": ["sonnet"]})
+    async with tenant_connection(aip.pool) as conn:
+        await conn.execute("update connections set label='Claude work login' where id='claude-02'")
     async with aip.client() as client:
         reply = await call(client, "ai_options", ai="claude")
     (provider,) = reply["providers"]
     assert provider["effort_supported"] is True
     first = next(a for a in provider["accounts"] if a["account"] == "claude-02")
-    assert first["label"] == "claude · claude-02"
+    assert first["label"] == "Claude work login"
     assert first["models"] == [{"id": "sonnet", "source": "verified"}, {"id": "opus", "source": "configured"}]
 
 

@@ -97,9 +97,8 @@ export function useCommands() {
           setTimeout(() => track(options.key, null), SETTLE_MS);
           return;
         }
-        const reason = String(
-          (polled.data.result as { reason?: unknown } | null)?.reason ?? "The Farm could not run this command.",
-        );
+        const result = polled.data.result as { reason?: unknown; error?: unknown } | null;
+        const reason = String(result?.reason ?? result?.error ?? "The Farm could not run this command.");
         track(options.key, { id, kind, phase: status, reason, subject: options.subject });
         toast.error(`${label}: ${status}`, { id: toastId, description: reason });
         options.onRejected?.(reason);
@@ -110,7 +109,7 @@ export function useCommands() {
       if (isAlive()) {
         toast.warning(`${label}: still queued`, {
           id: toastId,
-          description: "The Farm has not picked this up yet. Is it running on the PC?",
+          description: "The Farm has not confirmed completion. Check the worker service and command history.",
         });
         track(options.key, { id, kind, phase: "timeout", subject: options.subject });
       }

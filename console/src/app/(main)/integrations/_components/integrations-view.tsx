@@ -1015,7 +1015,7 @@ export function IntegrationsView({
                   </DialogTitle>
                 </div>
                 <DialogDescription className="text-xs">
-                  {addWhat === "mcp" && "Configure stdio command or HTTP/SSE parameters. Secrets stay on your Farm PC."}
+                  {addWhat === "mcp" && "Configure a command or an HTTP/SSE endpoint. The Farm worker stores connection secrets."}
                   {addWhat === "ai" && "Configure CLI worker profile and model limits. Multi-account delegation."}
                   {addWhat === "existing" && "Connect a new credential or profile to an existing provider."}
                   {addWhat === "openapi" && "Provide OpenAPI spec and authentication environment variable."}
@@ -1285,6 +1285,8 @@ export function IntegrationsView({
                         </Label>
                         <Input
                           id="ai-models"
+                          required
+                          placeholder="Comma-separated model IDs"
                           value={aiModels}
                           onChange={(e) => setAiModels(e.target.value)}
                           className="font-mono text-xs"
@@ -1530,7 +1532,7 @@ export function IntegrationsView({
                 {!resultAiAccountId && !resultSecretEnv && (
                   <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
                     <div className="font-medium text-emerald-700 text-xs dark:text-emerald-400">
-                      Next Step on Farm PC:
+                      Run on your Farm worker
                     </div>
                     <p className="text-[11px] text-muted-foreground">
                       Complete authentication by running the following command in your terminal:

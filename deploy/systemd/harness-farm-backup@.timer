@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted backup for Harness Farm %i
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=2h
+Persistent=true
+Unit=harness-farm-backup@%i.service
+
+[Install]
+WantedBy=timers.target

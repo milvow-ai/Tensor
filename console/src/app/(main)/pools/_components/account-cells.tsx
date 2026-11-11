@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { PERIOD_LABELS } from "@/lib/farm/command-meta";
 import { DASH, fmtDuration, fmtInt, fmtPct, fmtPlanUsd, pluralize } from "@/lib/farm/format";
+import { accountIdentity } from "@/lib/farm/identity";
 import { stateReason, TONE, type Tone } from "@/lib/farm/state";
 import type { Connection } from "@/lib/farm/types";
 
@@ -31,14 +32,23 @@ import {
 import { SignInDrawer } from "./sign-in-drawer";
 
 export function AccountCell({ connection }: { connection: Connection }) {
+  const identity = accountIdentity(connection.meta);
   return (
     <div className="min-w-0">
-      <div className="truncate font-medium text-[13px]">{connection.label}</div>
+      <div className="truncate font-medium text-[13px]">{identity?.email ?? connection.label}</div>
+      {identity?.name ? <div className="truncate text-muted-foreground text-xs">{identity.name}</div> : null}
+      {identity ? (
+        <div className="text-muted-foreground text-xs" title={identity.verifiedAt ?? undefined}>
+          Verified at sign-in
+        </div>
+      ) : connection.meta.cli ? (
+        <div className="text-muted-foreground text-xs">Identity unavailable</div>
+      ) : null}
       <div className="font-mono text-muted-foreground text-xs">{connection.id}</div>
       {connection.authRef ? (
         <div
           className="max-w-[16rem] truncate font-mono text-[11px] text-muted-foreground"
-          title="A reference to where the secret lives on the PC. The secret itself is never shown here."
+          title="A reference to where the secret lives on the worker."
         >
           {connection.authRef}
         </div>

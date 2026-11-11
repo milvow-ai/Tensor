@@ -97,11 +97,11 @@ async def test_answer_gets_sources_and_records_usage_and_cost() -> None:
 
 
 @respx.mock
-async def test_model_comes_from_the_request_then_the_account() -> None:
+async def test_model_comes_from_the_request_and_does_not_use_legacy_account_metadata() -> None:
     route = respx.post(API_URL).mock(return_value=httpx.Response(200, json=ANSWER))
     executor = PerplexityApiExecutor()
     await executor.execute(_request(meta={"model": "sonar-pro"}))
-    assert json.loads(route.calls.last.request.content)["model"] == "sonar-pro"
+    assert json.loads(route.calls.last.request.content)["model"] == "sonar"
     await executor.execute(_request(meta={"model": "sonar-pro"}, model="sonar-reasoning-pro"))
     assert json.loads(route.calls.last.request.content)["model"] == "sonar-reasoning-pro"
 
@@ -207,7 +207,7 @@ async def test_the_key_never_reaches_the_logs(caplog: pytest.LogCaptureFixture) 
 @respx.mock
 async def test_the_cli_agent_executor_routes_a_perplexity_account_to_it() -> None:
     respx.post(API_URL).mock(return_value=httpx.Response(200, json=ANSWER))
-    result = await CliAgentExecutor().execute(_request())
+    result = await CliAgentExecutor().execute(_request(meta={"models": ["sonar"]}, model="sonar"))
     assert result.ok and result.data is not None and result.data["ai"] == "perplexity"
 
 

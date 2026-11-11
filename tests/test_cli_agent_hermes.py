@@ -51,7 +51,8 @@ async def test_hermes_success_basic(fake_harness: FakeCliHarness) -> None:
     req = ExecRequest(
         request_id=uuid4(),
         capability="ask_ai",
-        params={"task": "research brief", "mode": "answer", "cwd": test_cwd},
+        params={"task": "research brief", "mode": "answer", "cwd": test_cwd,
+                "model": "openrouter/deepseek/deepseek-v4-flash"},
         connection=conn,
     )
 

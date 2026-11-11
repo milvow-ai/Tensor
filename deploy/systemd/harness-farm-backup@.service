@@ -1,0 +1,23 @@
+[Unit]
+Description=Encrypted database and state backup for Harness Farm %i
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=hf-%i
+Group=hf-%i
+EnvironmentFile=/etc/harness-farm/instances/%i/runtime.env
+EnvironmentFile=/etc/harness-farm/instances/%i/backup.env
+ExecStart=/opt/harness-farm/scripts/linux/backup-state.sh
+TimeoutStartSec=15min
+MemoryMax=768M
+TasksMax=96
+CPUQuota=50%
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/harness-farm-instances/%i
+UMask=0077

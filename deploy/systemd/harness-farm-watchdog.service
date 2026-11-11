@@ -6,11 +6,13 @@ After=network-online.target harness-farm.service
 Type=oneshot
 # Root, to restart the units; the alert itself is sent as user farm (the script uses runuser).
 EnvironmentFile=/etc/harness-farm/farm.env
-ExecStart=/opt/harness-farm/scripts/linux/farm-watchdog.sh
+ExecStart=/opt/harness-farm/scripts/linux/watchdog-service.sh
+StateDirectory=harness-farm-watchdog
+StateDirectoryMode=0700
 TimeoutStartSec=120
 
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/harness-farm
+ReadWritePaths=/var/lib/harness-farm /var/lib/harness-farm-watchdog

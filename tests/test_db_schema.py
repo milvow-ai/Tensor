@@ -183,7 +183,8 @@ def test_every_table_has_tenant_id_default(db_url: str) -> None:
     rows = _rows(
         db_url,
         "select table_name, data_type, is_nullable, column_default from information_schema.columns "
-        "where table_schema = 'public' and column_name = 'tenant_id'",
+        "where table_schema = 'public' and column_name = 'tenant_id' "
+        "and table_name in (select tablename from pg_tables where schemaname='public')",
     )
     # tables added after the M1a contract also carry it
     assert {r[0] for r in rows} == set(KEY_COLUMNS) | {
@@ -193,6 +194,7 @@ def test_every_table_has_tenant_id_default(db_url: str) -> None:
         "budget_reservations",
         "api_tokens",
         "login_sessions",
+        "ai_usage_snapshots", "ai_usage_settings", "ai_job_inputs", "ai_job_checkpoints", "project_memory",
     }
     for table, data_type, nullable, default in rows:
         assert data_type == "uuid" and nullable == "NO", table
@@ -739,6 +741,65 @@ def test_local_server_never_deletes_a_foreign_directory(crash_dir: Path) -> None
     with pytest.raises(RuntimeError, match="not a PostgreSQL data directory"):
         reset_local(crash_dir)
     assert precious.read_text(encoding="utf-8") == "not a database"
+
+
+def test_supabase_member_can_read_own_private_work_and_login_only(scratch_db: Callable[[], str]) -> None:
+    """Test the positive path too: denied SELECT privileges must not masquerade as privacy."""
+    url = scratch_db()
+    with psycopg.connect(url, autocommit=True) as conn:
+        conn.execute(FAKE_AUTH)
+    command.upgrade(alembic_config(url), "head")
+    with psycopg.connect(url, autocommit=True) as conn:
+        seed_console_users(conn)
+        conn.execute("insert into providers(id,name,kind,executor) values('p','P','tool','api')")
+        conn.execute("insert into connections(id,provider_id,label,auth_ref) values('p-1','p','P','P_KEY')")
+        for email in ("member@example.com", "both@example.com"):
+            user = conn.execute("select id from users where email=%s", (email,)).fetchone()[0]
+            conv = conn.execute(
+                "insert into ai_conversations(ai,account,operator_user_id) values('claude','p-1',%s) returning id",
+                (user,),
+            ).fetchone()[0]
+            conn.execute(
+                "insert into ai_jobs(conversation_id,turn,ai,account,operator_user_id,operator_email) "
+                "values(%s,1,'claude','p-1',%s,%s)", (conv, user, email),
+            )
+            conn.execute(
+                "insert into login_sessions(connection_id,provider_id,method,state,created_by) "
+                "values('p-1','p','api_key','done',%s)", (email,),
+            )
+        conn.execute("select set_config('app.tenant_id','',false)")
+        for email, sub in (("member@example.com", MEMBER_SUB), ("both@example.com", TWO_TENANTS_SUB)):
+            _as(conn, "authenticated", email, sub)
+            assert conn.execute("select operator_email from v_ai_jobs").fetchall() == [(email,)]
+            assert conn.execute("select created_by from v_login_sessions").fetchall() == [(email,)]
+            conn.execute("reset role")
+        _as(conn, "authenticated", "stranger@example.com", STRANGER_SUB)
+        assert conn.execute("select count(*) from v_ai_jobs").fetchone() == (0,)
+        assert conn.execute("select count(*) from v_login_sessions").fetchone() == (0,)
+        conn.execute("reset role")
+    command.downgrade(alembic_config(url), "0027")
+    command.upgrade(alembic_config(url), "head")
+
+
+def test_maintenance_policies_work_without_bypassrls(db_url: str) -> None:
+    from uuid import uuid4
+
+    from psycopg import sql
+
+    role = sql.Identifier(f"farm_no_bypass_{uuid4().hex}")
+    with psycopg.connect(db_url) as conn, conn.transaction(force_rollback=True):
+        conn.execute(sql.SQL("create role {} nologin nobypassrls").format(role))
+        conn.execute(sql.SQL("grant farm_system to {}").format(role))
+        conn.execute(sql.SQL("set local role {}").format(role))
+        conn.execute("select set_config('app.tenant_id', '', true)")
+        assert conn.execute("select rolbypassrls from pg_roles where rolname=current_user").fetchone() == (False,)
+        assert conn.execute("select count(*) from public.alembic_version").fetchone() == (1,)
+        assert conn.execute("select count(*) from public.tenants where id=%s", (DEFAULT_TENANT,)).fetchone() == (1,)
+        assert conn.execute("select count(*) from public.farm_settings").fetchone() == (1,)
+        conn.execute("insert into public.farm_heartbeats(component,last_heartbeat) values('maintenance-test',now())")
+        assert conn.execute("select component from public.farm_heartbeats where component='maintenance-test'").fetchone() == ("maintenance-test",)
+        conn.execute("set local role farm_app")
+        assert conn.execute("select count(*) from public.farm_settings").fetchone() == (0,)
 
 
 def test_handle_list_repair(tmp_path: Path) -> None:
