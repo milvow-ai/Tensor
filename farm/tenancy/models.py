@@ -56,6 +56,7 @@ class TokenIdentity(BaseModel):
     user_id: UUID | None
     name: str
     scopes: tuple[str, ...]
+    user_email: str | None = None
 
 
 class TenantContext(BaseModel):

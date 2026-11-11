@@ -283,6 +283,17 @@ def test_the_farm_runs_as_user_farm_and_is_always_restarted() -> None:
     assert bifrost["User"] == ["farm"] and bifrost["ReadWritePaths"] == [SERVER_DATA]
 
 
+def test_the_service_bounds_crash_loops_and_worker_resource_use() -> None:
+    unit = _unit("harness-farm.service")
+    assert int(unit["Unit"]["StartLimitBurst"][0]) <= 5
+    assert int(unit["Unit"]["StartLimitIntervalSec"][0]) >= 3600
+    service = unit["Service"]
+    assert service["MemoryMax"] == ["6G"]
+    assert service["TasksMax"] == ["512"]
+    assert service["OOMPolicy"] == ["stop"]
+    assert service["KillMode"] == ["control-group"]
+
+
 def test_every_unit_starts_a_file_of_this_repo_and_every_timer_names_its_unit() -> None:
     for unit in sorted(UNITS.glob("*.service")):
         start = _unit(unit.name)["Service"]["ExecStart"][0].split()[0]
@@ -542,6 +553,21 @@ def test_the_watchdog_leaves_a_healthy_farm_alone(fake_tools: tuple[dict[str, st
     assert "Farm recovered and is now healthy." in out
     assert "restart" not in calls.read_text() and "alert" not in calls.read_text()
     assert "farm_unhealthy=0" in state.read_text()
+
+
+@linux_only
+def test_watchdog_restart_budget_survives_repeated_timer_runs(fake_tools: tuple[dict[str, str], Path]) -> None:
+    env, calls = fake_tools
+    env["FARM_HTTP_PORT"] = str(_free_port())
+    env["WATCHDOG_MAX_RESTARTS"] = "2"
+    env["UNHEALTHY_THRESHOLD_SECONDS"] = "60"
+    for _ in range(5):
+        _watchdog(env)
+    lines = calls.read_text().splitlines()
+    assert lines.count("systemctl restart harness-farm") == 2
+    assert sum("restart budget exhausted" in line for line in lines) == 1
+    state = (Path(env["FARM_DATA_DIR"]) / "watchdog" / "state").read_text()
+    assert "farm_restarts=2" in state and "farm_restart_blocked=1" in state
 
 
 @linux_only

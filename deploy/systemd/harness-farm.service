@@ -3,6 +3,9 @@ Description=Harness Farm MCP gateway and execution engine
 Documentation=file:///opt/harness-farm/docs/RUNBOOK-SERVER.md
 After=network-online.target harness-farm-bifrost.service
 Wants=network-online.target
+# Stop crash loops; the watchdog also has a persisted restart budget.
+StartLimitIntervalSec=3600
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -21,6 +24,12 @@ StateDirectory=harness-farm
 StateDirectoryMode=0700
 UMask=0077
 LimitNOFILE=65536
+# Conservative defaults for the first private team server; override with a systemd drop-in after measuring.
+MemoryHigh=4G
+MemoryMax=6G
+TasksMax=512
+OOMPolicy=stop
+KillMode=control-group
 
 # Hardening: everything but the state directory is read-only, /home and /root are hidden.
 NoNewPrivileges=true

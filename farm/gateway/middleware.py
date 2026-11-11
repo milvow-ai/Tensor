@@ -136,6 +136,14 @@ class PolicyMiddleware(Middleware):
         context: MiddlewareContext[mt.CallToolRequestParams],
         call_next: CallNext[mt.CallToolRequestParams, ToolResult],
     ) -> ToolResult:
+        try:
+            identity = get_http_request().scope.get(IDENTITY_SCOPE_KEY)
+        except RuntimeError:
+            identity = None
+        if isinstance(identity, TokenIdentity) and not tool_scope_allows(
+            identity.scopes, context.message.name
+        ):
+            raise ToolError("policy: token scope does not allow this tool")
         if self._check is not None:
             caller = caller_from_client_name(_client_name(context))
             reason = self._check(caller, context.message.name, dict(context.message.arguments or {}))
@@ -143,6 +151,14 @@ class PolicyMiddleware(Middleware):
                 log.warning("gateway.policy_refused", caller=caller, tool=context.message.name, reason=reason)
                 raise ToolError(f"policy: {reason}")
         return await call_next(context)
+
+
+def tool_scope_allows(scopes: tuple[str, ...], tool: str) -> bool:
+    """mcp grants invocation, not recovery approval; exact tool grants never expand to other tools."""
+    return (
+        "*" in scopes or "mcp" in scopes or f"tool:{tool}" in scopes
+        or (tool == "ai_recover" and "ai:recovery:approve" in scopes)
+    )
 
 
 class TrajectoryMiddleware(Middleware):

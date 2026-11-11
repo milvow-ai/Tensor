@@ -15,6 +15,12 @@ FARM_USER="${FARM_USER:-farm}"
 FARM_UNIT="${FARM_UNIT:-harness-farm}"
 BIFROST_UNIT="${BIFROST_UNIT:-harness-farm-bifrost}"
 SKIP_BIFROST="${SKIP_BIFROST:-}"
+# Explicit restarts can bypass an automatic-restart policy; retain our own budget across timer invocations.
+MAX_RESTARTS="${WATCHDOG_MAX_RESTARTS:-3}"
+RESTART_WINDOW_SECONDS="${WATCHDOG_RESTART_WINDOW_SECONDS:-3600}"
+[[ "$MAX_RESTARTS" =~ ^[1-9][0-9]*$ && "$RESTART_WINDOW_SECONDS" =~ ^[1-9][0-9]*$ ]] || {
+    echo "watchdog restart limits must be positive integers" >&2; exit 2;
+}
 
 FARM_HTTP_HOST="${FARM_HTTP_HOST:-127.0.0.1}"
 FARM_HTTP_PORT="${FARM_HTTP_PORT:-8787}"
@@ -23,7 +29,6 @@ BIFROST_URL="${BIFROST_URL:-http://127.0.0.1:8080}"
 
 STATE_DIR="${FARM_DATA_DIR}/watchdog"
 STATE_FILE="${STATE_DIR}/state"
-HEARTBEAT_FILE="${FARM_DATA_DIR}/heartbeats/command_consumer.json"
 LOG_FILE="${FARM_DATA_DIR}/logs/watchdog.log"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")"
@@ -45,26 +50,45 @@ send_alert() {
         cmd=(runuser -u "$FARM_USER" -- "${cmd[@]}")
     fi
     local out
-    if ! out=$("${cmd[@]}" 2>&1); then
+    # A broken database/notification provider must not block process recovery indefinitely.
+    if ! out=$(timeout --kill-after=5s 20s "${cmd[@]}" 2>&1); then
         log "Failed to dispatch alert via farm alert send: $(printf '%s' "$out" | tail -n 3 | tr '\n' ' ' | cut -c1-400)"
     fi
 }
 
 farm_unhealthy=0
 bifrost_unhealthy=0
+restart_window_started=0
+farm_restarts=0
+bifrost_restarts=0
+farm_restart_blocked=0
+bifrost_restart_blocked=0
 if [[ -f "$STATE_FILE" ]]; then
     while IFS='=' read -r key value; do
         case "$key" in
             farm_unhealthy) farm_unhealthy="${value//[^0-9]/}" ;;
             bifrost_unhealthy) bifrost_unhealthy="${value//[^0-9]/}" ;;
+            restart_window_started) restart_window_started="${value//[^0-9]/}" ;;
+            farm_restarts) farm_restarts="${value//[^0-9]/}" ;;
+            bifrost_restarts) bifrost_restarts="${value//[^0-9]/}" ;;
+            farm_restart_blocked) farm_restart_blocked="${value//[^0-9]/}" ;;
+            bifrost_restart_blocked) bifrost_restart_blocked="${value//[^0-9]/}" ;;
         esac
     done <"$STATE_FILE"
 fi
 farm_unhealthy="${farm_unhealthy:-0}"
 bifrost_unhealthy="${bifrost_unhealthy:-0}"
+now=$(date -u +"%s")
+if (( now < ${restart_window_started:-0} || now - ${restart_window_started:-0} >= RESTART_WINDOW_SECONDS )); then
+    restart_window_started="$now"
+    farm_restarts=0; bifrost_restarts=0
+    farm_restart_blocked=0; bifrost_restart_blocked=0
+fi
 
 write_state() {
-    printf 'farm_unhealthy=%s\nbifrost_unhealthy=%s\n' "$farm_unhealthy" "$bifrost_unhealthy" >"$STATE_FILE.tmp"
+    printf 'farm_unhealthy=%s\nbifrost_unhealthy=%s\nrestart_window_started=%s\nfarm_restarts=%s\nbifrost_restarts=%s\nfarm_restart_blocked=%s\nbifrost_restart_blocked=%s\n' \
+        "$farm_unhealthy" "$bifrost_unhealthy" "$restart_window_started" "${farm_restarts:-0}" \
+        "${bifrost_restarts:-0}" "${farm_restart_blocked:-0}" "${bifrost_restart_blocked:-0}" >"$STATE_FILE.tmp"
     mv -f "$STATE_FILE.tmp" "$STATE_FILE"
 }
 
@@ -74,27 +98,32 @@ check_bifrost_health() {
 }
 
 check_farm_health() {
-    if curl -sf --max-time 3 "${FARM_URL}/health" >/dev/null 2>&1; then
-        return 0
-    fi
-    # Busy, not hung: a fresh command-consumer heartbeat while a `farm run` process exists.
-    if [[ -f "$HEARTBEAT_FILE" ]]; then
-        local ts_hb ts_hb_epoch age
-        ts_hb=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('timestamp',''))" \
-            "$HEARTBEAT_FILE" 2>/dev/null || echo "")
-        if [[ -n "$ts_hb" ]]; then
-            ts_hb_epoch=$(date -u -d "$ts_hb" +"%s" 2>/dev/null || echo 0)
-            age=$(($(date -u +"%s") - ts_hb_epoch))
-            if [[ $ts_hb_epoch -ne 0 && $age -lt $UNHEALTHY_THRESHOLD_SECONDS ]] && pgrep -f "farm run" >/dev/null 2>&1; then
-                return 0
-            fi
-        fi
-    fi
-    return 1
+    # Liveness only. A failed /ready dependency must alert, never restart an otherwise responsive process.
+    # An independently written heartbeat is not evidence that the HTTP worker or consumer is making progress.
+    curl -sf --max-time 3 "${FARM_URL}/health" >/dev/null 2>&1
 }
 
 restart_unit() {
     local unit="$1"
+    local attempts=0 blocked=0
+    if [[ "$unit" == "$FARM_UNIT" ]]; then
+        attempts="${farm_restarts:-0}"; blocked="${farm_restart_blocked:-0}"
+    else
+        attempts="${bifrost_restarts:-0}"; blocked="${bifrost_restart_blocked:-0}"
+    fi
+    if (( attempts >= MAX_RESTARTS )); then
+        if (( blocked == 0 )); then
+            if [[ "$unit" == "$FARM_UNIT" ]]; then farm_restart_blocked=1; else bifrost_restart_blocked=1; fi
+            write_state
+            send_alert "${unit}: restart budget exhausted (${MAX_RESTARTS} in ${RESTART_WINDOW_SECONDS}s); inspect the service and journal. No more watchdog restarts in this window."
+        fi
+        log "Restart budget exhausted for ${unit}; waiting for operator or next window."
+        return
+    fi
+    if [[ "$unit" == "$FARM_UNIT" ]]; then farm_restarts=$((attempts + 1)); else bifrost_restarts=$((attempts + 1)); fi
+    # Persist before the external action, including failed restart attempts.
+    write_state
+    send_alert "Harness Farm Watchdog: ${unit} failed liveness for >= ${UNHEALTHY_THRESHOLD_SECONDS}s. Restarting (attempt $((attempts + 1))/${MAX_RESTARTS})."
     log "Restarting ${unit}..."
     systemctl restart "$unit" || log "Failed to restart ${unit} via systemctl"
 }
@@ -110,7 +139,6 @@ if [[ -z "$SKIP_BIFROST" ]] && systemctl is-enabled --quiet "$BIFROST_UNIT" 2>/d
         bifrost_unhealthy=$((bifrost_unhealthy + CHECK_INTERVAL_SECONDS))
         log "Bifrost unhealthy (${bifrost_unhealthy}s / ${UNHEALTHY_THRESHOLD_SECONDS}s)"
         if [[ $bifrost_unhealthy -ge $UNHEALTHY_THRESHOLD_SECONDS ]]; then
-            send_alert "Harness Farm Watchdog: Bifrost gateway unhealthy for >= ${UNHEALTHY_THRESHOLD_SECONDS}s. Restarting." "farm_down"
             restart_unit "$BIFROST_UNIT"
             bifrost_unhealthy=0
         fi
@@ -124,7 +152,6 @@ else
     farm_unhealthy=$((farm_unhealthy + CHECK_INTERVAL_SECONDS))
     log "Farm unhealthy (${farm_unhealthy}s / ${UNHEALTHY_THRESHOLD_SECONDS}s)"
     if [[ $farm_unhealthy -ge $UNHEALTHY_THRESHOLD_SECONDS ]]; then
-        send_alert "Harness Farm Watchdog: Farm process unhealthy (/health failed). Restarting." "farm_down"
         restart_unit "$FARM_UNIT"
         farm_unhealthy=0
     fi

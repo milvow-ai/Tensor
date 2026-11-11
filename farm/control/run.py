@@ -22,19 +22,23 @@ import os
 import secrets
 import signal
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 import mcp_types as mt
+import psycopg
 import structlog
 import uvicorn
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.middleware.middleware import CallNext
 from fastmcp.tools import ToolResult
+from psycopg_pool import PoolTimeout
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -63,10 +67,31 @@ from farm.manager.scheduler import ManagerScheduler
 from farm.mcp.store import DbDirectory
 from farm.mcp.sync import sync_all
 from farm.settings import data_dir, http_host, http_path, http_port
-from farm.tenancy import MILVOW_TENANT_ID, TokenIdentity, current_tenant, use_tenant
+from farm.tenancy import MILVOW_TENANT_ID, TokenIdentity, current_tenant, require_tenant, use_tenant
 from farm.tenancy.active import for_each_tenant
 
 log = structlog.get_logger(__name__)
+
+type ReadinessCheck = Callable[[], Awaitable[dict[str, bool]]]
+
+
+async def readiness_checks(pool: DbPool, components: dict[str, bool]) -> dict[str, bool]:
+    """Bounded readiness, separate from process liveness; never expose database errors or credentials."""
+    checks = dict(components)
+    checks["database"] = False
+    checks["schema"] = False
+    try:
+        async with asyncio.timeout(3):
+            async with system_connection(pool) as conn:
+                cursor = await conn.execute("select version_num from public.alembic_version")
+                rows = await cursor.fetchall()
+                checks["database"] = True
+                ini = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
+                expected = set(ScriptDirectory.from_config(Config(str(ini))).get_heads())
+                checks["schema"] = {row[0] for row in rows} == expected
+    except Exception as exc:
+        log.warning("farm_run.not_ready", component="database", error=type(exc).__name__)
+    return checks
 
 
 async def _ensure_owner_member(pool: DbPool) -> None:
@@ -113,14 +138,34 @@ async def create_token(
 
     The raw token is returned once and must never be stored or logged.
     """
+    import re
+
+    if not client_name.strip():
+        raise ValueError("client name must not be empty")
+    if not scopes or any(
+        scope not in {"*", "mcp", "ai:recovery:approve"}
+        and re.fullmatch(r"tool:[A-Za-z0-9_.:-]+", scope) is None
+        for scope in scopes
+    ):
+        raise ValueError("scopes must contain *, mcp, ai:recovery:approve or tool:<exact tool name>")
+    tenant_id = require_tenant()
     raw_token = f"{TOKEN_PREFIX}{secrets.token_urlsafe(32)}"
-    async with tenant_connection(pool) as conn:
+    # Hold the membership lock until insertion: removal must revoke this token too.
+    async with system_connection(pool) as conn, conn.transaction():
+        if user_id is not None:
+            member = await conn.execute(
+                "select 1 from public.memberships where tenant_id = %s and user_id = %s for update",
+                (tenant_id, user_id),
+            )
+            if await member.fetchone() is None:
+                raise ValueError("token user must be a member of the current tenant")
         await conn.execute(
-            """
-            insert into public.api_tokens (user_id, name, token_prefix, token_hash, scopes)
-            values (%s, %s, %s, %s, %s)
-            """,
-            (user_id, client_name.strip(), raw_token[:PREFIX_CHARS], hash_token(raw_token), list(scopes)),
+            "insert into public.api_tokens (tenant_id, user_id, name, token_prefix, token_hash, scopes) "
+            "values (%s, %s, %s, %s, %s, %s)",
+            (
+                tenant_id, user_id, client_name.strip(), raw_token[:PREFIX_CHARS],
+                hash_token(raw_token), list(scopes),
+            ),
         )
     log.info("token.created", client=client_name.strip())
     return raw_token
@@ -131,7 +176,7 @@ async def list_tokens(pool: DbPool) -> list[dict[str, Any]]:
     async with tenant_connection(pool) as conn:
         cur = await conn.execute(
             """
-            select name, token_hash, created_at, last_used_at, token_prefix, scopes
+            select name, token_hash, created_at, last_used_at, token_prefix, scopes, user_id
             from public.api_tokens
             where revoked_at is null
             order by created_at desc
@@ -146,6 +191,8 @@ async def list_tokens(pool: DbPool) -> list[dict[str, Any]]:
             "last_used": row[3],
             "token_prefix": row[4],
             "scopes": list(row[5]),
+            "user_id": row[6],
+            "identity_kind": "member" if row[6] is not None else "service",
         }
         for row in rows
     ]
@@ -182,9 +229,13 @@ async def verify_token(pool: DbPool, raw_token: str) -> TokenIdentity | None:
     async with system_connection(pool) as conn:
         cur = await conn.execute(
             """
-            select a.id, a.tenant_id, a.user_id, a.name, a.scopes, a.token_hash
+            select a.id, a.tenant_id, a.user_id, a.name, a.scopes, a.token_hash, u.email
             from public.api_tokens a join public.tenants t on t.id = a.tenant_id
+            left join public.users u on u.id = a.user_id
             where a.token_hash = %s and a.revoked_at is null and t.status = 'active'
+              and (a.user_id is null or exists (
+                select 1 from public.memberships m where m.tenant_id = a.tenant_id and m.user_id = a.user_id
+              ))
             """,
             (incoming_hash,),
         )
@@ -193,7 +244,8 @@ async def verify_token(pool: DbPool, raw_token: str) -> TokenIdentity | None:
             return None
         await conn.execute("update public.api_tokens set last_used_at = now() where id = %s", (row[0],))
     return TokenIdentity(
-        token_id=row[0], tenant_id=row[1], user_id=row[2], name=str(row[3]), scopes=tuple(row[4])
+        token_id=row[0], tenant_id=row[1], user_id=row[2], name=str(row[3]), scopes=tuple(row[4]),
+        user_email=row[6],
     )
 
 
@@ -235,6 +287,8 @@ class TokenTrajectoryMiddleware(Middleware):
                 "gateway.tool_call",
                 tool=context.message.name,
                 caller=caller,
+                operator_user_id=str(identity.user_id) if identity and identity.user_id else None,
+                operator_email=identity.user_email if identity else None,
                 outcome=outcome,
                 ms=int((time.monotonic() - started) * 1000),
             )
@@ -243,10 +297,17 @@ class TokenTrajectoryMiddleware(Middleware):
 class FarmAuthMiddleware:
     """ASGI middleware handling /health and Bearer token auth for FastMCP endpoints."""
 
-    def __init__(self, app: ASGIApp, pool: DbPool, mcp_path: str = "/mcp") -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        pool: DbPool,
+        mcp_path: str = "/mcp",
+        readiness: ReadinessCheck | None = None,
+    ) -> None:
         self.app = app
         self.pool = pool
         self.mcp_path = mcp_path.rstrip("/")
+        self.readiness = readiness
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -266,7 +327,11 @@ class FarmAuthMiddleware:
         scheme, _, token_val = auth_header.partition(" ")
         identity: TokenIdentity | None = None
         if scheme.lower() == "bearer" and token_val:
-            identity = await verify_token(self.pool, token_val.strip())
+            try:
+                identity = await asyncio.wait_for(verify_token(self.pool, token_val.strip()), timeout=5)
+            except (TimeoutError, psycopg.Error, PoolTimeout):
+                await JSONResponse({"status": "unavailable"}, status_code=503)(scope, receive, send)
+                return
 
         if identity is None:
             log.warning("gateway.auth_refused", path=path)
@@ -277,6 +342,21 @@ class FarmAuthMiddleware:
                 headers={"WWW-Authenticate": "Bearer"},
             )
             await unauth_resp(scope, receive, send)
+            return
+
+        if path.rstrip("/") == "/ready":
+            checks: dict[str, bool] = {"runtime": False}
+            if self.readiness is not None:
+                try:
+                    checks = await asyncio.wait_for(self.readiness(), timeout=5)
+                except Exception as exc:
+                    log.warning("farm_run.not_ready", component="probe", error=type(exc).__name__)
+                    checks = {"probe": False}
+            ready = bool(checks) and all(checks.values())
+            await JSONResponse(
+                {"status": "ready" if ready else "not_ready", "checks": checks},
+                status_code=200 if ready else 503,
+            )(scope, receive, send)
             return
 
         scope[IDENTITY_SCOPE_KEY] = identity  # read per MCP request by TenantMiddleware
@@ -317,6 +397,7 @@ async def create_farm_app(
     *,
     job_manager: JobManager | None = None,
     path: str | None = None,
+    readiness: ReadinessCheck | None = None,
 ) -> ASGIApp:
     """Create the configured FastMCP Streamable HTTP app wrapped with Farm auth."""
     from farm.control.cli import _mcp_exposure
@@ -341,7 +422,7 @@ async def create_farm_app(
     base_app = server.http_app(transport="streamable-http", path=endpoint_path)
 
     # Wrap with FarmAuthMiddleware
-    return FarmAuthMiddleware(base_app, ctx.pool, mcp_path=endpoint_path)
+    return FarmAuthMiddleware(base_app, ctx.pool, mcp_path=endpoint_path, readiness=readiness)
 
 
 
@@ -373,11 +454,6 @@ async def run_farm(
     enable_keepawake(away_mode=True, data_directory=data_dir())
 
     job_manager = JobManager(ctx)
-    # One tool surface per process until the per-tenant catalogue (A1, D51): it is built from tenant #1's MCP
-    # providers. Calls through it still run for the caller's tenant (TenantMiddleware sets it per request).
-    with use_tenant(MILVOW_TENANT_ID):
-        app = await create_farm_app(ctx, job_manager=job_manager, path=target_path)
-
     heartbeat_writer = HeartbeatWriter(
         component="command_consumer",
         interval_s=15.0,
@@ -386,6 +462,25 @@ async def run_farm(
     )
     command_consumer = CommandConsumer(ctx.pool, poll_interval_s=2.0)
     scheduler = ManagerScheduler(ctx.pool)
+
+    async def check_readiness() -> dict[str, bool]:
+        def running(task: asyncio.Task[Any] | None) -> bool:
+            return task is not None and not task.done()
+
+        return await readiness_checks(ctx.pool, {
+            "command_consumer": running(command_consumer._task),
+            "scheduler": running(scheduler._task),
+            "usage_monitor": running(scheduler._usage_task),
+            "heartbeat": running(heartbeat_writer._task),
+            "job_manager": not job_manager._closing and (
+                not job_manager._live or running(job_manager._ticker)
+            ),
+        })
+
+    # One tool surface per process until the per-tenant catalogue (A1, D51): it is built from tenant #1's MCP
+    # providers. Calls through it still run for the caller's tenant (TenantMiddleware sets it per request).
+    with use_tenant(MILVOW_TENANT_ID):
+        app = await create_farm_app(ctx, job_manager=job_manager, path=target_path, readiness=check_readiness)
 
     # Start background components
     await heartbeat_writer.start()

@@ -442,11 +442,23 @@ def test_rls_policies_when_supabase_auth_schema_exists(scratch_db: Callable[[], 
         # Console sessions never carry app.tenant_id (the test environment's PGOPTIONS default would hide the trigger)
         conn.execute("select set_config('app.tenant_id', '', false)")
 
-        # a member of Milvow: reads Milvow's rows only, queues commands (tenant filled in), nothing else
+        # A member reads Milvow's rows, but management commands require an owner/admin.
         _as(conn, "authenticated", "member@example.com", MEMBER_SUB)
         assert conn.execute("select id from public.providers").fetchall() == [("p",)]
-        conn.execute("insert into public.farm_commands (kind, created_by) values ('pause', 'console')")
+        with pytest.raises(errors.InsufficientPrivilege):
+            conn.execute("insert into public.farm_commands (kind, created_by) values ('pause', 'console')")
+        conn.execute("reset role")
+        conn.execute("select set_config('request.jwt.claims', '{}', false)")
+        conn.execute(
+            "update public.memberships set role = 'admin' where user_id = "
+            "(select id from public.users where auth_subject = %s)", (MEMBER_SUB,),
+        )
+        _as(conn, "authenticated", "member@example.com", MEMBER_SUB)
+        conn.execute("insert into public.farm_commands (kind, created_by) values ('pause', 'forged-owner')")
         assert conn.execute("select tenant_id::text from public.farm_commands").fetchall() == [(DEFAULT_TENANT,)]
+        assert conn.execute(
+            "select created_by, requires_actor_authorization from public.farm_commands"
+        ).fetchone() == ("member@example.com", True)
         with pytest.raises(errors.InsufficientPrivilege):
             conn.execute("insert into public.farm_commands (kind, status) values ('pause', 'done')")
         with pytest.raises(errors.InsufficientPrivilege):  # another tenant's id in the insert
@@ -469,7 +481,8 @@ def test_rls_policies_when_supabase_auth_schema_exists(scratch_db: Callable[[], 
         assert sorted(r[0] for r in conn.execute("select id from public.providers").fetchall()) == ["p", "q"]
         with pytest.raises(errors.InsufficientPrivilege):
             conn.execute("insert into public.farm_commands (kind) values ('pause')")
-        conn.execute("insert into public.farm_commands (kind, tenant_id) values ('pause', %s)", (OTHER_TENANT,))
+        with pytest.raises(errors.InsufficientPrivilege):
+            conn.execute("insert into public.farm_commands (kind, tenant_id) values ('pause', %s)", (OTHER_TENANT,))
         conn.execute("reset role")
 
         # a stranger, a token without subject and the anon role see nothing and write nothing
@@ -487,7 +500,7 @@ def test_rls_policies_when_supabase_auth_schema_exists(scratch_db: Callable[[], 
         conn.execute("reset role")
 
         # the owner (superuser here, postgres on Supabase) is not subject to the policies
-        assert conn.execute("select count(*) from public.farm_commands").fetchone() == (2,)
+        assert conn.execute("select count(*) from public.farm_commands").fetchone() == (1,)
 
     # downgrade removes the policies and helpers cleanly
     command.downgrade(alembic_config(url), "base")

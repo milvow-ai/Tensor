@@ -1754,6 +1754,8 @@ class ClaimedCommand(BaseModel):
     kind: str
     payload: dict[str, Any]
     created_by: str
+    created_by_user_id: UUID | None = None
+    requires_actor_authorization: bool = False
 
 
 async def claim_command(pool: DbPool, command_id: UUID | None = None) -> ClaimedCommand | None:
@@ -1775,21 +1777,44 @@ async def claim_command(pool: DbPool, command_id: UUID | None = None) -> Claimed
             "            and (%(id)s::uuid is null or id = %(id)s::uuid) "
             "            order by created_at, id limit 1 for update skip locked) "
             "and status = 'queued' "
-            "returning id, tenant_id, kind, payload, coalesce(created_by, 'system')",
+            "returning id, tenant_id, kind, payload, coalesce(created_by, 'system'), "
+            "created_by_user_id, requires_actor_authorization",
             {"by": _CLAIMER, "id": command_id},
         )
         row = await cur.fetchone()
     if row is None:
         return None
-    return ClaimedCommand(id=row[0], tenant_id=row[1], kind=row[2], payload=row[3] or {}, created_by=row[4])
+    return ClaimedCommand(
+        id=row[0], tenant_id=row[1], kind=row[2], payload=row[3] or {}, created_by=row[4],
+        created_by_user_id=row[5], requires_actor_authorization=row[6],
+    )
+
+
+async def _command_actor(pool: DbPool, claimed: ClaimedCommand) -> str | None:
+    """Authenticate queued Console identity again, so removal/demotion invalidates pending commands."""
+    if claimed.created_by_user_id is None:
+        return None if claimed.requires_actor_authorization else claimed.created_by
+    async with system_connection(pool) as conn:
+        cur = await conn.execute(
+            "select u.email from public.users u join public.memberships m on m.user_id = u.id "
+            "join public.tenants t on t.id = m.tenant_id "
+            "where u.id = %s and m.tenant_id = %s and m.role in ('owner', 'admin') and t.status = 'active'",
+            (claimed.created_by_user_id, claimed.tenant_id),
+        )
+        row = await cur.fetchone()
+    return str(row[0]) if row else None
 
 
 async def _run_claimed(pool: DbPool, claimed: ClaimedCommand) -> tuple[str, dict[str, Any]]:
     # The command runs, and its result is recorded, for the tenant that queued it.
     with use_tenant(claimed.tenant_id):
-        status, result = await execute_command(
-            pool, claimed.id, claimed.kind, claimed.payload, actor=claimed.created_by
-        )
+        actor = await _command_actor(pool, claimed)
+        if actor is None:
+            status, result = "rejected", {"error": "Command creator is no longer an owner or administrator"}
+        else:
+            status, result = await execute_command(
+                pool, claimed.id, claimed.kind, claimed.payload, actor=actor
+            )
 
         async with tenant_connection(pool) as conn:
             stored = consumed_payload(claimed.kind, claimed.payload)  # a sealed value is used once

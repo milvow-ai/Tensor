@@ -8,9 +8,9 @@ and its row level security shows a tenant's rows only to a user with a ``members
    e-mail goes out; an existing one is found and reused;
 2. ``public.users`` (``auth_subject`` = the Auth user's id) and ``public.memberships`` for the tenant.
 
-The member then asks the Console's login page for a link. ``farm token create <name>`` is the separate step
-that lets their IDE call the Farm. Removing a member deletes the membership only (the sign-in then sees
-nothing); their tokens are revoked with ``farm token revoke``.
+``farm token create <name> --user <email>`` creates their separate IDE credential. Removing a member
+revokes that tenant's user-bound tokens atomically. Unbound service tokens belong to the service and must
+be revoked separately with ``farm token revoke``. The Console currently retains its owner-only UI guard.
 """
 
 from __future__ import annotations
@@ -170,16 +170,25 @@ async def list_members(pool: DbPool, *, tenant_id: UUID = MILVOW_TENANT_ID) -> l
 
 
 async def remove_member(pool: DbPool, email: str, *, tenant_id: UUID = MILVOW_TENANT_ID) -> bool:
-    """Delete the membership of ``email`` (True when there was one). The user row and sign-in stay."""
-    async with system_connection(pool) as conn:
+    """Remove membership and revoke its bound tokens atomically; the user and sign-in stay."""
+    async with system_connection(pool) as conn, conn.transaction():
         cur = await conn.execute(
             """
             delete from public.memberships m using public.users u
             where m.user_id = u.id and m.tenant_id = %s and lower(u.email) = lower(%s)
+            returning m.user_id
             """,
             (tenant_id, email),
         )
-        return cur.rowcount > 0
+        row = await cur.fetchone()
+        if row is None:
+            return False
+        await conn.execute(
+            "update public.api_tokens set revoked_at = now() "
+            "where tenant_id = %s and user_id = %s and revoked_at is null",
+            (tenant_id, row[0]),
+        )
+        return True
 
 
 __all__ = [

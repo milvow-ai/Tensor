@@ -90,6 +90,16 @@ def version() -> None:
     print(__version__)
 
 
+@app.command()
+def doctor() -> None:
+    """Check database, accounts, backups and background process health."""
+    from farm.control.doctor import doctor_exit_code, format_doctor_report, run_doctor
+
+    results = _run_farm(run_doctor())
+    typer.echo(format_doctor_report(results))
+    raise typer.Exit(doctor_exit_code(results))
+
+
 @db_app.command(name="check")
 def db_check(local: LocalOption = False) -> None:
     """Connect to the configured database and print its version."""
@@ -1233,20 +1243,40 @@ def token_create(
         typer.Argument(help="Name of the client or IDE session (e.g. claude-1, cursor)."),
     ],
     local: LocalOption = False,
+    user: Annotated[str | None, typer.Option("--user", help="Bind to this member's email.")] = None,
+    scope: Annotated[
+        list[str] | None,
+        typer.Option("--scope", help="Repeat: mcp, tool:<name>, ai:recovery:approve, or * (default)."),
+    ] = None,
 ) -> None:
-    """Create a new client token for HTTP MCP authentication."""
+    """Create a member-bound IDE token, or an explicitly unbound service token."""
     from farm.control.run import create_token
+    from farm.db.pool import system_connection
+    from farm.tenancy import require_tenant
 
     async def main() -> str:
         ctx = await _context(local)
         try:
-            return await create_token(ctx.pool, client_name)
+            user_id = None
+            if user is not None:
+                async with system_connection(ctx.pool) as conn:
+                    cur = await conn.execute(
+                        "select u.id from public.users u join public.memberships m on m.user_id = u.id "
+                        "where m.tenant_id = %s and lower(u.email) = lower(%s)",
+                        (require_tenant(), user.strip()),
+                    )
+                    row = await cur.fetchone()
+                if row is None:
+                    raise _fail("--user must be a current tenant member", code=2)
+                user_id = row[0]
+            return await create_token(ctx.pool, client_name, user_id=user_id, scopes=scope or ("*",))
         finally:
             await ctx.aclose()
 
     tok = _run_farm(main())
     typer.echo(f"Created token for '{client_name}':")
     typer.echo(f"  {tok}")
+    typer.echo(f"Identity: {'member: ' + user if user else 'service (unbound)'}")
     typer.echo("Store this token in your environment (e.g. as FARM_TOKEN). It will not be shown again.")
 
 
@@ -1267,13 +1297,14 @@ def token_list(local: LocalOption = False) -> None:
         typer.echo("no client tokens: create one with 'farm token create <name>'")
         return
 
-    rows: list[list[str]] = [["CLIENT", "HASH (SHA256)", "CREATED", "LAST USED"]]
+    rows: list[list[str]] = [["CLIENT", "HASH (SHA256)", "CREATED", "LAST USED", "IDENTITY"]]
     for t in tokens:
         h = str(t["token_hash"])
         masked_hash = f"{h[:8]}...{h[-8:]}"
         created = _stamp(t["created_at"])
         last_used = _stamp(t["last_used"]) if t["last_used"] else "never"
-        rows.append([str(t["client_name"]), masked_hash, created, last_used])
+        identity = f"member:{t['user_id']}" if t["user_id"] is not None else "service (unbound)"
+        rows.append([str(t["client_name"]), masked_hash, created, last_used, identity])
 
     widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     formatted = [
@@ -1373,7 +1404,7 @@ def member_list() -> None:
 def member_remove(
     email: Annotated[str, typer.Argument(help="The member's e-mail address.")],
 ) -> None:
-    """End a membership (the sign-in then sees nothing); revoke their tokens with farm token revoke."""
+    """End a membership and revoke its user-bound IDE tokens. Service tokens require separate revocation."""
     from farm.tenancy.members import remove_member
 
     async def main() -> bool:
