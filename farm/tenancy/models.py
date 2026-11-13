@@ -57,6 +57,7 @@ class TokenIdentity(BaseModel):
     name: str
     scopes: tuple[str, ...]
     user_email: str | None = None
+    worker_job_id: UUID | None = None
 
 
 class TenantContext(BaseModel):

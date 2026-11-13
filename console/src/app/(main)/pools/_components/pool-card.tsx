@@ -8,8 +8,8 @@ import { ArrowUpRight, KeyRound, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { DotList, ToneBadge } from "@/components/farm/status";
-import { Button } from "@/components/ui/button";
 import { type FarmStatus, MeterBar, StatusChip } from "@/components/kit";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { STRATEGY_LABELS } from "@/lib/farm/command-meta";
 import { fmtCompact, fmtPlanUsd } from "@/lib/farm/format";
@@ -129,9 +129,9 @@ export function PoolCard({ pool }: { pool: PoolOverviewRow }) {
 
         <dl className="pointer-events-none relative z-10 mt-auto grid grid-cols-3 gap-3 border-t pt-3 text-xs">
           <div>
-            <dt className="text-muted-foreground">Calls left</dt>
+            <dt className="text-muted-foreground">{isAi ? "Remaining job budget" : "Calls left"}</dt>
             <dd className="font-medium text-sm tabular-nums">
-              {pool.unlimited ? "Unlimited" : fmtCompact(pool.remaining_calls)}
+              {isAi ? "Unknown" : pool.unlimited ? "Unlimited" : fmtCompact(pool.remaining_calls)}
             </dd>
           </div>
           <div>
@@ -141,7 +141,7 @@ export function PoolCard({ pool }: { pool: PoolOverviewRow }) {
           <div>
             <dt className="text-muted-foreground">Plans</dt>
             <dd className="font-medium text-sm tabular-nums">
-              {pool.monthly_plan_usd > 0 ? `${fmtPlanUsd(pool.monthly_plan_usd)}/mo` : "Free"}
+              {pool.monthly_plan_usd > 0 ? `${fmtPlanUsd(pool.monthly_plan_usd)}/mo` : isAi ? "Unknown" : "Free"}
             </dd>
           </div>
         </dl>

@@ -42,6 +42,8 @@ __all__ = [
 
 MASK = "***"
 AUTH_SCHEMES: tuple[str, ...] = ("env", "token-store", "cli")
+WORKER_TOKEN_PREFIX = "hf_job_"
+_WORKER_TOKEN = re.compile(r"hf_job_[A-Za-z0-9_-]{43}")
 
 # Values shorter than this are not remembered: masking a 1-3 character "secret" would shred every
 # error message that happens to contain those characters. Real keys are far longer.
@@ -116,6 +118,11 @@ def _variants(value: str) -> list[str]:
     return list({value, quote(value, safe=""), quote_plus(value)})
 
 
+def redact_worker_tokens(text: str) -> str:
+    # Random, short-lived worker credentials have a fixed shape. No growing list of raw values is needed.
+    return _WORKER_TOKEN.sub(MASK, text) if WORKER_TOKEN_PREFIX in text else text
+
+
 def redact(text: str) -> str:
     """Mask every secret this process has resolved and any ``key=``/``token=`` style value in ``text``.
 
@@ -123,6 +130,7 @@ def redact(text: str) -> str:
     """
     if not text:
         return text
+    text = redact_worker_tokens(text)
     with _lock:
         known = sorted(_seen, key=len, reverse=True)
     for secret in known:

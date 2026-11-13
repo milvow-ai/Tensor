@@ -22,10 +22,12 @@ import os
 import secrets
 import signal
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import mcp_types as mt
@@ -39,10 +41,13 @@ from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.middleware.middleware import CallNext
 from fastmcp.tools import ToolResult
 from psycopg_pool import PoolTimeout
+from starlette.applications import Starlette
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from farm.ai.jobs import JobManager
+from farm.ai.worker_bootstrap import WorkerBootstrap
+from farm.connect.drivers.mcp_oauth import McpOAuthCallbacks
 from farm.connect.drivers.registry import driver_for
 from farm.connect.service import CheckResult, LoginService, set_login_service
 from farm.context import FarmContext, build_context
@@ -53,6 +58,7 @@ from farm.db.pool import DbPool, get_db_url, system_connection, tenant_connectio
 from farm.executors.mcp.client import McpExecutor
 from farm.gateway.middleware import (
     IDENTITY_SCOPE_KEY,
+    WORKER_GATE_SCOPE_KEY,
     AuthMiddleware,
     TenantMiddleware,
     TrajectoryMiddleware,
@@ -66,6 +72,7 @@ from farm.gateway.server import build_server
 from farm.manager.scheduler import ManagerScheduler
 from farm.mcp.store import DbDirectory
 from farm.mcp.sync import sync_all
+from farm.secrets import WORKER_TOKEN_PREFIX, redact_worker_tokens
 from farm.settings import data_dir, http_host, http_path, http_port
 from farm.tenancy import MILVOW_TENANT_ID, TokenIdentity, current_tenant, require_tenant, use_tenant
 from farm.tenancy.active import for_each_tenant
@@ -73,6 +80,11 @@ from farm.tenancy.active import for_each_tenant
 log = structlog.get_logger(__name__)
 
 type ReadinessCheck = Callable[[], Awaitable[dict[str, bool]]]
+
+
+def _expected_schema_revisions() -> set[str]:
+    ini = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
+    return set(ScriptDirectory.from_config(Config(str(ini))).get_heads())
 
 
 async def readiness_checks(pool: DbPool, components: dict[str, bool]) -> dict[str, bool]:
@@ -86,9 +98,7 @@ async def readiness_checks(pool: DbPool, components: dict[str, bool]) -> dict[st
                 cursor = await conn.execute("select version_num from public.alembic_version")
                 rows = await cursor.fetchall()
                 checks["database"] = True
-                ini = Path(__file__).resolve().parent.parent / "db" / "alembic.ini"
-                expected = set(ScriptDirectory.from_config(Config(str(ini))).get_heads())
-                checks["schema"] = {row[0] for row in rows} == expected
+                checks["schema"] = {row[0] for row in rows} == _expected_schema_revisions()
     except Exception as exc:
         log.warning("farm_run.not_ready", component="database", error=type(exc).__name__)
     return checks
@@ -307,11 +317,15 @@ class FarmAuthMiddleware:
         pool: DbPool,
         mcp_path: str = "/mcp",
         readiness: ReadinessCheck | None = None,
+        worker_bootstrap: WorkerBootstrap | None = None,
+        worker_app: ASGIApp | None = None,
     ) -> None:
         self.app = app
         self.pool = pool
         self.mcp_path = mcp_path.rstrip("/")
         self.readiness = readiness
+        self.worker_bootstrap = worker_bootstrap
+        self.worker_app = worker_app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -330,15 +344,24 @@ class FarmAuthMiddleware:
         auth_header = headers.get(b"authorization", b"").decode("latin1").strip()
         scheme, _, token_val = auth_header.partition(" ")
         identity: TokenIdentity | None = None
+        worker_request = token_val.startswith(WORKER_TOKEN_PREFIX)
         if scheme.lower() == "bearer" and token_val:
             try:
-                identity = await asyncio.wait_for(verify_token(self.pool, token_val.strip()), timeout=5)
+                if not worker_request:
+                    identity = await asyncio.wait_for(verify_token(self.pool, token_val.strip()), timeout=5)
+                elif self.worker_bootstrap is not None and self.worker_app is not None:
+                    endpoint = urlsplit(self.worker_bootstrap.url)
+                    if (
+                        path == endpoint.path and scope.get("method") in {"POST", "DELETE"}
+                        and headers.get(b"host") == endpoint.netloc.encode("ascii")
+                    ):
+                        identity = await asyncio.wait_for(self.worker_bootstrap.verify(token_val), timeout=5)
             except (TimeoutError, psycopg.Error, PoolTimeout):
                 await JSONResponse({"status": "unavailable"}, status_code=503)(scope, receive, send)
                 return
 
         if identity is None:
-            log.warning("gateway.auth_refused", path=path)
+            log.warning("gateway.auth_refused", path=redact_worker_tokens(path))
             unauth_resp = Response(
                 content="Unauthorized: valid bearer token required\n",
                 status_code=401,
@@ -346,6 +369,14 @@ class FarmAuthMiddleware:
                 headers={"WWW-Authenticate": "Bearer"},
             )
             await unauth_resp(scope, receive, send)
+            return
+
+        if identity.worker_job_id is not None:
+            assert self.worker_app is not None and self.worker_bootstrap is not None
+            scope[IDENTITY_SCOPE_KEY] = identity
+            scope[WORKER_GATE_SCOPE_KEY] = self.worker_bootstrap.execution_gate
+            with use_tenant(identity.tenant_id, identity.user_id):
+                await self.worker_app(scope, receive, send)
             return
 
         if path.rstrip("/") == "/reports/usage":
@@ -439,6 +470,7 @@ async def create_farm_app(
     job_manager: JobManager | None = None,
     path: str | None = None,
     readiness: ReadinessCheck | None = None,
+    port: int | None = None,
 ) -> ASGIApp:
     """Create the configured FastMCP Streamable HTTP app wrapped with Farm auth."""
     from farm.control.cli import _mcp_exposure
@@ -446,7 +478,10 @@ async def create_farm_app(
     endpoint_path = path or http_path()
     limit, pinned = _mcp_exposure()
 
-    server = await build_server(ctx, mcp_direct_limit=limit, mcp_pinned=pinned, job_manager=job_manager)
+    manager = job_manager or JobManager(ctx)
+    bootstrap = WorkerBootstrap.configured(ctx.pool, endpoint_path, ctx.max_parallel, port=port)
+    manager.worker_bootstrap = bootstrap
+    server = await build_server(ctx, mcp_direct_limit=limit, mcp_pinned=pinned, job_manager=manager)
 
     # Replace AuthMiddleware and TrajectoryMiddleware with token-aware middlewares
     server.middleware = [
@@ -458,8 +493,23 @@ async def create_farm_app(
     # Build the FastMCP streamable-http app
     base_app = server.http_app(transport="streamable-http", path=endpoint_path)
 
-    # Wrap with FarmAuthMiddleware
-    return FarmAuthMiddleware(base_app, ctx.pool, mcp_path=endpoint_path, readiness=readiness)
+    worker_app = None
+    if bootstrap is not None:
+        # Worker credentials cannot attach to an existing stateful operator MCP session.
+        worker_app = server.http_app(transport="streamable-http", path=endpoint_path, stateless_http=True)
+        start_operator = base_app.lifespan
+
+        @asynccontextmanager
+        async def lifespan(app: Starlette) -> AsyncIterator[None]:
+            async with start_operator(app), worker_app.lifespan(worker_app):
+                yield
+
+        base_app.router.lifespan_context = lifespan
+
+    return FarmAuthMiddleware(
+        base_app, ctx.pool, mcp_path=endpoint_path, readiness=readiness,
+        worker_bootstrap=bootstrap, worker_app=worker_app,
+    )
 
 
 
@@ -484,7 +534,20 @@ async def run_farm(
     target_path = http_path()
 
     ctx = await build_context(get_db_url(force_local=True) if local else None)
-    ctx.executors.setdefault("mcp", McpExecutor(directory=DbDirectory(ctx.pool)))
+    try:
+        async with system_connection(ctx.pool) as conn:
+            result = await conn.execute("select version_num from public.alembic_version")
+            installed = {row[0] for row in await result.fetchall()}
+        expected = _expected_schema_revisions()
+        if installed != expected:
+            log.error("farm_run.schema_mismatch", installed=sorted(installed), expected=sorted(expected))
+            raise SystemExit("Farm database revision differs from this checkout. Check `farm doctor`.")
+    except BaseException:
+        await ctx.aclose()
+        raise
+    mcp_executor = McpExecutor(directory=DbDirectory(ctx.pool))
+    ctx.executors.setdefault("mcp", mcp_executor)
+    mcp_callbacks = McpOAuthCallbacks()
 
     # The HTTP process has no ambient tenant: each request, job, command and maintenance pass sets its own.
     current_tenant.set(None)
@@ -516,12 +579,18 @@ async def run_farm(
 
     # Initial setup uses the instance's configured tenant. The live MCP catalogue is read per request.
     with use_tenant(MILVOW_TENANT_ID):
-        app = await create_farm_app(ctx, job_manager=job_manager, path=target_path, readiness=check_readiness)
+        app = await create_farm_app(
+            ctx, job_manager=job_manager, path=target_path, readiness=check_readiness, port=target_port,
+        )
 
     # Start background components
+    app = mcp_callbacks.wrap(app)
     await heartbeat_writer.start()
     await command_consumer.start()
-    login_service = LoginService(ctx.pool, driver_factory=driver_for, test_job=_no_login_test)
+    login_service = LoginService(
+        ctx.pool, driver_factory=driver_for, test_job=_no_login_test,
+        mcp_executor=mcp_executor, mcp_callbacks=mcp_callbacks,
+    )
     set_login_service(login_service)
     await login_service.start()
     await _ensure_owner_member(ctx.pool)

@@ -10,14 +10,16 @@ import sys
 import threading
 import time
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import IO, Any
 
 from farm.ai import selection
+from farm.ai.worker_bootstrap import TOKEN_ENV, WorkerLaunch
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult
+from farm.secrets import redact_worker_tokens
 from farm.settings import data_dir_path
 
 _current_effort: ContextVar[str | None] = ContextVar("_current_effort", default=None)
@@ -487,6 +489,7 @@ async def run_cli_process(
     env: dict[str, str] | None = None,
     timeout_s: float = 30.0,
     max_bytes: int = 5 * 1024 * 1024,
+    worker: WorkerLaunch | None = None,
 ) -> SubprocessOutput:
     """Run a CLI subprocess with timeout, process tree termination, and output caps.
 
@@ -523,6 +526,9 @@ async def run_cli_process(
 
     cmd_args = [*shim_prefix, *argv[1:]]
     merged_env = build_child_env(env)
+    if worker is not None:
+        merged_env[TOKEN_ENV] = worker.bearer
+        merged_env["NO_PROXY"] = "127.0.0.1,::1"
 
     work_dir = None
     if cwd:
@@ -536,7 +542,7 @@ async def run_cli_process(
 
     state = _ProcessState()
     try:
-        return await asyncio.to_thread(
+        output = await asyncio.to_thread(
             _run_sync_worker,
             state,
             cmd_name,
@@ -547,6 +553,12 @@ async def run_cli_process(
             max_bytes,
             input_bytes,
         )
+        if worker is not None:
+            output = replace(
+                output, stdout=redact_worker_tokens(output.stdout),
+                stderr=redact_worker_tokens(output.stderr),
+            )
+        return output
     except asyncio.CancelledError:
         with state.lock:
             state.cancelled = True

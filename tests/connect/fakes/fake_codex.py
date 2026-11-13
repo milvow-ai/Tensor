@@ -22,8 +22,13 @@ if args[:2] == ["login", "--device-auth"]:
     grey, blue, end = "\x1b[90m", "\x1b[94m", "\x1b[0m"
     print(f"\nWelcome to Codex [v{grey}0.160.0{end}]\n{grey}OpenAI's command-line coding agent{end}\n")
     print("Follow these steps to sign in with ChatGPT using device code authorization:\n")
-    print(f"1. Open this link in your browser and sign in to your account\n   {blue}https://auth.openai.com/codex/device{end}\n")
-    print(f"2. Enter this one-time code {grey}(expires in 15 minutes){end}\n   {blue}F91M-9W7OM{end}\n", flush=True)
+    print(
+        f"1. Open this link in your browser and sign in to your account\n   {blue}https://auth.openai.com/codex/device{end}\n"
+    )
+    print(
+        f"2. Enter this one-time code {grey}(expires in 15 minutes){end}\n   {blue}F91M-9W7OM{end}\n",
+        flush=True,
+    )
     time.sleep(float(os.environ.get("FAKE_CODEX_DELAY", "1")))
     if os.environ.get("FAKE_CODEX_MODE", "approve") == "timeout":
         print("Error logging in with device code: device auth timed out after 15 minutes", file=sys.stderr)
@@ -35,9 +40,46 @@ if args[:2] == ["login", "--device-auth"]:
     }
     token = f"{b64({'alg': 'none'})}.{b64(claims)}.sig"
     (home / "auth.json").write_text(
-        json.dumps({"auth_mode": "chatgpt", "tokens": {"id_token": token, "account_id": "acc-1"}}), encoding="utf-8"
+        json.dumps({"auth_mode": "chatgpt", "tokens": {"id_token": token, "account_id": "acc-1"}}),
+        encoding="utf-8",
     )
     print("Successfully logged in")
+elif args[:1] == ["app-server"]:
+    for line in sys.stdin:
+        request = json.loads(line)
+        if request["method"] == "initialize":
+            print(json.dumps({"id": request["id"], "result": {}}), flush=True)
+        elif request["method"] == "model/list":
+            print(
+                json.dumps(
+                    {
+                        "id": request["id"],
+                        "result": {
+                            "data": [{"id": "display-record-id", "model": "fake-codex-model"}],
+                            "nextCursor": None,
+                        },
+                    }
+                ),
+                flush=True,
+            )
+        elif request["method"] == "account/rateLimits/read":
+            print(
+                json.dumps(
+                    {
+                        "id": request["id"],
+                        "result": {
+                            "rateLimits": {
+                                "primary": {"usedPercent": 12, "windowDurationMins": 300},
+                            }
+                        },
+                    }
+                ),
+                flush=True,
+            )
+        elif request["method"] == "account/usage/read":
+            print(json.dumps({"id": request["id"], "error": {"code": -32601}}), flush=True)
+        elif request["method"] != "initialized":
+            raise AssertionError("Enrollment must not start an inference turn")
 elif args[:1] == ["exec"]:
     if (home / "auth.json").exists():
         print("PONG")

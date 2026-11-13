@@ -6,9 +6,11 @@ at most) and writes ``auth.json`` into ``CODEX_HOME``. Codex refreshes that logi
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import re
+import threading
 from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -70,6 +72,7 @@ def codex_identity(auth_file: Path) -> Identity | None:
 
 class CodexDeviceDriver:
     method = "device_code"
+    model_source = "codex_app_server_model_list"
 
     def __init__(
         self, connection_id: str, meta: Mapping[str, Any], *, command: Sequence[str] | None = None
@@ -78,11 +81,15 @@ class CodexDeviceDriver:
             raise NotImplementedError(WSL_LATER)
         self._connection_id = connection_id
         self._command = list(command) if command else None
+        self._meta = dict(meta)
         self._proc: CliProcess | None = None
         self._home: Path | None = None
 
     def _cli(self) -> list[str]:
         return self._command or resolve_cli("codex")
+
+    def preflight(self) -> None:
+        self._cli()
 
     async def start(self, home: Path, hint: str | None = None) -> None:
         home.mkdir(parents=True, exist_ok=True)
@@ -126,7 +133,29 @@ class CodexDeviceDriver:
         return codex_identity(home / "auth.json")
 
     async def models(self, home: Path) -> list[str]:
-        return []  # Codex lists no models; the pool keeps the ones it has
+        found = await self._metadata(home, model_listing=True)
+        return [str(m) for m in found.get("models", [])] if found.get("status") == "ok" else []
+
+    async def quota(self, home: Path) -> dict[str, Any]:
+        return await self._metadata(home, model_listing=False)
+
+    async def _metadata(self, home: Path, *, model_listing: bool) -> dict[str, Any]:
+        from farm.manager.codex_usage import _run, probe_codex
+
+        # Supported metadata RPC, without starting an inference turn. This lists candidates, not entitlement.
+        meta = {**self._meta, "home": str(home)}
+        if self._command:
+            found = await asyncio.to_thread(
+                _run,
+                [*self._command, "app-server"],
+                meta,
+                15.0,
+                threading.Event(),
+                model_listing=model_listing,
+            )
+        else:
+            found = await probe_codex(meta, model_listing=model_listing)
+        return found
 
     async def test_login(self, home: Path) -> CheckResult:
         argv = [*self._cli(), "exec", "--skip-git-repo-check", "--ephemeral", "-s", "read-only", TEST_PROMPT]

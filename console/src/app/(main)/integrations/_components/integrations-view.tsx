@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { AddAccountsDialog } from "@/app/(main)/pools/_components/add-accounts-dialog";
 import { ApiKeyForm } from "@/app/(main)/pools/_components/api-key-form";
 import { SignInCard } from "@/app/(main)/pools/_components/sign-in-card";
 import { CopyCommand } from "@/components/farm/copy-command";
@@ -46,6 +47,7 @@ import { submitCommand } from "@/lib/farm/actions";
 import { AI_EFFORTS } from "@/lib/farm/command-meta";
 import { buildSelectionDefaults, parseModels, selectionDefaultsProblem } from "@/lib/farm/commands";
 import type { IntegrationAccount, IntegrationSummary } from "@/lib/farm/integrations-data";
+import { requireCommandDone, runQueuedCommand } from "@/lib/farm/queued-command";
 import { looksLikeSecret, SECRET_REFUSAL } from "@/lib/farm/redact";
 import type { Connection, ConnectionStatus } from "@/lib/farm/types";
 
@@ -103,6 +105,8 @@ export function IntegrationsView({
 
   // Add Dialog state
   const [addOpen, setAddOpen] = useState(false);
+  const [aiEnrollOpen, setAiEnrollOpen] = useState(false);
+  const [aiEnrollProviderId, setAiEnrollProviderId] = useState("claude");
   const [dialogStep, setDialogStep] = useState<DialogStep>("what");
   const [addWhat, setAddWhat] = useState<AddWhat>("mcp");
   const [submitting, setSubmitting] = useState(false);
@@ -111,12 +115,13 @@ export function IntegrationsView({
   const [resultAiAccountId, setResultAiAccountId] = useState<string | null>(null);
   const [resultSecretEnv, setResultSecretEnv] = useState<string | null>(null);
   const [resultConnId, setResultConnId] = useState<string | null>(null);
+  const [resultMcp, setResultMcp] = useState<{ account: string; provider: string; name: string } | null>(null);
 
   // Form Fields - MCP
   const [mcpId, setMcpId] = useState("");
   const [mcpName, setMcpName] = useState("");
   const [mcpNamespace, setMcpNamespace] = useState("");
-  const [mcpTransport, setMcpTransport] = useState<"stdio" | "http" | "sse">("stdio");
+  const [mcpTransport, setMcpTransport] = useState<"stdio" | "http" | "sse">("http");
   const [mcpCommand, setMcpCommand] = useState("");
   const [mcpArgs, setMcpArgs] = useState("");
   const [mcpEnvNames, setMcpEnvNames] = useState("");
@@ -187,13 +192,14 @@ export function IntegrationsView({
     setResultAiAccountId(null);
     setResultSecretEnv(null);
     setResultConnId(null);
+    setResultMcp(null);
     setResultStatus("active");
     setSecretError(null);
 
     setMcpId("");
     setMcpName("");
     setMcpNamespace("");
-    setMcpTransport("stdio");
+    setMcpTransport("http");
     setMcpCommand("");
     setMcpArgs("");
     setMcpEnvNames("");
@@ -230,12 +236,15 @@ export function IntegrationsView({
 
     try {
       if (addWhat === "mcp") {
-        const cleanId = mcpId
-          .trim()
+        const endpoint = mcpUrl.trim();
+        const host = mcpTransport !== "stdio" && URL.canParse(endpoint) ? new URL(endpoint).hostname : "";
+        const cleanId = (mcpId.trim() || host)
           .toLowerCase()
-          .replace(/[^a-z0-9-]/g, "-");
+          .replace(/[^a-z0-9-]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 60);
         if (!cleanId) {
-          toast.error("Please specify a provider ID");
+          toast.error("Enter a server URL or a provider ID");
           return;
         }
         if (mcpTransport === "stdio" && !mcpCommand.trim()) {
@@ -269,58 +278,73 @@ export function IntegrationsView({
           name: mcpName.trim() || cleanId,
           kind: "tool",
           executor: "mcp",
-          command: mcpTransport === "stdio" ? mcpCommand.trim() : undefined,
-          args: mcpTransport === "stdio" ? argsList : [],
-          cwd: mcpTransport === "stdio" && mcpCwd.trim() ? mcpCwd.trim() : undefined,
-          env: mcpTransport === "stdio" ? envList : undefined,
-          url: mcpTransport !== "stdio" ? mcpUrl.trim() : undefined,
-          headers: mcpTransport !== "stdio" ? headersDict : undefined,
-          auth: mcpAuth,
-          namespace: mcpNamespace.trim() || cleanId,
-          exposure: mcpExposure,
-          status: mcpAuth === "oauth" ? "needs_login" : "active",
+          mcp: {
+            transport: mcpTransport,
+            ...(mcpTransport === "stdio"
+              ? {
+                  command: mcpCommand.trim(),
+                  args: argsList,
+                  cwd: mcpCwd.trim() || undefined,
+                  env: Object.fromEntries(envList.map((name) => [name, `env:${name}`])),
+                }
+              : {
+                  url: mcpUrl.trim(),
+                  headers: Object.fromEntries(
+                    Object.entries(headersDict).map(([name, value]) => [
+                      name,
+                      value.startsWith("env:") ? value : `env:${value}`,
+                    ]),
+                  ),
+                }),
+            auth: mcpAuth,
+            namespace: mcpNamespace.trim() || cleanId,
+            expose: mcpExposure,
+          },
         };
 
-        const res = await submitCommand("add_provider", payload);
-        if (!res.ok) throw new Error(res.error || "Failed to add MCP server");
+        const result = await runQueuedCommand(`add-mcp:${cleanId}`, "add_provider", payload);
+        requireCommandDone(result);
+        const cmdResult = result.result;
 
-        const cmdResult = res.data.result as Record<string, unknown> | undefined;
         const nextStep = typeof cmdResult?.next_step === "string" ? cmdResult.next_step : "farm mcp sync";
         let status = mcpAuth === "oauth" ? "needs_login" : "active";
         if (typeof cmdResult?.status === "string") {
           status = cmdResult.status;
         }
         const toolsCount = typeof cmdResult?.tools_count === "number" ? cmdResult.tools_count : null;
+        const account = typeof cmdResult?.connection_id === "string" ? cmdResult.connection_id : `${cleanId}-01`;
+        const name = mcpName.trim() || host || cleanId;
 
         setResultCommand(nextStep);
         setResultStatus(status);
+        if (mcpAuth === "oauth") setResultMcp({ account, provider: cleanId, name });
         setDialogStep("result");
 
         // Optimistically add to list
         const newItem: IntegrationSummary = {
           id: cleanId,
-          name: mcpName.trim() || cleanId,
+          name,
           kind: "mcp",
           executor: "mcp",
           transport: mcpTransport,
           namespace: mcpNamespace.trim() || cleanId,
           exposeMode: mcpExposure,
-          health: "healthy",
-          toolCount: toolsCount,
+          health: status === "active" && !cmdResult?.sync_error ? "healthy" : "down",
+          toolCount: status === "active" ? toolsCount : null,
           accountsCount: 1,
           accounts: [
             {
-              id: `${cleanId}-01`,
-              label: `${mcpName.trim() || cleanId} Primary`,
-              authRef: mcpAuth === "oauth" ? `token-store:${cleanId}-01` : "cli:none",
+              id: account,
+              label: account,
+              authRef: typeof cmdResult?.auth_ref === "string" ? cmdResult.auth_ref : "",
               status: status as ConnectionStatus,
               priority: 100,
               concurrency: 1,
               lastSuccessAt: null,
             },
           ],
-          lastSyncAt: new Date().toISOString(),
-          config: {},
+          lastSyncAt: status === "active" && !cmdResult?.sync_error ? new Date().toISOString() : null,
+          config: { mcp: { auth: mcpAuth } },
         };
         setIntegrations((prev) => [newItem, ...prev.filter((i) => i.id !== cleanId)]);
         toast.success(`MCP server "${cleanId}" registered.`);
@@ -419,6 +443,12 @@ export function IntegrationsView({
           toast.error("Please select a provider");
           return;
         }
+        if (integrations.find((item) => item.id === existingProviderId)?.kind === "ai") {
+          setAiEnrollProviderId(existingProviderId);
+          setAddOpen(false);
+          setAiEnrollOpen(true);
+          return;
+        }
         const cleanConnId = existingConnId
           .trim()
           .toLowerCase()
@@ -441,7 +471,7 @@ export function IntegrationsView({
             : `env:${existingAuthRef.trim()}`;
 
         const isTokenStore = authRef.startsWith("token-store:");
-        const res = await submitCommand("add_connection", {
+        const result = await runQueuedCommand(`add-mcp-account:${cleanConnId}`, "add_connection", {
           provider_id: existingProviderId,
           id: cleanConnId,
           label: existingLabel.trim() || cleanConnId,
@@ -454,7 +484,7 @@ export function IntegrationsView({
           meta: {},
           units: {},
         });
-        if (!res.ok) throw new Error(res.error || "Failed to add connection");
+        requireCommandDone(result);
 
         const postCmd = isTokenStore
           ? `farm mcp login ${cleanConnId}`
@@ -462,6 +492,10 @@ export function IntegrationsView({
 
         setResultCommand(postCmd);
         setResultStatus(isTokenStore ? "needs_login" : "active");
+        if (isTokenStore) {
+          const existing = integrations.find((item) => item.id === existingProviderId);
+          setResultMcp({ account: cleanConnId, provider: existingProviderId, name: existing?.name ?? existingProviderId });
+        }
         if (!isTokenStore) {
           setResultSecretEnv(authRef.replace(/^env:/, "").toUpperCase());
           setResultConnId(cleanConnId);
@@ -576,11 +610,14 @@ export function IntegrationsView({
     if (!acc) return;
     setTestingId(item.id);
     try {
-      const res = await submitCommand("test_connection", {
-        connection_id: acc.id,
-      });
-      if (!res.ok) {
-        throw new Error(res.error || "Connection test failed.");
+      const command = await runQueuedCommand(`test:${acc.id}`, "test_connection", { connection_id: acc.id });
+      requireCommandDone(command);
+      if (command.result?.auth_ok !== true) {
+        throw new Error(
+          typeof command.result?.auth_error === "string"
+            ? command.result.auth_error
+            : "Connection verification failed.",
+        );
       }
       toast.success(`Connection test succeeded for ${acc.label}.`);
       setIntegrations((prev) =>
@@ -898,6 +935,12 @@ export function IntegrationsView({
       )}
 
       {/* Add Integration Dialog */}
+      <AddAccountsDialog
+        open={aiEnrollOpen}
+        onOpenChange={setAiEnrollOpen}
+        defaultProviderId={aiEnrollProviderId}
+        trigger={<span />}
+      />
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="max-w-lg">
           {/* STEP 1: WHAT */}
@@ -933,8 +976,9 @@ export function IntegrationsView({
                 <button
                   type="button"
                   onClick={() => {
-                    setAddWhat("ai");
-                    setDialogStep("form");
+                    setAiEnrollProviderId("claude");
+                    setAddOpen(false);
+                    setAiEnrollOpen(true);
                   }}
                   className="flex items-start gap-3 rounded-lg border p-3 text-left transition-all hover:border-primary hover:bg-muted/40"
                 >
@@ -1015,7 +1059,8 @@ export function IntegrationsView({
                   </DialogTitle>
                 </div>
                 <DialogDescription className="text-xs">
-                  {addWhat === "mcp" && "Configure a command or an HTTP/SSE endpoint. The Farm worker stores connection secrets."}
+                  {addWhat === "mcp" &&
+                    "Configure a command or an HTTP/SSE endpoint. The Farm worker stores connection secrets."}
                   {addWhat === "ai" && "Configure CLI worker profile and model limits. Multi-account delegation."}
                   {addWhat === "existing" && "Connect a new credential or profile to an existing provider."}
                   {addWhat === "openapi" && "Provide OpenAPI spec and authentication environment variable."}
@@ -1063,14 +1108,14 @@ export function IntegrationsView({
 
                     <div className="grid grid-cols-3 gap-2">
                       <div className="space-y-1">
-                        <Label className="text-xs">Transport</Label>
+                        <Label htmlFor="mcp-transport" className="text-xs">Transport</Label>
                         <Select
                           value={mcpTransport}
                           onValueChange={(v) => {
                             if (v === "stdio" || v === "http" || v === "sse") setMcpTransport(v);
                           }}
                         >
-                          <SelectTrigger className="text-xs">
+                          <SelectTrigger id="mcp-transport" className="text-xs">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -1519,7 +1564,28 @@ export function IntegrationsView({
 
               <div className="space-y-3 py-3">
                 {resultAiAccountId && <SignInCard connectionId={resultAiAccountId} onDone={() => setAddOpen(false)} />}
-                {!resultAiAccountId && resultSecretEnv && (
+                {resultMcp && (
+                  <SignInCard
+                    connectionId={resultMcp.account}
+                    providerId={resultMcp.provider}
+                    providerName={resultMcp.name}
+                    mcpOAuth
+                    onDone={(session) => {
+                      setResultStatus("active");
+                      setIntegrations((items) =>
+                        items.map((item) => item.id !== resultMcp.provider ? item : {
+                          ...item,
+                          health: "healthy",
+                          toolCount: item.toolCount ?? (typeof session.evidence.tools_count === "number"
+                            ? session.evidence.tools_count : null),
+                          accounts: item.accounts.map((account) => account.id === resultMcp.account
+                            ? { ...account, status: "active" } : account),
+                        }),
+                      );
+                    }}
+                  />
+                )}
+                {!resultAiAccountId && !resultMcp && resultSecretEnv && (
                   <ApiKeyForm
                     providerId={resultConnId ?? resultSecretEnv.split("_")[0]?.toLowerCase() ?? "env"}
                     connectionId={resultConnId ?? undefined}
@@ -1529,7 +1595,7 @@ export function IntegrationsView({
                     }}
                   />
                 )}
-                {!resultAiAccountId && !resultSecretEnv && (
+                {!resultAiAccountId && !resultMcp && !resultSecretEnv && (
                   <div className="space-y-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
                     <div className="font-medium text-emerald-700 text-xs dark:text-emerald-400">
                       Run on your Farm worker

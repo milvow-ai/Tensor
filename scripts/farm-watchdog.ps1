@@ -123,11 +123,24 @@ function Restart-Bifrost {
 function Restart-Farm {
     Write-WatchdogLog "Restarting Farm..."
     Send-WatchdogAlert "Harness Farm Watchdog: Farm process unhealthy (/health failed). Restarting." "farm_down"
-    if (-not $NoSpawn) {
-        # Launch farm run in background
-        Start-Process -FilePath "uv" -ArgumentList "run farm run" -WorkingDirectory $root -WindowStyle Hidden
-    } else {
+    if ($NoSpawn) {
         Write-WatchdogLog "[NoSpawn] Farm restart commanded."
+        return
+    }
+
+    $farmExe = Join-Path $root '.venv\Scripts\farm.exe'
+    $launchArgs = 'run'
+    if (-not (Test-Path -LiteralPath $farmExe)) {
+        $farmExe = 'uv'
+        $launchArgs = 'run farm run'
+    }
+    $startupLogs = Split-Path -Parent $LogFile
+    try {
+        Start-Process -FilePath $farmExe -ArgumentList $launchArgs -WorkingDirectory $root -WindowStyle Hidden `
+            -RedirectStandardOutput (Join-Path $startupLogs 'farm-run.out.log') `
+            -RedirectStandardError (Join-Path $startupLogs 'farm-run.err.log') -ErrorAction Stop
+    } catch {
+        Write-WatchdogLog "Farm launch failed ($($_.Exception.GetType().Name))."
     }
 }
 

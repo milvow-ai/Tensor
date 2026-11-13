@@ -23,7 +23,7 @@ import structlog
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
-from farm.db.pool import DbPool, tenant_connection
+from farm.db.pool import Conn, DbPool, tenant_connection
 from farm.executors.base import ConnectionView
 from farm.registry.models import MCP_CAPABILITY_PREFIX, McpProviderSpec
 
@@ -167,54 +167,61 @@ async def replace_tools(
     pool: DbPool, provider_id: str, tools: Sequence[mcp_types.Tool], now: datetime
 ) -> SyncDiff:
     """Make the catalogue of ``provider_id`` equal ``tools`` in one transaction and say what changed."""
-    wanted = {tool.name: tool for tool in tools}
     async with tenant_connection(pool) as conn, conn.transaction():
-        cur = await conn.execute(
-            "select name, schema_hash from public.mcp_tools where provider = %s for update", (provider_id,)
+        return await replace_tools_in(conn, provider_id, tools, now)
+
+
+async def replace_tools_in(
+    conn: Conn, provider_id: str, tools: Sequence[mcp_types.Tool], now: datetime
+) -> SyncDiff:
+    """Replace the provider catalogue inside a caller's transaction."""
+    wanted = {tool.name: tool for tool in tools}
+    cur = await conn.execute(
+        "select name, schema_hash from public.mcp_tools where provider = %s for update", (provider_id,)
+    )
+    known = {name: stored_hash for name, stored_hash in await cur.fetchall()}
+    added: list[str] = []
+    changed: list[tuple[str, str, str]] = []
+    unchanged: list[str] = []
+    for name, tool in wanted.items():
+        new_hash = tool_hash(tool)
+        old_hash = known.get(name)
+        if old_hash == new_hash:
+            unchanged.append(name)
+            continue
+        (added.append(name) if old_hash is None else changed.append((name, old_hash, new_hash)))
+        definition = dump_tool(tool)
+        await conn.execute(
+            "insert into public.mcp_tools (provider, name, description, input_schema, output_schema, "
+            "annotations, definition, schema_hash, synced_at) "
+            "values (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "on conflict (tenant_id, provider, name) do update set "
+            "description = excluded.description, "
+            "input_schema = excluded.input_schema, output_schema = excluded.output_schema, "
+            "annotations = excluded.annotations, definition = excluded.definition, "
+            "schema_hash = excluded.schema_hash, synced_at = excluded.synced_at",
+            (
+                provider_id,
+                name,
+                tool.description or "",
+                Jsonb(definition["inputSchema"]),
+                Jsonb(definition["outputSchema"]) if "outputSchema" in definition else None,
+                Jsonb(definition["annotations"]) if "annotations" in definition else None,
+                Jsonb(definition),
+                new_hash,
+                now,
+            ),
         )
-        known = {name: stored_hash for name, stored_hash in await cur.fetchall()}
-        added: list[str] = []
-        changed: list[tuple[str, str, str]] = []
-        unchanged: list[str] = []
-        for name, tool in wanted.items():
-            new_hash = tool_hash(tool)
-            old_hash = known.get(name)
-            if old_hash == new_hash:
-                unchanged.append(name)
-                continue
-            (added.append(name) if old_hash is None else changed.append((name, old_hash, new_hash)))
-            definition = dump_tool(tool)
-            await conn.execute(
-                "insert into public.mcp_tools (provider, name, description, input_schema, output_schema, "
-                "annotations, definition, schema_hash, synced_at) "
-                "values (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                "on conflict (tenant_id, provider, name) do update set "
-                "description = excluded.description, "
-                "input_schema = excluded.input_schema, output_schema = excluded.output_schema, "
-                "annotations = excluded.annotations, definition = excluded.definition, "
-                "schema_hash = excluded.schema_hash, synced_at = excluded.synced_at",
-                (
-                    provider_id,
-                    name,
-                    tool.description or "",
-                    Jsonb(definition["inputSchema"]),
-                    Jsonb(definition["outputSchema"]) if "outputSchema" in definition else None,
-                    Jsonb(definition["annotations"]) if "annotations" in definition else None,
-                    Jsonb(definition),
-                    new_hash,
-                    now,
-                ),
-            )
-        if unchanged:
-            await conn.execute(
-                "update public.mcp_tools set synced_at = %s where provider = %s and name = any(%s)",
-                (now, provider_id, unchanged),
-            )
-        removed = sorted(set(known) - set(wanted))
-        if removed:
-            await conn.execute(
-                "delete from public.mcp_tools where provider = %s and name = any(%s)", (provider_id, removed)
-            )
+    if unchanged:
+        await conn.execute(
+            "update public.mcp_tools set synced_at = %s where provider = %s and name = any(%s)",
+            (now, provider_id, unchanged),
+        )
+    removed = sorted(set(known) - set(wanted))
+    if removed:
+        await conn.execute(
+            "delete from public.mcp_tools where provider = %s and name = any(%s)", (provider_id, removed)
+        )
     return SyncDiff(tuple(added), tuple(changed), tuple(removed), tuple(unchanged))
 
 

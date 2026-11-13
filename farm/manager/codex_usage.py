@@ -284,6 +284,8 @@ def _run(
     meta: dict[str, Any],
     timeout: float,
     cancel_event: threading.Event,
+    *,
+    model_listing: bool = False,
 ) -> dict[str, Any]:
     home = meta.get("home") or meta.get("config_dir")
     wsl_child = os.name == "nt" and Path(argv[0]).name.lower() in ("wsl.exe", "wsl")
@@ -417,6 +419,55 @@ def _run(
             return {"status": "error", "error_code": "initialize_failed"}
 
         send({"jsonrpc": "2.0", "method": "initialized"})
+        if model_listing:
+            models: list[str] = []
+            cursor: str | None = None
+            seen_cursors: set[str] = set()
+            for page in range(25):
+                request_id = 10 + page
+                send(
+                    {
+                        "id": request_id,
+                        "method": "model/list",
+                        "params": {
+                            "limit": 100,
+                            "includeHidden": False,
+                            "cursor": cursor,
+                        },
+                    }
+                )
+                while True:
+                    if timed_out.is_set() or cancel_event.is_set():
+                        return {"status": "error", "error_code": "timeout"}
+                    line = proc.stdout.readline(MAX_OUTPUT + 1)
+                    stdout_size += len(line)
+                    if not line or stdout_size > MAX_OUTPUT or overflow.is_set():
+                        return {"status": "error", "error_code": "protocol_io"}
+                    try:
+                        reply = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(reply, dict) and reply.get("id") == request_id:
+                        break
+                payload = reply.get("result")
+                if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+                    return {"status": "unsupported", "error_code": "model_list_failed"}
+                for item in payload["data"]:
+                    model = item.get("model") if isinstance(item, dict) else None
+                    if isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", model):
+                        models.append(model)
+                cursor = payload.get("nextCursor")
+                if cursor is None:
+                    return {
+                        "status": "ok",
+                        "models": list(dict.fromkeys(models)),
+                        "source": "codex_app_server_model_list",
+                        "access": "unknown",
+                    }
+                if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                    break
+                seen_cursors.add(cursor)
+            return {"status": "error", "error_code": "model_pagination_limit"}
         send({"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read", "params": {}})
         send({"jsonrpc": "2.0", "id": 3, "method": "account/usage/read", "params": {}})
 
@@ -532,7 +583,9 @@ def _run(
             _ACTIVE.pop(cancel_event, None)
 
 
-async def probe_codex(meta: dict[str, Any], timeout: float = TIMEOUT_S) -> dict[str, Any]:
+async def probe_codex(
+    meta: dict[str, Any], timeout: float = TIMEOUT_S, *, model_listing: bool = False
+) -> dict[str, Any]:
     """Probe configured account only; process work is moved off selector loops used on Windows."""
     prefix = meta.get("cli_prefix")
     named_wsl = (
@@ -558,7 +611,14 @@ async def probe_codex(meta: dict[str, Any], timeout: float = TIMEOUT_S) -> dict[
 
     cancel_event = threading.Event()
     worker = asyncio.create_task(
-        asyncio.to_thread(_run, argv, meta, min(float(timeout), TIMEOUT_S), cancel_event)
+        asyncio.to_thread(
+            _run,
+            argv,
+            meta,
+            min(float(timeout), TIMEOUT_S),
+            cancel_event,
+            **({"model_listing": True} if model_listing else {}),
+        )
     )
     try:
         return await asyncio.wait_for(asyncio.shield(worker), timeout=TIMEOUT_S + 2.0)

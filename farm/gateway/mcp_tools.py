@@ -29,7 +29,7 @@ import json
 import math
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated, Any, cast
 from uuid import UUID, uuid4
 from weakref import WeakKeyDictionary
@@ -39,6 +39,7 @@ import structlog
 from fastmcp import FastMCP
 from fastmcp.exceptions import NotFoundError, ToolError
 from fastmcp.server.context import Context
+from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.providers import Provider
 from fastmcp.server.transforms.search import BM25SearchTransform
 from fastmcp.server.transforms.search.base import _extract_searchable_text
@@ -50,10 +51,10 @@ from mcp_types import TextContent
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, ValidationError
 
 from farm.context import FarmContext
-from farm.db.pool import DbPool
+from farm.db.pool import DbPool, tenant_connection
 from farm.executors.mcp.client import REJECTION_KEY, RESULT_KEY
 from farm.gateway.guide import Risk, tool_risk
-from farm.gateway.middleware import current_caller
+from farm.gateway.middleware import WORKER_GATE_SCOPE_KEY, current_caller, current_identity, tool_scope_allows
 from farm.mcp import store
 from farm.mcp.expose import ExposedTool, plan_exposure
 from farm.mcp.naming import candidates
@@ -67,15 +68,15 @@ SEARCH_MAX_RESULTS = int(os.environ.get("FARM_MCP_SEARCH_MAX_RESULTS", "25"))
 SEARCH_DEFAULT_RESULTS = 10
 DESCRIPTION_LIMIT = 160
 DESCRIBE_TOOL = "describe_tool"
-DISCOVERY_TOOLS = ("search_tools", DESCRIBE_TOOL, "call_tool", "list_server_tools")
+DISCOVERY_TOOLS = ("search_tools", DESCRIBE_TOOL, "call_tool", "list_server_tools", "list_mcp_connections")
 
 INSTRUCTIONS = (
     " The Farm also fronts MCP servers ({namespaces}): their tools are named <server>__<tool> and keep the "
     "server's own descriptions, schemas and results. search_tools(query, limit) finds tools that are not "
     "listed (name, server, short description, risk; no schemas), describe_tool(name) returns one tool's "
-    "full definition and call_tool(name, arguments) runs any of them. Every call goes to the best account "
-    "of that server, with "
-    "safe failover where the tool permits retries. Uncertain writes require reconciliation. "
+    "full definition and call_tool(name, arguments) runs any of them. list_mcp_connections lists "
+    "available identities; choose _farm.account explicitly for servers with multiple accounts. "
+    "Shared pools allow safe failover where tools permit retries. Uncertain writes need reconciliation. "
     "A call's arguments may carry _farm: {{account, strategy, timeout_s}} "
     "(all optional) to pick the account or strategy; it is removed before the server sees the call."
 )
@@ -192,9 +193,16 @@ class PassthroughTool(Tool):
         }
         if control.timeout_s is not None:
             params["timeout_s"] = control.timeout_s
+        ctx = self._ctx
+        identity = current_identity.get()
+        if identity is not None and identity.worker_job_id is not None:
+            # The parent holds an ordinary execution slot until its CLI exits. Only passthrough calls
+            # authorized by a worker token can use the separate bounded gate.
+            gate = get_http_request().scope[WORKER_GATE_SCOPE_KEY]
+            ctx = replace(ctx, _execution_gate=gate, owns_pool=False)
         try:
             return await route(
-                self._ctx,
+                ctx,
                 self._provider.capability,
                 params,
                 strategy=control.strategy,
@@ -304,10 +312,7 @@ async def list_server_tools(server: str, pool: DbPool) -> list[dict[str, str]]:
         return []
     stored = await store.load_tools(pool, [provider.id])
     plan = plan_exposure([provider], stored, direct_limit=len(stored) + 1)
-    return [
-        {"name": item.name, "description": one_line(item.stored.definition.description)}
-        for item in plan
-    ]
+    return [{"name": item.name, "description": one_line(item.stored.definition.description)} for item in plan]
 
 
 class FarmBM25SearchTransform(BM25SearchTransform):
@@ -340,9 +345,11 @@ class FarmBM25SearchTransform(BM25SearchTransform):
 
     async def transform_tools(self, tools: Sequence[Tool]) -> Sequence[Tool]:
         # Direct exposure is recomputed with the DB catalogue, including servers added after startup.
-        visible = [t for t in tools if t.name in self._always_visible or (
-            isinstance(t, PassthroughTool) and t._direct
-        )]
+        visible = [
+            t
+            for t in tools
+            if t.name in self._always_visible or (isinstance(t, PassthroughTool) and t._direct)
+        ]
         return [*visible, self._make_search_tool(), self._make_call_tool(), self._make_describe_tool()]
 
     async def _search(self, tools: Sequence[Tool], query: str) -> Sequence[Tool]:
@@ -400,9 +407,7 @@ class FarmBM25SearchTransform(BM25SearchTransform):
 
         async def call_tool(
             name: Annotated[str, "The name of the tool to call"],
-            arguments: Annotated[
-                dict[str, Any] | None, "Arguments to pass to the tool"
-            ] = None,
+            arguments: Annotated[dict[str, Any] | None, "Arguments to pass to the tool"] = None,
             ctx: Context = None,  # type: ignore[assignment]
         ) -> ToolResult:
             """Call a tool by name with the given arguments.
@@ -420,9 +425,7 @@ class FarmBM25SearchTransform(BM25SearchTransform):
 
         return Tool.from_function(fn=call_tool, name=self._call_tool_name)
 
-    async def get_tool(
-        self, name: str, call_next: Any, *, version: Any = None
-    ) -> Tool | None:
+    async def get_tool(self, name: str, call_next: Any, *, version: Any = None) -> Tool | None:
         """Intercept synthetic tool names; resolve other names downstream."""
         if name == self._search_tool_name:
             return self._make_search_tool()
@@ -485,7 +488,52 @@ async def register_mcp_tools(
     @server.tool(name="list_server_tools", annotations={"readOnlyHint": True})
     async def list_server_tools_tool(server: str) -> list[dict[str, str]]:
         """List all tools and one-line descriptions for one MCP server."""
-        return await list_server_tools(server, pool=ctx.pool)
+        tools = await list_server_tools(server, pool=ctx.pool)
+        identity = current_identity.get()
+        if identity is not None and identity.worker_job_id is not None:
+            return [tool for tool in tools if tool_scope_allows(identity.scopes, tool["name"])]
+        return tools
+
+    @server.tool(name="list_mcp_connections", annotations={"readOnlyHint": True})
+    async def list_mcp_connections(server: str | None = None) -> list[dict[str, Any]]:
+        """List tenant-authorized MCP connection choices, identity evidence and pool eligibility. No secrets.
+
+        Pass a connection id as _farm.account when calling a tool. Unknown identity stays unverified.
+        Shared pool rotation requires the same explicit meta.mcp_pool_group on every pool member.
+        """
+        async with tenant_connection(ctx.pool) as conn:
+            cur = await conn.execute(
+                "select c.id,c.provider_id,c.label,c.status,c.meta from public.connections c "
+                "join public.providers p on p.id=c.provider_id and p.tenant_id=c.tenant_id "
+                "where p.executor='mcp' "
+                "and (%s::text is null or p.id=%s or p.config->'mcp'->>'namespace'=%s) "
+                "order by p.id,c.priority,c.id",
+                (server, server, server),
+            )
+            rows = await cur.fetchall()
+
+        def identity_of(meta: dict[str, Any]) -> dict[str, Any]:
+            identity = meta.get("identity")
+            if not isinstance(identity, dict):
+                return {"status": "unverified"}
+            return {
+                key: identity[key]
+                for key in ("email", "email_masked", "display_name", "org", "source", "verified_at")
+                if isinstance(identity.get(key), str)
+            }
+
+        return [
+            {
+                "account": cid,
+                "server": pid,
+                "label": label,
+                "status": status,
+                "identity": identity_of(meta or {}),
+                "pool_group": (meta or {}).get("mcp_pool_group"),
+                "selection": {"_farm": {"account": cid}},
+            }
+            for cid, pid, label, status, meta in rows
+        ]
 
     native = {tool.name for tool in await server.list_tools(run_middleware=False)}
     native |= {"search_tools", "describe_tool", "call_tool"}

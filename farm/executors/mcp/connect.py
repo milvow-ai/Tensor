@@ -793,6 +793,7 @@ def build_transport(
     token_storage: Callable[[], AsyncKeyValue],
     refresh_lock: Path | None = None,
     interactive: bool = False,
+    oauth_factory: Callable[..., FarmOAuth] | None = None,
 ) -> ClientTransport:
     """The transport that reaches ``spec`` as ``connection``: provider block + the connection's overrides.
 
@@ -825,7 +826,7 @@ def build_transport(
     if spec.auth == "env":
         auth = resolve_auth(connection.auth_ref)
     elif spec.auth == "oauth":
-        oauth_class = FarmOAuth if interactive else HeadlessOAuth
+        oauth_class = oauth_factory or (FarmOAuth if interactive else HeadlessOAuth)
         auth = oauth_class(
             mcp_url=url,
             token_storage=token_storage(),
@@ -833,6 +834,12 @@ def build_transport(
             connection_id=connection.id,
             refresh_lock=refresh_lock,
             callback_port=oauth_callback_port() if interactive else None,
+            client_id=spec.oauth_client_id,
+            client_secret=(
+                resolve_auth(spec.oauth_client_secret_ref) if spec.oauth_client_secret_ref else None
+            ),
+            client_metadata_url=spec.oauth_client_metadata_url,
+            scopes=spec.oauth_scopes or None,
         )
     return RemoteMCPServer(url=url, transport=spec.transport, headers=headers, auth=auth).to_transport()
 

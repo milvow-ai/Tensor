@@ -78,6 +78,8 @@ test.describe("C3 — Console Control & Deploy Acceptance Tests", () => {
 
     await dialog.locator("#mcp-id").fill("test-service");
     await dialog.locator("#mcp-name").fill("Test MCP Service");
+    await dialog.getByRole("combobox", { name: "Transport" }).click();
+    await page.getByRole("option", { name: "stdio (CLI)" }).click();
     await dialog.locator("#mcp-command").fill("python");
 
     // Test secret rejection: a raw key in the env-var field is refused and nothing can be sent.

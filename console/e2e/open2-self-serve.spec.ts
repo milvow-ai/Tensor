@@ -61,10 +61,8 @@ test("Add your first MCP server enqueues add_provider and the integration appear
 
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "Add MCP Server" })).toBeVisible();
-  await dialog.locator("#mcp-id").fill("fake-probe");
   await dialog.locator("#mcp-name").fill("Fake Probe Server");
-  await dialog.locator("#mcp-command").fill("python");
-  await dialog.locator("#mcp-args").fill("-m fake_server");
+  await dialog.locator("#mcp-url").fill("https://fake-probe.example.test/mcp");
 
   const enqueued = page.waitForRequest(
     (request) => request.method() === "POST" && (request.postData() ?? "").includes("add_provider"),
@@ -72,7 +70,7 @@ test("Add your first MCP server enqueues add_provider and the integration appear
   await dialog.getByRole("button", { name: "Add Integration" }).click();
   await enqueued;
 
-  await expect(toast(page, 'MCP server "fake-probe" registered.')).toBeVisible();
+  await expect(toast(page, 'MCP server "fake-probe-example-test" registered.')).toBeVisible();
   await expect(dialog.getByRole("heading", { name: "Integration Added" })).toBeVisible();
   await expect(dialog.getByText("Run on your Farm worker")).toBeVisible();
   await expect(dialog.getByText("farm mcp sync")).toBeVisible();
@@ -98,31 +96,28 @@ test("Add AI account opens its sign-in card and the account needs a login", asyn
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "Add Integration" })).toBeVisible();
   await dialog.getByRole("button", { name: /New AI account/ }).click();
-  await expect(dialog.getByRole("heading", { name: "Add AI CLI Account" })).toBeVisible();
-  await dialog.locator("#ai-acc-id").fill("claude-02");
-  await dialog.locator("#ai-label").fill("Claude (second login)");
-  await dialog.locator("#ai-models").fill("sonnet");
+  const enrollment = page.getByTestId("add-accounts-dialog");
+  await expect(enrollment.getByRole("heading", { name: "Add AI accounts" })).toBeVisible();
+  await enrollment.getByTestId("emails-input").fill("claude-first@example.com");
+  await enrollment.getByLabel("Account names", { exact: false }).fill("Claude (first login)");
 
   const enqueued = page.waitForRequest(
-    (request) => request.method() === "POST" && (request.postData() ?? "").includes("add_provider"),
+    (request) => request.method() === "POST" && (request.postData() ?? "").includes("add_accounts"),
   );
-  await dialog.getByRole("button", { name: "Add Integration" }).click();
+  await enrollment.getByTestId("add-accounts-submit").click();
   await enqueued;
 
-  await expect(toast(page, 'AI account "claude-02" registered.')).toBeVisible();
-  await expect(dialog.getByRole("heading", { name: "Integration Added" })).toBeVisible();
-  // Never a fake "active": the account waits for its login until the owner has done it
-  await expect(dialog.getByText("needs_login", { exact: true })).toBeVisible();
-  await expect(dialog.getByTestId("sign-in-card")).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Sign in" })).toBeVisible();
-  await dialog.getByRole("button", { name: "Done" }).click();
+  await expect(toast(page, "Created 1 account setup")).toBeVisible();
+  await expect(enrollment.getByRole("heading", { name: "Sign in your new accounts" })).toBeVisible();
+  await expect(enrollment.getByTestId("sign-in-card")).toBeVisible();
+  await enrollment.getByRole("button", { name: "Done" }).click();
 
   // The Farm applied it: the AI pool exists, its account waits for the login and shows the sign-in button
   await untilTheFarmShows(page, async () => {
     await page.goto("/pools/ai/claude");
-    await expect(page.getByTestId("account-row").filter({ hasText: "claude-02" })).toBeVisible({ timeout: 1_000 });
+    await expect(page.getByTestId("account-row").filter({ hasText: "Claude (first login)" })).toBeVisible({ timeout: 1_000 });
   });
-  const account = page.getByTestId("account-row").filter({ hasText: "claude-02" });
+  const account = page.getByTestId("account-row").filter({ hasText: "Claude (first login)" });
   await expect(account.getByText("Needs login", { exact: true })).toBeVisible();
   await expect(account.getByTestId("account-signin-button")).toBeVisible();
   expect(problems()).toEqual([]);

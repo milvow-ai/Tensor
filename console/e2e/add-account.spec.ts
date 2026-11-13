@@ -94,25 +94,20 @@ test("the Farm refuses a duplicate id and no second row appears", async ({ page 
   await expect(page.getByTestId("adding-row")).toHaveCount(0);
 });
 
-test("adding an AI account asks for the CLI and models, and opens its sign-in card", async ({ page }) => {
+test("adding an AI account asks for the provider and email, and opens its sign-in card", async ({ page }) => {
   await page.goto("/pools/ai");
-  await page.getByRole("button", { name: "Add AI account" }).click();
+  await page.getByTestId("add-accounts-button").click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByLabel("CLI type").selectOption("codex");
-  await expect(dialog.getByLabel("Models")).toHaveValue("");
-  await expect(dialog.getByLabel("Default model")).toBeDisabled();
-  await dialog.getByLabel("Account id").fill("codex-02");
-  await dialog.getByLabel("Label").fill("Codex (second seat)");
-  await dialog.getByLabel("Models").fill("gpt 5");
-  await expect(dialog.getByText("Comma-separated model names")).toBeVisible();
-  await dialog.getByLabel("Models").fill("gpt-5-codex");
-  await dialog.getByRole("button", { name: "Queue account" }).click();
+  await dialog.getByTestId("provider-select").selectOption("codex");
+  await expect(dialog.getByLabel("Models")).toHaveCount(0);
+  await dialog.getByTestId("emails-input").fill("codex-second@example.com");
+  await dialog.getByLabel("Account names", { exact: false }).fill("Codex (second login)");
+  await dialog.getByTestId("add-accounts-submit").click();
 
   await expect(dialog.getByTestId("sign-in-card")).toBeVisible();
-  await expect(toast(page, "Add AI account codex-02: done")).toBeVisible();
+  await expect(toast(page, "Created 1 account setup")).toBeVisible();
   await page.goto("/pools/ai/codex");
-  const added = page.getByTestId("account-row").filter({ hasText: "codex-02" });
-  await expect(added).toContainText("Codex (second seat)");
-  await expect(added).toContainText("cli:codex-02");
+  const added = page.getByTestId("account-row").filter({ hasText: "Codex (second login)" });
+  await expect(added).toContainText("Needs login");
   await expect(added.getByTestId("account-signin-button")).toBeVisible();
 });

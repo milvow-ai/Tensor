@@ -16,7 +16,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from farm.executors.cli_agent.base import _kill_process_tree, resolve_shim
+from farm.executors.cli_agent.base import _kill_process_tree, looks_secret, resolve_shim
 from farm.secrets import redact
 
 _EOF = object()
@@ -32,7 +32,13 @@ def resolve_cli(name: str) -> list[str]:
 
 
 def child_env(overrides: Mapping[str, str]) -> dict[str, str]:
-    env = dict(os.environ)
+    # The worker's API credentials must not select a different provider identity during setup.
+    auth_overrides = {
+        "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "GOOGLE_APPLICATION_CREDENTIALS",
+    }
+    env = {key: value for key, value in os.environ.items()
+           if key.upper() not in auth_overrides and not looks_secret(key, value)}
     env.update(overrides)
     env["NO_COLOR"] = "1"
     return env

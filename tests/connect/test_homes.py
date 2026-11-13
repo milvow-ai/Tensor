@@ -23,6 +23,7 @@ from farm.connect.homes import (
     staging_home,
 )
 from farm.settings import data_dir
+from farm.tenancy import MILVOW_TENANT_ID, use_tenant
 
 
 def test_account_home_resolution(tmp_path: Path) -> None:
@@ -35,7 +36,7 @@ def test_account_home_resolution(tmp_path: Path) -> None:
     assert account_home({"config_dir": meta_config}, "claude-01") == Path(meta_config)
 
     # 3. Defaults to <data_dir>/ai/<id>
-    expected = data_dir() / "ai" / "claude-01"
+    expected = data_dir() / "tenants" / str(MILVOW_TENANT_ID) / "ai" / "claude-01"
     assert account_home({}, "claude-01") == expected
     assert account_home(None, "claude-01") == expected
 
@@ -188,3 +189,11 @@ async def test_fake_driver(tmp_path: Path) -> None:
 
     assert await driver.identity(staging) == ident
     assert await driver.models(staging) == models
+
+
+def test_same_account_id_gets_different_default_homes_per_tenant() -> None:
+    with use_tenant(uuid4()):
+        first = account_home({}, "codex-01")
+    with use_tenant(uuid4()):
+        second = account_home({}, "codex-01")
+    assert first != second and first.name == second.name == "codex-01"

@@ -29,10 +29,13 @@ function Allowance({ row, now }: { row: WorkerRow; now: number }) {
     <ul className="space-y-1">
       {windows.map(([name, window]) => {
         const reset = window.resetsAt ? new Date(window.resetsAt * 1_000) : null;
-        const duration = window.windowDurationMins ? `${fmtInt(window.windowDurationMins)}-min` : name;
+        const minutes = window.windowDurationMins;
+        let duration = minutes ? `${fmtInt(minutes)}-min window` : `${name} window`;
+        if (minutes === 300) duration = "5-hour allowance";
+        if (minutes === 10_080) duration = "Weekly allowance";
         return (
           <li key={name}>
-            {fmtInt(window.usedPercent ?? 0)}% used · {duration} window
+            {duration} · {fmtInt(window.usedPercent ?? 0)}% used
             {reset ? ` · resets ${fmtAbsolute(reset.toISOString())}` : ""}
             {stale || (reset && reset.getTime() <= now) ? " · stale" : ""}
           </li>
@@ -87,7 +90,7 @@ export function TaskOverview({
       <Card>
         <CardHeader>
           <CardTitle>Worker activity</CardTitle>
-          <CardDescription>Account slots, queued jobs, active models, and quota.</CardDescription>
+          <CardDescription>Running and queued jobs, active models, and reported quota.</CardDescription>
         </CardHeader>
         <CardContent>
           {accounts.length === 0 ? (
@@ -105,11 +108,7 @@ export function TaskOverview({
                         {account.providerName} · {identity?.email ?? account.id}
                       </p>
                     </div>
-                    <p>
-                      {row
-                        ? `${fmtInt(row.busy)} / ${fmtInt(row.slots)} slots busy · ${fmtInt(row.queued)} queued`
-                        : "Activity unavailable"}
-                    </p>
+                    <p>{row ? `${fmtInt(row.busy)} running · ${fmtInt(row.queued)} queued` : "Activity unavailable"}</p>
                     {row && row.running_models.length > 0 && (
                       <p className="break-words text-muted-foreground">
                         Requested{" "}

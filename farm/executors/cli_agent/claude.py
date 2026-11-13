@@ -1,8 +1,11 @@
 """Claude CLI agent executor."""
 
 import json
+import tempfile
+from pathlib import Path
 from typing import Any
 
+from farm.ai.worker_bootstrap import SERVER_NAME, TOKEN_ENV, current_worker_launch
 from farm.executors.base import ErrorKind, ExecRequest, ExecResult
 from farm.executors.cli_agent.base import (
     BaseCliAgentExecutor,
@@ -57,6 +60,7 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
 
         # Claude Code reads prompt from stdin when omitted after -p
         argv: list[str] = [cli_bin, "-p", "--output-format", "json"]
+        worker = current_worker_launch.get()
 
         if model:
             argv.extend(["--model", str(model)])
@@ -66,7 +70,7 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
             argv.extend(["--resume", str(session_id)])
         if mode == "edit":
             argv.extend(["--permission-mode", "acceptEdits"])
-        else:
+        elif worker is None:
             argv.extend(["--allowedTools", ""])
         if json_schema:
             schema_str = json.dumps(json_schema) if isinstance(json_schema, dict) else str(json_schema)
@@ -79,13 +83,23 @@ class ClaudeCliExecutor(BaseCliAgentExecutor):
             for k, v in meta["env"].items():
                 env[str(k)] = str(v)
 
-        out = await run_cli_process(
-            argv,
-            input_text=str(task),
-            cwd=resolved_cwd or cwd,
-            env=env,
-            timeout_s=timeout_s,
-        )
+        if worker is None:
+            out = await run_cli_process(
+                argv, input_text=str(task), cwd=resolved_cwd or cwd, env=env, timeout_s=timeout_s,
+            )
+        else:
+            with tempfile.TemporaryDirectory(prefix="farm-claude-mcp-") as directory:
+                path = Path(directory) / "mcp.json"
+                path.write_text(json.dumps({"mcpServers": {SERVER_NAME: {
+                    "type": "http", "url": worker.url,
+                    "headers": {"Authorization": f"Bearer ${{{TOKEN_ENV}}}"},
+                }}}), encoding="utf-8")
+                argv.extend(["--strict-mcp-config", "--mcp-config", str(path), "--allowedTools",
+                             ",".join(f"mcp__{SERVER_NAME}__{tool}" for tool in worker.tools)])
+                out = await run_cli_process(
+                    argv, input_text=str(task), cwd=resolved_cwd or cwd, env=env,
+                    timeout_s=timeout_s, worker=worker,
+                )
 
         if out.timed_out:
             return self.build_exec_result(

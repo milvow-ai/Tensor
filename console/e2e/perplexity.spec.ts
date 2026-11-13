@@ -27,6 +27,7 @@ test.describe("Perplexity AI pool and sealed API key sign-in", () => {
     });
 
     // Submit dialog to add account
+    await dialog.getByTestId("emails-input").fill("perplexity-browser@example.com");
     const submitBtn = dialog.getByTestId("add-accounts-submit");
     await expect(submitBtn).toBeVisible();
     await submitBtn.click();
@@ -61,8 +62,7 @@ test.describe("Perplexity AI pool and sealed API key sign-in", () => {
     // Plaintext input must be cleared immediately after sending
     await expect(input).toHaveValue("");
 
-    // State updates to checking / verifying
-    await expect(card.getByText("Checking…")).toBeVisible();
+    await expect(card.getByRole("heading", { name: /Key saved.*verification pending/i })).toBeVisible();
 
     // Plaintext key MUST NOT appear anywhere in the request payloads
     expect(capturedPostData).not.toContain(secretKey);
@@ -116,8 +116,7 @@ test.describe("Perplexity AI pool and sealed API key sign-in", () => {
     // Plaintext input must be cleared immediately after sending
     await expect(input).toHaveValue("");
 
-    // Checking… visible
-    await expect(drawer.getByText("Checking…")).toBeVisible();
+    await expect(drawer.getByRole("heading", { name: /Key saved.*verification pending/i })).toBeVisible();
 
     // Plaintext key MUST NOT appear in network payload
     expect(capturedPostData).not.toContain(secretKey);

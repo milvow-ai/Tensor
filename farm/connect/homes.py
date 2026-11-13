@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from farm.settings import data_dir
+from farm.tenancy import MILVOW_TENANT_ID, require_tenant
 
 
 def account_home(conn_meta: dict[str, Any] | None, connection_id: str) -> Path:
@@ -22,7 +23,11 @@ def account_home(conn_meta: dict[str, Any] | None, connection_id: str) -> Path:
     meta = conn_meta or {}
     config_dir_str = meta.get("home") or meta.get("config_dir")
     if not config_dir_str:
-        return data_dir() / "ai" / connection_id
+        tenant = require_tenant()
+        legacy = data_dir() / "ai" / connection_id
+        if tenant == MILVOW_TENANT_ID and legacy.exists():
+            return legacy  # retain pre-tenancy account homes without moving existing credentials
+        return data_dir() / "tenants" / str(tenant) / "ai" / connection_id
     return Path(config_dir_str)
 
 

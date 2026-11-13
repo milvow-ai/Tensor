@@ -89,6 +89,7 @@ async def _ok_job(connection_id: str, home: Path) -> CheckResult:
 
 def _service(pool: DbPool, tmp_path: Path, drivers: dict[str, ScriptDriver], **kw: Any) -> LoginService:
     kw.setdefault("test_job", _ok_job)
+    kw.setdefault("verify_with_test", True)
     return LoginService(
         pool,
         driver_factory=lambda provider_id, connection_id, meta: drivers[connection_id],
@@ -104,7 +105,12 @@ async def _account(pool: DbPool, tmp_path: Path, conn_id: str, **meta: Any) -> P
     home.mkdir(parents=True)
     (home / "old.json").write_text('{"who": "old login"}', encoding="utf-8")
     await seed_connection(
-        pool, "claude", conn_id, kind="ai", executor="cli_agent", status="needs_login",
+        pool,
+        "claude",
+        conn_id,
+        kind="ai",
+        executor="cli_agent",
+        status="needs_login",
         meta={"cli": "claude", "home": str(home), **meta},
     )
     return home
@@ -139,7 +145,9 @@ async def test_device_code_login_promotes_the_new_home_and_activates_the_account
     pool: DbPool, tmp_path: Path
 ) -> None:
     home = await _account(pool, tmp_path, "claude-05", expected_email="jane@example.com")
-    driver = ScriptDriver([UserCode(code="ABCD-1234", verification_uri="https://example.test/device"), GATE, Success()])
+    driver = ScriptDriver(
+        [UserCode(code="ABCD-1234", verification_uri="https://example.test/device"), GATE, Success()]
+    )
     svc = _service(pool, tmp_path, {"claude-05": driver})
     await svc.start()
     try:
@@ -152,7 +160,14 @@ async def test_device_code_login_promotes_the_new_home_and_activates_the_account
         row = await _wait(pool, sid, "done")
     finally:
         await svc.stop()
-    assert row["evidence"] == {"test_run_id": "run-ok-1", "models": ["opus", "sonnet"], "test_ok": True}
+    assert row["evidence"] == {
+        "test_run_id": "run-ok-1",
+        "models": ["opus", "sonnet"],
+        "test_ok": True,
+        "test_status": "passed",
+        "identity_verified": True,
+        "quota_status": "unsupported",
+    }
     assert row["identity"]["email_masked"].startswith("j") and row["identity"]["plan"] == "pro"
     assert row["finished_at"] is not None
     status, meta = await _connection(pool, "claude-05")
@@ -201,10 +216,17 @@ async def test_a_pasted_code_reaches_the_driver_sealed(pool: DbPool, tmp_path: P
 
 async def test_signing_in_as_an_account_the_pool_has_is_refused(pool: DbPool, tmp_path: Path) -> None:
     home = await _account(pool, tmp_path, "claude-05")
-    svc = _service(pool, tmp_path, {"claude-05": ScriptDriver([UserCode(code="X", verification_uri="u"), Success()])})
+    svc = _service(
+        pool, tmp_path, {"claude-05": ScriptDriver([UserCode(code="X", verification_uri="u"), Success()])}
+    )
     twin_hash = svc._account_hash(MILVOW_TENANT_ID, "claude", JANE.provider_account_id)
     await seed_connection(
-        pool, "claude", "claude-02", kind="ai", executor="cli_agent", status="active",
+        pool,
+        "claude",
+        "claude-02",
+        kind="ai",
+        executor="cli_agent",
+        status="active",
         meta={"cli": "claude", "identity": {"account_hash": twin_hash}},
     )
     await svc.start()
@@ -222,11 +244,20 @@ async def test_signing_in_as_an_account_the_pool_has_is_refused(pool: DbPool, tm
 @pytest.mark.parametrize(
     ("script", "kwargs", "state", "kind"),
     [
-        pytest.param([Url(url="u"), Failure(kind="auth", excerpt="denied")], {}, "failed", "auth", id="failure"),
+        pytest.param(
+            [Url(url="u"), Failure(kind="auth", excerpt="denied")], {}, "failed", "auth", id="failure"
+        ),
         pytest.param([Url(url="u"), HANG], {"user_timeout_s": 0.3}, "expired", "expired", id="nobody-acts"),
-        pytest.param([UserCode(code="C", verification_uri="u"), Success()], {"bad_job": True}, "failed",
-                     "test_failed", id="test-job-fails"),
-        pytest.param([Url(url="u"), Success()], {"no_identity": True}, "failed", "no_identity", id="who-unknown"),
+        pytest.param(
+            [UserCode(code="C", verification_uri="u"), Success()],
+            {"bad_job": True},
+            "failed",
+            "test_failed",
+            id="test-job-fails",
+        ),
+        pytest.param(
+            [Url(url="u"), Success()], {"no_identity": True}, "failed", "no_identity", id="who-unknown"
+        ),
     ],
 )
 async def test_every_unhappy_end_leaves_the_account_as_it_was(
@@ -271,7 +302,9 @@ async def test_a_driver_that_crashes_ends_failed(pool: DbPool, tmp_path: Path) -
 
 async def test_provider_verification_is_shown_with_its_link(pool: DbPool, tmp_path: Path) -> None:
     await _account(pool, tmp_path, "claude-05")
-    driver = ScriptDriver([NeedsVerification(url="https://example.test/verify", message="verify your account")])
+    driver = ScriptDriver(
+        [NeedsVerification(url="https://example.test/verify", message="verify your account")]
+    )
     svc = _service(pool, tmp_path, {"claude-05": driver})
     await svc.start()
     try:
@@ -346,8 +379,12 @@ async def test_a_provider_without_a_driver_fails_at_once(pool: DbPool, tmp_path:
 async def test_restart_and_expiry_sweeps(pool: DbPool, tmp_path: Path) -> None:
     await _account(pool, tmp_path, "claude-05")
     await _account(pool, tmp_path, "claude-06")
-    left = await sessions.create(pool, connection_id="claude-05", provider_id="claude", method="loopback", created_by="t")
-    late = await sessions.create(pool, connection_id="claude-06", provider_id="claude", method="loopback", created_by="t")
+    left = await sessions.create(
+        pool, connection_id="claude-05", provider_id="claude", method="loopback", created_by="t"
+    )
+    late = await sessions.create(
+        pool, connection_id="claude-06", provider_id="claude", method="loopback", created_by="t"
+    )
     async with tenant_connection(pool) as conn:
         await conn.execute(
             "update public.login_sessions set state = 'waiting_for_user', expires_at = now() - interval '1 minute' "

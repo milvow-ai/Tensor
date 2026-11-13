@@ -139,7 +139,9 @@ export function getLoginCardViewModel(session: LoginSession): LoginCardViewModel
           isTerminal: false,
           canCancel: true,
           title: "Sign in with provider",
-          description: "Sign in at the provider, then paste the code back here",
+          description: session.method === "oauth_redirect"
+            ? "After approval, copy the full address from the browser, even if the page cannot load."
+            : "Copy the link into a private browser window, use the expected email, then paste the code back here",
           statusChipStatus: "waiting-for-you",
           statusChipLabel: "Waiting for you",
           authUrl: session.auth_url,
@@ -163,7 +165,7 @@ export function getLoginCardViewModel(session: LoginSession): LoginCardViewModel
         verificationUri: session.verification_uri,
         needsInput: false,
         expiresAt: session.expires_at,
-        actions: ["cancel"],
+        actions: session.auth_url ? ["open_auth_url", "cancel"] : ["cancel"],
       };
 
     case "verifying":
@@ -177,7 +179,9 @@ export function getLoginCardViewModel(session: LoginSession): LoginCardViewModel
         title: "Verifying account",
         statusChipStatus: "running",
         statusChipLabel: "Verifying",
-        checklist: ["Signed in", "Checking who it is", "Test reply"],
+        checklist: session.method === "oauth_redirect"
+          ? ["Checking authorization", "Discovering MCP tools"]
+          : ["Signed in", "Checking verified identity", "Reading supported metadata"],
         needsInput: false,
         actions: ["cancel"],
       };
@@ -190,7 +194,7 @@ export function getLoginCardViewModel(session: LoginSession): LoginCardViewModel
         state,
         isTerminal: true,
         canCancel: false,
-        title: "Ready",
+        title: "Signed in",
         statusChipStatus: "ready",
         statusChipLabel: "Ready",
         identity: session.identity,

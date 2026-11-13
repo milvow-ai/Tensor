@@ -415,8 +415,10 @@ async def register_task_tools(
 
     @server.tool(annotations={"readOnlyHint": True})
     async def worker_profiles(account: str | None = None) -> dict[str, Any]:
-        """Show live worker slots, queued and active jobs, requested and reported CLI models, and quota
-        per account. Provider allowances are timestamped and may be stale or unavailable."""
+        """Show queued and active jobs, model choices, and observed allowance per account.
+
+        Execution limits are configured ceilings. Provider allowance does not predict remaining jobs.
+        """
         _actor()
         return await _worker_profiles(ctx, account)
 
@@ -425,8 +427,9 @@ async def _worker_profiles(ctx: FarmContext, account: str | None) -> dict[str, A
     now = ctx.clock()
     async with tenant_connection(ctx.pool) as conn, conn.cursor(row_factory=dict_row) as cur:
         await cur.execute(
-            "select account,provider,label,status,slots,busy,queued,running_models,cooldown_until "
-            "from public.v_worker_activity where (%s::text is null or account=%s) order by provider,account",
+            "select account,provider,label,status,slots as configured_execution_limit,"
+            "busy,queued,running_models,cooldown_until from public.v_worker_activity "
+            "where kind='ai' and (%s::text is null or account=%s) order by provider,account",
             (account, account),
         )
         workers = await cur.fetchall()
@@ -438,36 +441,24 @@ async def _worker_profiles(ctx: FarmContext, account: str | None) -> dict[str, A
             "order by started_at nulls last,created_at limit 100", (account, account),
         )
         jobs = await cur.fetchall()
-        await cur.execute(
-            "select coalesce(sum(busy),0)::int as busy from public.v_worker_activity",
-        )
-        total = await cur.fetchone()
     limits = {
         connection.id: connection for pool in await capacity_report(ctx.pool, now)
         for connection in pool.connections
     }
     ai = await list_ai_accounts(ctx.pool, now)
     ai_accounts = {entry["id"]: entry for entry in ai["accounts"]}
-    ai_pools = {entry["id"]: entry for entry in ai["ais"]}
     usage = await usage_report(ctx.pool, now)
     allowances = {entry["connection_id"]: entry for entry in usage["provider_allowances"]}
-    busy = total["busy"] if total else 0
-    global_free = max(0, ctx.max_parallel - busy)
     for row in workers:
         capacity = limits.get(row["account"])
         account_info = ai_accounts.get(row["account"], {})
-        pool_info = ai_pools.get(row["provider"], {})
-        local_free = max(0, row["slots"] - max(row["busy"], account_info.get("active_jobs", 0)))
-        pool_cap = pool_info.get("max_parallel")
-        if pool_cap is not None:
-            local_free = min(local_free, max(0, pool_cap - pool_info["active_jobs"]))
-        eligible = capacity and capacity.available and account_info.get("usable", True)
-        row["open_slots"] = min(local_free, global_free) if eligible else 0
         row["identity"] = account_info.get("identity")
         row["supported_models"] = account_info.get("models", [])
+        row["model_availability"] = account_info.get("model_availability", [])
         row["quota_units"] = capacity.units if capacity else []
         row["provider_allowance"] = allowances.get(row["account"])
+        row["remaining_jobs_estimate"] = None
     return cast(dict[str, Any], to_jsonable({
-        "observed_at": now, "global_slots": ctx.max_parallel, "busy_slots": busy, "workers": workers,
+        "observed_at": now, "configured_global_execution_limit": ctx.max_parallel, "workers": workers,
         "jobs": jobs, "ai_pools": ai["ais"],
     }, None))

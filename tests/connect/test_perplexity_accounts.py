@@ -41,7 +41,11 @@ async def test_add_accounts_creates_the_perplexity_pool_without_sign_in_sessions
     pool: DbPool, service: LoginService
 ) -> None:
     status, result = await execute_command(
-        pool, uuid4(), "add_accounts", {"provider_id": "perplexity", "count": 2}, actor="owner"
+        pool,
+        uuid4(),
+        "add_accounts",
+        {"provider_id": "perplexity", "count": 2, "emails": ["first@example.com", "second@example.com"]},
+        actor="owner",
     )
     assert status == "done", result
     assert result["connection_ids"] == ["perplexity-01", "perplexity-02"] and result["session_ids"] == []
@@ -54,7 +58,9 @@ async def test_add_accounts_creates_the_perplexity_pool_without_sign_in_sessions
     for row in rows:
         assert row[1].startswith("Perplexity (") and row[2] == "needs_login"
         assert row[3] == f"cli:{row[0]}"  # no key yet: the executor and test_connection ask for one
-        assert row[4]["cli"] == "perplexity" and row[4]["model"] == "sonar" and "sonar-pro" in row[4]["models"]
+        assert (
+            row[4]["cli"] == "perplexity" and row[4]["model"] == "sonar" and "sonar-pro" in row[4]["models"]
+        )
     assert await _rows(pool, "select kind, executor from public.providers where id = 'perplexity'") == [
         ("ai", "cli_agent")
     ]
@@ -65,8 +71,14 @@ async def test_start_login_for_a_perplexity_account_says_to_paste_a_key(
     pool: DbPool, service: LoginService
 ) -> None:
     await seed_connection(
-        pool, "perplexity", "perplexity-01", kind="ai", executor="cli_agent", status="needs_login",
-        auth_ref="cli:perplexity-01", meta={"cli": "perplexity"},
+        pool,
+        "perplexity",
+        "perplexity-01",
+        kind="ai",
+        executor="cli_agent",
+        status="needs_login",
+        auth_ref="cli:perplexity-01",
+        meta={"cli": "perplexity"},
     )
     status, result = await execute_command(
         pool, uuid4(), "start_login", {"connection_id": "perplexity-01"}, actor="owner"

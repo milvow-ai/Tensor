@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { ArrowLeft, Minus, Plus } from "lucide-react";
+import { ArrowLeft, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -19,40 +19,55 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { readCommand, submitCommand } from "@/lib/farm/actions";
 import { AI_CLI_INFO, AI_CLIS, type AiCli } from "@/lib/farm/command-meta";
+import { runQueuedCommand } from "@/lib/farm/queued-command";
 
 import { SignInCard } from "./sign-in-card";
 
 export interface AddAccountsDialogProps {
   defaultProviderId?: string;
   trigger?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   onAdded?: (connectionIds: string[], sessionIds: string[]) => void;
 }
 
-const PLANS = ["Free", "Pro", "Max", "Team"] as const;
-
-export function AddAccountsDialog({ defaultProviderId = "claude", trigger, onAdded }: AddAccountsDialogProps) {
-  const [open, setOpen] = useState(false);
+export function AddAccountsDialog({
+  defaultProviderId = "claude",
+  trigger,
+  onAdded,
+  open: controlledOpen,
+  onOpenChange,
+}: AddAccountsDialogProps) {
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = (next: boolean) => {
+    setLocalOpen(next);
+    onOpenChange?.(next);
+  };
   const [step, setStep] = useState<"form" | "stack">("form");
   const [loading, setLoading] = useState(false);
 
   // Form State
-  const [providerId, setProviderId] = useState<string>(defaultProviderId);
-  const [count, setCount] = useState<number>(1);
-  const [plan, setPlan] = useState<string>("Pro");
+  const [cli, setCli] = useState<AiCli>(
+    () =>
+      AI_CLIS.find((item) => item !== "agy" && item === defaultProviderId) ??
+      AI_CLIS.find((item) => AI_CLI_INFO[item].providerId === defaultProviderId) ??
+      "claude",
+  );
+  const providerId = AI_CLI_INFO[cli].providerId;
+  const [namesText, setNamesText] = useState("");
   const [emailsText, setEmailsText] = useState<string>("");
-  const [maxParallel, setMaxParallel] = useState<number>(1);
 
   // Stack State (created sessions)
   const [createdSessionIds, setCreatedSessionIds] = useState<string[]>([]);
+  const [sessionsByConnection, setSessionsByConnection] = useState<Record<string, string>>({});
   const [createdConnectionIds, setCreatedConnectionIds] = useState<string[]>([]);
 
   const resetForm = () => {
     setStep("form");
-    setCount(1);
     setEmailsText("");
-    setMaxParallel(1);
+    setNamesText("");
     setCreatedSessionIds([]);
     setCreatedConnectionIds([]);
     setLoading(false);
@@ -60,9 +75,7 @@ export function AddAccountsDialog({ defaultProviderId = "claude", trigger, onAdd
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
-    if (!next) {
-      resetForm();
-    }
+    if (!next && !loading && createdConnectionIds.length === 0) resetForm();
   };
 
   const parseEmails = (): string[] => {
@@ -78,45 +91,26 @@ export function AddAccountsDialog({ defaultProviderId = "claude", trigger, onAdd
 
     try {
       const emails = parseEmails();
-      const cli = AI_CLIS.includes(providerId as AiCli) ? (providerId as AiCli) : undefined;
-
-      const res = await submitCommand("add_accounts", {
+      if (!emails.length || emails.length > 10) throw new Error("Enter one to ten expected email addresses.");
+      const key = `add-accounts:${providerId}`;
+      const cmd = await runQueuedCommand(key, "add_accounts", {
         provider_id: providerId,
-        count,
+        count: emails.length,
         cli,
-        plan,
-        emails: emails.length > 0 ? emails : undefined,
-        max_parallel: maxParallel,
+        emails,
+        names: namesText.trim()
+          ? namesText
+              .trimEnd()
+              .split("\n")
+              .map((name) => name.trim())
+          : [],
       });
-
-      if (!res.ok) {
-        toast.error(res.error || "Failed to add accounts");
-        setLoading(false);
-        return;
-      }
-
-      const cmdId = res.data.id;
-      let cmd = res.data;
-      const started = Date.now();
-      while (cmd.status === "queued" || cmd.status === "running") {
-        if (Date.now() - started > 15_000) break;
-        await new Promise((r) => setTimeout(r, 200));
-        const polled = await readCommand(cmdId);
-        if (polled.ok && polled.data) {
-          cmd = polled.data;
-        }
-      }
-
-      if (cmd.status !== "done") {
-        toast.error(cmd.status === "rejected" ? "Failed to add accounts: rejected" : "Failed to add accounts");
-        setLoading(false);
-        return;
-      }
 
       const result = cmd.result as
         | {
             connection_ids?: string[];
             session_ids?: string[];
+            accounts?: { connection_id: string; session_id: string | null }[];
           }
         | undefined;
 
@@ -125,8 +119,22 @@ export function AddAccountsDialog({ defaultProviderId = "claude", trigger, onAdd
 
       setCreatedConnectionIds(connIds);
       setCreatedSessionIds(sessIds);
-      setStep("stack");
-      toast.success(`Created ${count} account slot${count > 1 ? "s" : ""}`);
+      setSessionsByConnection(
+        Object.fromEntries(
+          (result?.accounts ?? connIds.map((connection_id, index) => ({ connection_id, session_id: sessIds[index] })))
+            .filter((a) => a.session_id)
+            .map((a) => [a.connection_id, a.session_id as string]),
+        ),
+      );
+      if (connIds.length) setStep("stack");
+      if (cmd.status !== "done") {
+        throw new Error(
+          typeof cmd.result?.error === "string"
+            ? cmd.result.error
+            : "Some accounts need a retry. Existing account setups are preserved.",
+        );
+      }
+      toast.success(`Created ${connIds.length} account setup${connIds.length > 1 ? "s" : ""}`);
       onAdded?.(connIds, sessIds);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to add accounts");
@@ -168,7 +176,7 @@ export function AddAccountsDialog({ defaultProviderId = "claude", trigger, onAdd
           <DialogDescription className="text-xs">
             {step === "form"
               ? "Add up to 10 accounts to this pool and sign them all in through dashboard cards."
-              : `Complete sign-in for the ${createdSessionIds.length} newly added slots.`}
+              : `Complete sign-in for the ${createdSessionIds.length} newly added accounts.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -182,107 +190,40 @@ export function AddAccountsDialog({ defaultProviderId = "claude", trigger, onAdd
               <NativeSelect
                 id="provider-select"
                 data-testid="provider-select"
-                value={providerId}
-                onChange={(e) => setProviderId(e.target.value)}
+                value={cli}
+                onChange={(e) => setCli(e.target.value as AiCli)}
                 className="w-full"
               >
-                {AI_CLIS.map((cli) => (
-                  <NativeSelectOption key={cli} value={AI_CLI_INFO[cli].providerId}>
+                {AI_CLIS.filter((item) => item !== "agy").map((cli) => (
+                  <NativeSelectOption key={cli} value={cli}>
                     {AI_CLI_INFO[cli].label} ({AI_CLI_INFO[cli].providerId})
                   </NativeSelectOption>
                 ))}
               </NativeSelect>
             </div>
 
-            {/* Count Stepper */}
             <div className="space-y-1.5">
-              <Label className="font-medium text-xs">Number of accounts (1–10)</Label>
-              <div className="flex items-center gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="size-8"
-                  disabled={count <= 1}
-                  onClick={() => setCount((c) => Math.max(1, c - 1))}
-                >
-                  <Minus className="size-3.5" />
-                </Button>
-                <span
-                  data-testid="count-stepper"
-                  className="w-8 text-center font-mono font-semibold text-base tabular-nums"
-                >
-                  {count}
-                </span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  className="size-8"
-                  disabled={count >= 10}
-                  onClick={() => setCount((c) => Math.min(10, c + 1))}
-                >
-                  <Plus className="size-3.5" />
-                </Button>
-                <span className="ml-2 text-muted-foreground text-xs">
-                  {count === 1 ? "1 new slot" : `${count} new slots`}
-                </span>
-              </div>
+              <Label htmlFor="names-input">Account names (optional, one per line)</Label>
+              <Textarea id="names-input" value={namesText} onChange={(e) => setNamesText(e.target.value)} />
             </div>
 
-            {/* Plan */}
-            <div className="space-y-1.5">
-              <Label htmlFor="plan-select" className="font-medium text-xs">
-                Plan
-              </Label>
-              <NativeSelect
-                id="plan-select"
-                data-testid="plan-select"
-                value={plan}
-                onChange={(e) => setPlan(e.target.value)}
-                className="w-full"
-              >
-                {PLANS.map((p) => (
-                  <NativeSelectOption key={p} value={p}>
-                    {p}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </div>
-
-            {/* Concurrency / Max Parallel */}
-            <div className="space-y-1.5">
-              <Label htmlFor="max-parallel-select" className="font-medium text-xs">
-                Jobs at a time per account (1–4)
-              </Label>
-              <NativeSelect
-                id="max-parallel-select"
-                value={String(maxParallel)}
-                onChange={(e) => setMaxParallel(Number(e.target.value))}
-                className="w-full"
-              >
-                <NativeSelectOption value="1">1 concurrent job</NativeSelectOption>
-                <NativeSelectOption value="2">2 concurrent jobs</NativeSelectOption>
-                <NativeSelectOption value="3">3 concurrent jobs</NativeSelectOption>
-                <NativeSelectOption value="4">4 concurrent jobs</NativeSelectOption>
-              </NativeSelect>
-            </div>
-
-            {/* Optional Expected Emails */}
             <div className="space-y-1.5">
               <Label htmlFor="emails-input" className="font-medium text-xs">
-                Expected emails per slot (optional)
+                Expected emails per account (required)
               </Label>
               <Textarea
                 id="emails-input"
                 data-testid="emails-input"
+                required
                 placeholder="One email per line or comma-separated"
                 rows={3}
                 value={emailsText}
                 onChange={(e) => setEmailsText(e.target.value)}
                 className="font-mono text-xs"
               />
-              <p className="text-[11px] text-muted-foreground">Helps verify the correct account signed in.</p>
+              <p className="text-[11px] text-muted-foreground">
+                Enter one expected email per account. The email must match the provider sign-in.
+              </p>
             </div>
 
             <DialogFooter className="pt-2">
@@ -291,7 +232,7 @@ export function AddAccountsDialog({ defaultProviderId = "claude", trigger, onAdd
               </Button>
               <Button type="submit" data-testid="add-accounts-submit" disabled={loading}>
                 {loading ? <Spinner className="mr-2 size-4" /> : null}
-                Create slots & sign in
+                {loading ? "Waiting for Farm (safe to close)" : "Create accounts & sign in"}
               </Button>
             </DialogFooter>
           </form>
@@ -302,10 +243,10 @@ export function AddAccountsDialog({ defaultProviderId = "claude", trigger, onAdd
             </div>
 
             <div className="space-y-4">
-              {createdConnectionIds.map((connId, index) => (
+              {createdConnectionIds.map((connId) => (
                 <SignInCard
                   key={connId}
-                  sessionId={createdSessionIds[index]}
+                  sessionId={sessionsByConnection[connId]}
                   connectionId={connId}
                   providerId={providerId}
                   onRemoveSlot={handleRemoveSlot}

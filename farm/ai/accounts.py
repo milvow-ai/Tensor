@@ -96,7 +96,7 @@ class AccountInfo:
         return "ok" if self.success_count > 0 else "unknown"
 
     def offers(self, model: str | None) -> bool:
-        return model is None or model.lower() in {m.lower() for m in self.models}
+        return model is None or selection.model_allowed(self.meta, model)
 
     def models_check(self, accepted: Sequence[str] | None) -> ModelCheck:
         """This account's models against ``accepted``, the ones its CLI lists (``None``: cannot list)."""
@@ -429,7 +429,8 @@ def account_report(account: AccountInfo, now: datetime, calls_today: int) -> dic
     identity = account.meta.get("identity")
     if isinstance(identity, dict) and identity.get("account_hash"):
         entry["identity"] = {
-            key: identity[key] for key in ("email", "email_masked", "display_name", "verified_at")
+            key: identity[key]
+            for key in ("email", "email_masked", "display_name", "plan", "org", "verified_at")
             if isinstance(identity.get(key), str)
         }
     if reason is not None:
@@ -442,6 +443,10 @@ def account_report(account: AccountInfo, now: datetime, calls_today: int) -> dic
         models=list(account.models),
         efforts=list(account.efforts),
         max_parallel=account.max_parallel,
+        configured_execution_limit=account.max_parallel,
+        remaining_jobs_estimate=None,
+        remaining_jobs_estimate_status="unknown",
+        model_availability=selection.model_menu(account.meta),
         active_jobs=account.active,
         queued_jobs=account.queued,
         todays_calls=calls_today,
@@ -495,7 +500,21 @@ async def list_ai_accounts(pool: DbPool, now: datetime) -> dict[str, Any]:
                 "queued_jobs": sum(int(e["queued_jobs"]) for e in own),
             }
         )
-    return {"ais": ais, "accounts": entries}
+    from farm.manager.ai_usage import usage_report
+
+    observations = (await usage_report(pool, now))["provider_allowances"]
+    for entry in entries:
+        entry["provider_quota"] = next(
+            (o for o in observations if o["connection_id"] == entry["id"]),
+            {"status": "unknown", "freshness": "unknown"},
+        )
+    return {
+        "ais": ais,
+        "accounts": entries,
+        "capacity_basis": "configured_concurrency",
+        "remaining_jobs_estimate": None,
+        "estimate_status": "unknown",
+    }
 
 
 # --- the pick-list behind ai_options and selection_required ------------------------------------------------

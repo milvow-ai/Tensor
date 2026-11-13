@@ -15,9 +15,11 @@ from pathlib import Path
 
 import httpx
 import pytest
+from fastmcp import Client
+from fastmcp.client.transports import StreamableHttpTransport
 
 import farm.db.pool as pool_module
-from farm.control.run import run_farm
+from farm.control.run import create_token, run_farm
 from farm.db.pool import DbPool, open_pool
 
 
@@ -33,6 +35,7 @@ async def test_farm_run_serves_with_no_ambient_tenant(
     monkeypatch.setenv("FARM_DB_URL", db_url)  # the migrated test database, not the developer's own
     monkeypatch.setenv("FARM_DATA_DIR", str(tmp_path))
     port = _free_port()
+    token = await create_token(pool, "startup-check")
     stop = asyncio.Event()
     farm = asyncio.create_task(run_farm(host="127.0.0.1", port=port, shutdown_event=stop))
     try:
@@ -49,6 +52,11 @@ async def test_farm_run_serves_with_no_ambient_tenant(
                 await asyncio.sleep(0.1)
             else:
                 pytest.fail("farm run did not start serving within 30 s")
+        transport = StreamableHttpTransport(
+            f"http://127.0.0.1:{port}/mcp", headers={"Authorization": f"Bearer {token}"},
+        )
+        async with Client(transport, timeout=10) as mcp:
+            assert "worker_profiles" in {tool.name for tool in await mcp.list_tools()}
     finally:
         stop.set()
         await asyncio.wait_for(farm, timeout=60)

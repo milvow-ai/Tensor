@@ -15,10 +15,9 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
-import { submitCommand } from "@/lib/farm/actions";
 import { AI_CLI_INFO, type AiCli, isApiKeyAi } from "@/lib/farm/command-meta";
-import { generateEnvName } from "@/lib/farm/login";
 import { readConnectPublicKey } from "@/lib/farm/login-actions";
+import { requireCommandDone, runQueuedCommand } from "@/lib/farm/queued-command";
 import { buildAad, seal } from "@/lib/farm/seal";
 import type { LoginSession } from "@/lib/farm/types";
 
@@ -26,6 +25,8 @@ export interface SignInCardProps {
   sessionId?: string;
   connectionId?: string;
   providerId?: string;
+  providerName?: string;
+  mcpOAuth?: boolean;
   initialSession?: LoginSession | null;
   onDone?: (session: LoginSession) => void;
   onCancelled?: () => void;
@@ -37,6 +38,8 @@ export function SignInCard({
   sessionId,
   connectionId,
   providerId,
+  providerName,
+  mcpOAuth,
   initialSession,
   onDone,
   onCancelled,
@@ -65,11 +68,12 @@ export function SignInCard({
     session?.provider_id ??
     viewModel?.providerId ??
     (effectiveConnectionId ? effectiveConnectionId.split("-")[0] : undefined);
-  const isApiKey = isApiKeyAi(rawProvider) || session?.method === "api_key";
+  const isMcpOAuth = mcpOAuth || session?.method === "oauth_redirect";
+  const isApiKey = !isMcpOAuth && (isApiKeyAi(rawProvider) || session?.method === "api_key");
 
   const resolvedProviderId = (rawProvider && rawProvider in AI_CLI_INFO ? rawProvider : "perplexity") as AiCli;
   const cliInfo = AI_CLI_INFO[resolvedProviderId] ?? AI_CLI_INFO.perplexity;
-  const providerLabel = cliInfo.label;
+  const providerLabel = providerName ?? (isMcpOAuth ? (rawProvider ?? "provider") : cliInfo.label);
   const models: string[] = viewModel?.evidence?.models ?? [];
 
   // Copy helper
@@ -173,58 +177,19 @@ export function SignInCard({
           return;
         }
 
-        const envName = generateEnvName(resolvedProviderId, []);
+        const envName = `FARM_AI_KEY_${crypto.randomUUID().replaceAll("-", "").toUpperCase()}`;
         const aad = buildAad(envName, "secret");
         const envelope = await seal(plainInput, pk, aad);
 
-        const res = await submitCommand("save_secret", {
+        const command = await runQueuedCommand(`save-key:${effectiveConnectionId}`, "save_secret", {
           name: envName,
           sealed: envelope,
           connection_id: effectiveConnectionId,
         });
 
-        if (!res.ok) {
-          setApiKeyError(res.error);
-          toast.error(res.error || "Failed to save secret");
-          setApiKeyStatus("failed");
-          setSubmittingInput(false);
-          return;
-        }
-
-        // State updates to checking / verifying
-        setApiKeyStatus("verifying");
-
-        // Keep verifying state visible so connection testing is observable
-        await new Promise((r) => setTimeout(r, 1000));
-
-        // After saving, the account test runs like for other AIs
-        if (effectiveConnectionId) {
-          await submitCommand("test_connection", { connection_id: effectiveConnectionId });
-        }
-
+        requireCommandDone(command);
         setApiKeyStatus("done");
-        toast.success("Account connected and tested");
-        onDone?.({
-          id: session?.id ?? sessionId ?? crypto.randomUUID(),
-          connection_id: effectiveConnectionId ?? "",
-          provider_id: resolvedProviderId,
-          method: "api_key",
-          state: "done",
-          auth_url: "https://www.perplexity.ai/account/api/keys",
-          user_code: null,
-          verification_uri: "https://www.perplexity.ai/account/api/keys",
-          needs_input: false,
-          input_hint: null,
-          expires_at: null,
-          identity: {},
-          evidence: { models },
-          error_kind: null,
-          error_excerpt: null,
-          created_by: "owner@farm.local",
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          finished_at: new Date().toISOString(),
-        });
+        toast.success("Key saved. Identity and model access have not been verified.");
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Failed to connect API key";
         setApiKeyError(msg);
@@ -249,14 +214,16 @@ export function SignInCard({
     if (!slotId) return;
     setRemovingSlot(true);
     try {
-      if (onRemoveSlot) {
-        onRemoveSlot(slotId);
-      } else {
-        await submitCommand("remove_connection", { connection_id: slotId });
-        toast.success(`Slot ${slotId} removed`);
+      if (session && !session.finished_at) {
+        const cancelled = await cancelLogin();
+        if (!cancelled) throw new Error("Cancel sign-in before removing this account.");
       }
+      const command = await runQueuedCommand(`remove:${slotId}`, "remove_connection", { connection_id: slotId });
+      requireCommandDone(command);
+      onRemoveSlot?.(slotId);
+      toast.success(`Slot ${slotId} removed`);
     } catch {
-      toast.error("Failed to remove slot");
+      toast.error("Failed to remove account");
     } finally {
       setRemovingSlot(false);
     }
@@ -266,10 +233,12 @@ export function SignInCard({
     apiKeyStatus === "verifying" || (apiKeyStatus === "idle" && viewModel?.state === "verifying")
       ? "Verifying account"
       : apiKeyStatus === "done" || (apiKeyStatus === "idle" && viewModel?.state === "done")
-      ? "Ready"
-      : isApiKey
-      ? `Sign in ${effectiveConnectionId ?? providerLabel}`
-      : (viewModel?.title ?? "Sign in");
+        ? isApiKey
+          ? "Key saved — verification pending"
+          : "Signed in"
+        : isApiKey
+          ? `Sign in ${effectiveConnectionId ?? providerLabel}`
+          : (viewModel?.title ?? "Sign in");
 
   const cardDescription =
     isApiKey && apiKeyStatus === "idle" && (!viewModel || viewModel.state === "waiting_for_user")
@@ -286,20 +255,20 @@ export function SignInCard({
     ? currentState === "verifying"
       ? "running"
       : currentState === "done"
-      ? "ready"
-      : currentState === "failed"
-      ? "failed"
-      : "waiting-for-you"
+        ? "ready"
+        : currentState === "failed"
+          ? "failed"
+          : "waiting-for-you"
     : (viewModel?.statusChipStatus ?? "waiting-for-you");
 
   const chipLabel = isApiKey
     ? currentState === "verifying"
       ? "Verifying"
       : currentState === "done"
-      ? "Ready"
-      : currentState === "failed"
-      ? "Failed"
-      : "Waiting for you"
+        ? "Key saved"
+        : currentState === "failed"
+          ? "Failed"
+          : "Waiting for you"
     : (viewModel?.statusChipLabel ?? "Waiting for you");
 
   const isVerifying = currentState === "verifying";
@@ -324,6 +293,30 @@ export function SignInCard({
         </div>
         <StatusChip status={chipStatus} label={chipLabel} size="sm" />
       </div>
+
+      {!isApiKey && currentState === "waiting_for_user" && (viewModel?.authUrl || viewModel?.verificationUri) && (
+        <div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void copy(viewModel?.authUrl ?? viewModel?.verificationUri, "Sign-in link")}
+          >
+            Copy sign-in link
+          </Button>
+          {isMcpOAuth && !viewModel.needsInput && viewModel.authUrl && (
+            <Button asChild size="sm" variant="outline">
+              <a href={viewModel.authUrl} target="_blank" rel="noopener noreferrer" data-testid="auth-link">
+                Sign in at {providerLabel}
+              </a>
+            </Button>
+          )}
+          <p className="text-muted-foreground text-xs">
+            {isMcpOAuth
+              ? "Use a private browser window to choose the account you want this connection to use."
+              : "Open the copied link in a private browser window and sign in with the expected email."}
+          </p>
+        </div>
+      )}
 
       {/* State-specific Body */}
       {!isApiKey && (currentState === "queued" || currentState === "starting") && (
@@ -377,10 +370,7 @@ export function SignInCard({
 
       {/* API Key Form for API-key AI */}
       {isApiKey && (
-        <form
-          onSubmit={handleConnect}
-          className={currentState === "waiting_for_user" ? "space-y-3.5 pt-1" : "hidden"}
-        >
+        <form onSubmit={handleConnect} className={currentState === "waiting_for_user" ? "space-y-3.5 pt-1" : "hidden"}>
           <div>
             <Button asChild variant="outline" size="sm" className="gap-2 text-xs">
               <a
@@ -427,9 +417,7 @@ export function SignInCard({
                 Connect
               </Button>
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              Encrypted in your browser and saved to the Farm vault.
-            </p>
+            <p className="text-[11px] text-muted-foreground">Encrypted in your browser and saved to the Farm vault.</p>
           </div>
         </form>
       )}
@@ -442,7 +430,7 @@ export function SignInCard({
               <Button asChild variant="outline" size="sm" className="gap-2 text-xs">
                 <a href={viewModel.authUrl} target="_blank" rel="noopener noreferrer" data-testid="auth-link">
                   <ExternalLink className="size-3.5" />
-                  Sign in at {viewModel.providerId || "provider"}
+                  Sign in at {providerLabel}
                 </a>
               </Button>
             </div>
@@ -450,7 +438,7 @@ export function SignInCard({
 
           <div className="space-y-1.5">
             <Label htmlFor={`code-input-${viewModel.sessionId}`} className="font-medium text-xs">
-              Paste the code the page shows you
+              {isMcpOAuth ? "Paste the redirected browser address" : "Paste the code the page shows you"}
             </Label>
             <div className="flex gap-2">
               <Input
@@ -458,7 +446,7 @@ export function SignInCard({
                 data-testid="input-code"
                 autoComplete="off"
                 spellCheck={false}
-                placeholder="Paste authorization code here"
+                placeholder={isMcpOAuth ? "Paste the full redirect URL" : "Paste authorization code here"}
                 value={inputCode}
                 onChange={(e) => setInputCode(e.target.value)}
                 className="font-mono text-xs"
@@ -493,7 +481,10 @@ export function SignInCard({
             <span>Checking…</span>
           </div>
           <ul className="space-y-1.5 border-border border-t pt-2 text-muted-foreground text-xs">
-            {(isApiKey ? ["Key saved sealed", "Testing API connection"] : (viewModel?.checklist ?? ["Signed in", "Checking who it is", "Test reply"])).map((item) => (
+            {(isApiKey
+              ? ["Saving encrypted key", "Identity and model access unverified"]
+              : (viewModel?.checklist ?? ["Signed in", "Checking verified identity", "Reading supported metadata"])
+            ).map((item) => (
               <li key={item} className="flex items-center gap-2">
                 <CheckCircle2 className="size-3.5 text-emerald-600 dark:text-emerald-400" />
                 <span>{item}</span>
@@ -506,7 +497,13 @@ export function SignInCard({
       {isDone && (
         <div className="space-y-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3.5 text-xs">
           <div className="flex items-center justify-between">
-            <span className="font-medium text-emerald-700 dark:text-emerald-400">Account ready to serve requests</span>
+            <span className="font-medium text-emerald-700 dark:text-emerald-400">
+              {isMcpOAuth
+                ? "Connection verified. The provider did not report an account identity."
+                : isApiKey
+                  ? "Key saved; verification pending"
+                  : "Identity verified; model access unverified"}
+            </span>
             <span className="rounded border bg-background px-2 py-0.5 font-medium text-foreground">
               {viewModel?.identity?.plan ?? (isApiKey ? "API Key" : "Ready")}
             </span>
@@ -514,7 +511,12 @@ export function SignInCard({
 
           {!isApiKey && viewModel?.identity?.email_masked && (
             <div className="text-muted-foreground">
-              Signed in as: <span className="font-medium text-foreground">{viewModel.identity.email_masked}</span>
+              Signed in as:{" "}
+              <span className="font-medium text-foreground">
+                {typeof viewModel.identity.email === "string"
+                  ? viewModel.identity.email
+                  : viewModel.identity.email_masked}
+              </span>
             </div>
           )}
 
@@ -558,7 +560,7 @@ export function SignInCard({
               onClick={() => void handleRemoveSlot()}
             >
               {removingSlot ? <Spinner className="mr-1.5 size-3.5" /> : null}
-              Remove this slot
+              Remove this account
             </Button>
           </div>
         </div>

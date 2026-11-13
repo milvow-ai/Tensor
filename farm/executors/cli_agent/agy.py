@@ -22,6 +22,7 @@ from typing import Any
 from farm.executors.base import ConnectionView, ErrorKind, ExecRequest, ExecResult
 from farm.executors.cli_agent.base import (
     BaseCliAgentExecutor,
+    SubprocessOutput,
     clean_cli_text,
     parse_json_or_none,
     run_cli_process,
@@ -106,6 +107,11 @@ class AgyCliExecutor(BaseCliAgentExecutor):
             argv.extend(["--json-schema", schema_str])
         return argv
 
+    async def run_process(
+        self, argv: list[str], *, cwd: str | None, meta: Mapping[str, Any], timeout_s: float,
+    ) -> SubprocessOutput:
+        return await run_cli_process(argv, cwd=cwd, env=_launch_env(meta), timeout_s=timeout_s)
+
     async def execute(self, req: ExecRequest) -> ExecResult:
         meta = req.connection.meta or {}
         cli_bin = meta.get("cli_path", self.default_bin)
@@ -168,11 +174,9 @@ class AgyCliExecutor(BaseCliAgentExecutor):
                 error=f"meta.home must be an absolute path, got {home!r}",
             )
 
-        out = await run_cli_process(
-            argv,
-            cwd=resolved_cwd or cwd,
-            env=_launch_env(meta),
-            timeout_s=timeout_s,
+        work_dir = resolved_cwd or cwd
+        out = await self.run_process(
+            argv, cwd=str(work_dir) if work_dir else None, meta=meta, timeout_s=timeout_s
         )
 
         if out.timed_out:

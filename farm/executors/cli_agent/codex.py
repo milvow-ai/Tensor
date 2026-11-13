@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from farm.ai import selection
+from farm.ai.worker_bootstrap import SERVER_NAME, TOKEN_ENV, current_worker_launch
 from farm.executors.base import ErrorKind, ExecRequest, ExecResult
 from farm.executors.cli_agent.base import (
     BaseCliAgentExecutor,
@@ -100,6 +101,13 @@ class CodexCliExecutor(BaseCliAgentExecutor):
         prefix = meta.get("cli_prefix")
         use_prefix = isinstance(prefix, list) and bool(prefix)
         path_arg = _wsl_path if use_prefix else str
+        worker = None if use_prefix else current_worker_launch.get()
+        if worker is not None:
+            # Replace the MCP table for this invocation, including when resuming a session.
+            url = json.dumps(worker.url)
+            farm_server = f'{{url={url}, bearer_token_env_var="{TOKEN_ENV}"}}'
+            argv.extend(["-c", f"mcp_servers={{{SERVER_NAME}={farm_server}}}",
+                         "-c", f'shell_environment_policy.set.{TOKEN_ENV}=""'])
 
         effective_cwd = resolved_cwd or cwd
         if effective_cwd:
@@ -124,13 +132,14 @@ class CodexCliExecutor(BaseCliAgentExecutor):
                 env[str(k)] = str(v)
 
         try:
-            out = await run_cli_process(
-                argv,
-                input_text=task,
-                cwd=effective_cwd,
-                env=env,
-                timeout_s=timeout_s,
-            )
+            if worker is None:
+                out = await run_cli_process(
+                    argv, input_text=task, cwd=effective_cwd, env=env, timeout_s=timeout_s
+                )
+            else:
+                out = await run_cli_process(
+                    argv, input_text=task, cwd=effective_cwd, env=env, timeout_s=timeout_s, worker=worker,
+                )
         finally:
             if temp_schema_file and temp_schema_file.exists():
                 try:

@@ -39,7 +39,12 @@ __all__ = ["aip", "aip_factory"]
 
 CLAUDE_META: dict[str, Any] = {"models": ["sonnet", "opus"]}
 DEFAULTS: dict[str, Any] = {"enabled": True, "model": "opus", "effort": "high"}
-LEGACY: dict[str, Any] = {"model": "sonnet", "default_model": "opus", "effort": "low", "default_effort": "low"}
+LEGACY: dict[str, Any] = {
+    "model": "sonnet",
+    "default_model": "opus",
+    "effort": "low",
+    "default_effort": "low",
+}
 
 
 # --- the policy ---------------------------------------------------------------------------------------------
@@ -130,7 +135,8 @@ def test_legacy_meta_keys_are_never_an_opt_in() -> None:
 
 def test_the_menu_separates_configured_from_verified_and_says_when_effort_is_not_supported() -> None:
     menu = selection.account_menu("codex", {"models": ["gpt-5", "o9"], "verified_models": ["GPT-5"]})
-    assert menu["models"] == [{"id": "gpt-5", "source": "verified"}, {"id": "o9", "source": "configured"}]
+    assert [m["id"] for m in menu["models"]] == ["gpt-5", "o9"]
+    assert all(m["access"] == "unknown" and m["source"] == "configured" for m in menu["models"])
     assert menu["efforts"]["applied_as"] == {"xhigh": "high", "max": "high"}
     assert menu["defaults"]["enabled"] is False
     other = selection.account_menu("gemini", {"models": ["flash"]})
@@ -148,7 +154,12 @@ def test_failover_needs_both_the_model_and_the_effort() -> None:
 
 
 def test_add_provider_accepts_disabled_or_valid_defaults_and_rejects_the_rest() -> None:
-    base: dict[str, Any] = {"provider_id": "claude", "kind": "ai", "cli": "claude", "models": ["sonnet", "opus"]}
+    base: dict[str, Any] = {
+        "provider_id": "claude",
+        "kind": "ai",
+        "cli": "claude",
+        "models": ["sonnet", "opus"],
+    }
     AddProviderPayload(**base)
     AddProviderPayload(**base, meta={"selection_defaults": {"enabled": False}})
     AddProviderPayload(**base, meta={"selection_defaults": DEFAULTS})
@@ -183,7 +194,8 @@ def test_add_connection_checks_defaults_against_the_meta_it_saves() -> None:
 async def set_meta(aip: Aip, account: str, meta: dict[str, Any]) -> None:
     async with tenant_connection(aip.pool) as conn:
         await conn.execute(
-            "update public.connections set meta = meta || %s::jsonb where id = %s", (json.dumps(meta), account)
+            "update public.connections set meta = meta || %s::jsonb where id = %s",
+            (json.dumps(meta), account),
         )
 
 
@@ -266,7 +278,11 @@ async def test_an_explicit_choice_is_persisted_and_reported_by_status(aip: Aip) 
     aip.harness.set_response(stdout=claude_ok("done"))
     async with aip.client() as client:
         started = await start(client, ai="claude", model="opus", effort="max")
-        assert (started["model"], started["effort"], started["selection_source"]) == ("opus", "max", "explicit")
+        assert (started["model"], started["effort"], started["selection_source"]) == (
+            "opus",
+            "max",
+            "explicit",
+        )
         assert await job_row(aip, started["job_id"]) == ("opus", "max", "max", "explicit")
         (status,) = (await call(client, "ai_status", job_ids=[started["job_id"]]))["jobs"]
         assert (status["model"], status["effort"], status["effective_effort"]) == ("opus", "max", "max")
@@ -368,7 +384,22 @@ async def test_ai_options_lists_accounts_with_their_choices(aip: Aip) -> None:
     assert provider["effort_supported"] is True
     first = next(a for a in provider["accounts"] if a["account"] == "claude-02")
     assert first["label"] == "Claude work login"
-    assert first["models"] == [{"id": "sonnet", "source": "verified"}, {"id": "opus", "source": "configured"}]
+    assert [m["id"] for m in first["models"]] == ["sonnet", "opus"]
+    assert all(m["access"] == "unknown" for m in first["models"])
+
+
+async def test_usage_observations_link_actual_job_to_model_effort_and_session(aip: Aip) -> None:
+    aip.harness.set_response(stdout=claude_ok("done", session="usage-session"))
+    async with aip.client() as client:
+        start_result = await start(client, account="claude-02", model="opus", effort="low")
+        await finish(client, [start_result["job_id"]])
+        result = await call(client, "ai_usage_observations", account="claude-02", limit=1)
+    (job,) = result["jobs"]
+    assert job["job_id"] == start_result["job_id"] and job["session_id"] == "usage-session"
+    assert job["requested_model"] == "opus"
+    assert job["requested_effort"] == job["effective_effort"] == "low"
+    assert job["token_coverage"] == "reported" and job["usage"]["input_tokens"] > 0
+    assert job["quota_percentage_attribution"] == "unknown" and result["remaining_jobs_estimate"] is None
 
 
 # --- a caller that goes straight to the executor -------------------------------------------------------------

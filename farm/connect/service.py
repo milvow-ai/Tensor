@@ -38,9 +38,15 @@ from farm.connect.drivers.base import (
     Url,
     UserCode,
 )
+from farm.connect.drivers.mcp_oauth import McpOAuthCallbacks, McpOAuthDriver
 from farm.connect.homes import account_home, discard, promote, staging_home
 from farm.connect.sealed import load_or_create_keys, open_sealed, publish_public_key
 from farm.db.pool import Conn, DbPool, tenant_connection
+from farm.executors.base import ConnectionView
+from farm.executors.mcp.client import McpExecutor
+from farm.mcp import store as mcp_store
+from farm.mcp.expose import is_allowed
+from farm.registry.models import McpProviderSpec
 from farm.secrets import redact, register_secret
 from farm.settings import data_dir
 from farm.tenancy import use_tenant
@@ -88,6 +94,7 @@ class _Run:
     task: asyncio.Task[None] | None = None
     cancel_reason: str | None = None
     finished: bool = False
+    committing: bool = False
 
 
 def _utcnow() -> datetime:
@@ -115,6 +122,9 @@ class LoginService:
         user_timeout_s: float = 600.0,
         verify_timeout_s: float = 120.0,
         sweep_interval_s: float = 15.0,
+        verify_with_test: bool = False,
+        mcp_executor: McpExecutor | None = None,
+        mcp_callbacks: McpOAuthCallbacks | None = None,
     ) -> None:
         self._pool = pool
         self._driver_factory = driver_factory
@@ -125,6 +135,10 @@ class LoginService:
         self._user_timeout_s = user_timeout_s
         self._verify_timeout_s = verify_timeout_s
         self._sweep_interval_s = sweep_interval_s
+        # Inference can consume credits. Enrollment verifies identity, never silently sends a prompt.
+        self._verify_with_test = verify_with_test
+        self._mcp_executor = mcp_executor
+        self._mcp_callbacks = mcp_callbacks or McpOAuthCallbacks()
         self._runs: dict[UUID, _Run] = {}
         self._keys: tuple[Any, dict[str, Any], bytes] | None = None
         self._sweeper: asyncio.Task[None] | None = None
@@ -150,7 +164,7 @@ class LoginService:
         runs = list(self._runs.values())
         for run in runs:
             run.cancel_reason = run.cancel_reason or "farm_restart"
-            if run.task is not None:
+            if run.task is not None and not run.committing:
                 run.task.cancel()
         await asyncio.gather(*(run.task for run in runs if run.task is not None), return_exceptions=True)
 
@@ -160,8 +174,6 @@ class LoginService:
         self, tenant_id: UUID, connection_id: str, actor: str, method: str | None = None
     ) -> UUID:
         """Start signing ``connection_id`` in; returns the session id (the running one if there is one)."""
-        if os.environ.get("FARM_SHARED_INSTANCE") == "1":
-            raise LoginError("Sign CLI accounts into a personal Farm; the shared gateway is for shared tools")
         if method is not None and method not in METHODS:
             raise LoginError(f"unknown sign-in method '{method}'")
         with use_tenant(tenant_id):
@@ -169,8 +181,15 @@ class LoginService:
             if existing is not None:
                 return UUID(str(existing["id"]))
             provider_id, meta = await self._connection(connection_id)
+            mcp_driver = await self._mcp_driver(connection_id, provider_id, meta)
+            if mcp_driver is None and os.environ.get("FARM_SHARED_INSTANCE") == "1":
+                raise LoginError(
+                    "Sign CLI accounts into a personal Farm. The shared gateway hosts shared tools."
+                )
+            if mcp_driver is not None and method not in (None, mcp_driver.method):
+                raise LoginError("This MCP connection uses browser OAuth.")
             cli = str(meta.get("cli") or provider_id)
-            if cli in API_KEY_CLIS:
+            if mcp_driver is None and cli in API_KEY_CLIS:
                 raise LoginError(
                     f"{connection_id} is a {cli.title()} account: it has no sign-in. "
                     "Paste an API key for it (save_secret with this account) instead."
@@ -178,7 +197,7 @@ class LoginService:
             driver: LoginDriver | None
             failure: str | None = None
             try:
-                driver = self._driver_factory(provider_id, connection_id, meta)
+                driver = mcp_driver or self._driver_factory(provider_id, connection_id, meta)
                 chosen = method or driver.method
             except NotImplementedError as exc:
                 driver, chosen, failure = None, method or "loopback", str(exc) or "not available yet"
@@ -235,7 +254,12 @@ class LoginService:
         aad = f"{tenant_id}|{session_id}|login_input"
         text = open_sealed(dict(envelope), private_key=self._private_key(), aad=aad)
         register_secret(text)
-        await run.driver.submit(text)
+        try:
+            await run.driver.submit(text)
+        except ValueError:
+            if isinstance(run.driver, McpOAuthDriver):
+                raise LoginError("Paste the complete redirect URL from this sign-in attempt.") from None
+            raise
         with use_tenant(tenant_id):
             await self._set(run, None, needs_input=False)
         return str(row["state"])
@@ -244,10 +268,19 @@ class LoginService:
         """Stop a session; the account stays exactly as it was."""
         run = self._runs.get(session_id)
         if run is not None and run.tenant_id == tenant_id and run.task is not None:
+            if run.committing:
+                await asyncio.shield(run.task)
+                with use_tenant(tenant_id):
+                    committed = await sessions.get(self._pool, session_id)
+                return str(committed["state"]) if committed else "failed"
             run.cancel_reason = "cancelled"
             run.actor = actor
             run.task.cancel()
             await asyncio.gather(run.task, return_exceptions=True)
+            if isinstance(run.driver, McpOAuthDriver) and not run.finished:
+                with use_tenant(tenant_id):
+                    await self._finish(run, "cancelled")
+                self._runs.pop(run.session_id, None)
             return "cancelled"
         with use_tenant(tenant_id):
             row = await sessions.get(self._pool, session_id)
@@ -267,6 +300,64 @@ class LoginService:
         register_secret(text)
         return text
 
+    def check_enrollment(self, provider: str, cli: str) -> None:
+        """Reject unsupported setup before allocating an account or touching authentication."""
+        if cli not in API_KEY_CLIS:
+            driver = self._driver_factory(provider, "enrollment-preflight", {"cli": cli})
+            preflight = getattr(driver, "preflight", None)
+            if preflight is not None:
+                try:
+                    preflight()
+                except FileNotFoundError as exc:
+                    raise LoginError(str(exc)) from exc
+
+    async def refresh_models(self, connection_id: str, retry_model: str | None = None) -> dict[str, Any]:
+        """Read supported metadata only. Catalog membership never proves inference entitlement."""
+        provider, meta = await self._connection(connection_id)
+        if meta.get("cli") == "agy":
+            from farm.executors.cli_agent.agy import AgyCliExecutor
+
+            if os.name == "nt" and not meta.get("cli_prefix"):
+                raise NotImplementedError("Antigravity model discovery requires an isolated runner profile.")
+            models = await AgyCliExecutor().list_models(ConnectionView(
+                id=connection_id, provider_id=provider, auth_ref=f"cli:{connection_id}", meta=dict(meta),
+            )) or []
+            source = "antigravity_cli_models"
+        else:
+            driver = self._driver_factory(provider, connection_id, meta)
+            models = list(await driver.models(account_home(dict(meta), connection_id)))
+            source = getattr(driver, "model_source", "provider_listing")
+        observation = {
+            "status": "observed" if models else "unknown",
+            "models": models,
+            "access": "unknown",
+            "source": source,
+            "observed_at": self._clock().isoformat() if models else None,
+            "checked_at": self._clock().isoformat(),
+        }
+        historical = meta.get("models")
+        historical = historical if isinstance(historical, list) else []
+        async with tenant_connection(self._pool) as conn:
+            await conn.execute(
+                "update public.connections set meta=coalesce(meta,'{}') || %s where id=%s",
+                (
+                    Jsonb(
+                        {
+                            "model_discovery": observation,
+                            "models": list(dict.fromkeys([*historical, *models])),
+                        }
+                    ),
+                    connection_id,
+                ),
+            )
+            if retry_model:
+                await conn.execute(
+                    "update public.connections set meta=jsonb_set(meta,'{rejected_models}',"
+                    "coalesce(meta->'rejected_models','{}') - %s::text) where id=%s",
+                    (retry_model.casefold(), connection_id),
+                )
+        return observation
+
     # --- one session --------------------------------------------------------------------------------------
 
     async def _run(self, run: _Run) -> None:
@@ -282,6 +373,8 @@ class LoginService:
                         run, "failed", error_kind="farm_restart", error_excerpt=sessions.RESTART_MESSAGE
                     )
                 raise
+            except LoginError as exc:
+                await self._finish(run, "failed", error_kind="configuration_changed", error_excerpt=str(exc))
             except Exception as exc:
                 log.warning("connect.login_crashed", session_id=str(run.session_id), error=type(exc).__name__)
                 await self._finish(
@@ -291,8 +384,11 @@ class LoginService:
                 self._runs.pop(run.session_id, None)
 
     async def _drive(self, run: _Run) -> None:
-        run.home = account_home(dict(run.meta), run.connection_id)
-        run.staging = staging_home(run.home, str(run.session_id))
+        if isinstance(run.driver, McpOAuthDriver):
+            run.staging = run.driver.staging_dir(run.tenant_id, run.session_id)
+        else:
+            run.home = account_home(dict(run.meta), run.connection_id)
+            run.staging = staging_home(run.home, str(run.session_id))
         await self._set(run, "starting")
         hint = run.meta.get("expected_email")
         await run.driver.start(run.staging, hint if isinstance(hint, str) else None)
@@ -340,6 +436,9 @@ class LoginService:
                 return
             elif isinstance(event, Success):
                 break
+        if isinstance(run.driver, McpOAuthDriver):
+            await self._commit_mcp(run, run.driver)
+            return
         try:
             async with asyncio.timeout(self._verify_timeout_s):
                 await self._verify(run)
@@ -366,6 +465,19 @@ class LoginService:
         account_hash = self._account_hash(run.tenant_id, run.provider_id, identity.provider_account_id)
         shown = _identity_json(identity, account_hash)
         shown["verified_at"] = self._clock().isoformat()
+        expected = str(run.meta.get("expected_email") or "").strip().casefold()
+        if expected and identity.email.strip().casefold() != expected:
+            await self._finish(
+                run,
+                "failed",
+                identity=shown,
+                error_kind="identity_mismatch",
+                error_excerpt=(
+                    "The verified sign-in does not match the expected email. Nothing was saved. "
+                    "Copy the sign-in link into a private browser window and use the expected account."
+                ),
+            )
+            return
         twin = await self._twin(run, account_hash)
         if twin is not None:
             await self._finish(
@@ -383,11 +495,27 @@ class LoginService:
         models = list(await run.driver.models(run.staging))
         # A driver that knows how to test its CLI does it itself (a one-shot prompt with the staging login).
         own_test = getattr(run.driver, "test_login", None)
-        if own_test is not None:
+        if not self._verify_with_test:
+            check = CheckResult(ok=True)
+        elif own_test is not None:
             check = await own_test(run.staging)
         else:
             check = await self._test_job(run.connection_id, run.staging)
-        evidence: dict[str, Any] = {"test_run_id": check.run_id, "models": models, "test_ok": check.ok}
+        evidence: dict[str, Any] = {
+            "test_run_id": check.run_id,
+            "models": models,
+            "test_ok": check.ok if self._verify_with_test else None,
+            "test_status": "passed" if self._verify_with_test and check.ok else "not_run",
+            "identity_verified": True,
+        }
+        quota_reader = getattr(run.driver, "quota", None)
+        quota: dict[str, Any] = {"status": "unsupported", "error_code": "provider_quota_unsupported"}
+        if quota_reader is not None:
+            try:
+                quota = await quota_reader(run.staging)
+            except Exception:
+                quota = {"status": "error", "error_code": "probe_failed"}
+        evidence["quota_status"] = quota.get("status", "unknown")
         if not check.ok:
             await self._finish(
                 run,
@@ -407,7 +535,7 @@ class LoginService:
         else:
             await asyncio.to_thread(promote, run.staging, run.home)
         run.staging = None  # promoted: nothing left to discard
-        await self._activate(run, shown, models)
+        await self._activate(run, shown, models, quota)
         await self._finish(run, "done", identity=shown, evidence=evidence)
 
     async def _expire(self, run: _Run) -> None:
@@ -419,6 +547,91 @@ class LoginService:
         )
 
     # --- database -----------------------------------------------------------------------------------------
+
+    async def _mcp_driver(
+        self, connection_id: str, provider_id: str, meta: Mapping[str, Any]
+    ) -> McpOAuthDriver | None:
+        if self._mcp_executor is None:
+            return None
+        async with tenant_connection(self._pool) as conn:
+            cur = await conn.execute(
+                "select c.auth_ref, p.executor from public.connections c "
+                "join public.providers p on p.id = c.provider_id where c.id = %s",
+                (connection_id,),
+            )
+            row = await cur.fetchone()
+        if row is None or row[1] != "mcp":
+            return None
+        if meta.get("expected_email"):
+            raise LoginError("This MCP server needs a provider identity check to verify the expected email.")
+        providers = await mcp_store.list_providers(self._pool, provider_id=provider_id, enabled_only=False)
+        if not providers:
+            raise LoginError("This MCP provider has no browser OAuth configuration.")
+        if not str(row[0]).startswith("token-store:"):
+            raise LoginError("Browser OAuth needs an MCP token store reference.")
+        try:
+            return McpOAuthDriver(
+                self._mcp_executor,
+                ConnectionView(id=connection_id, provider_id=provider_id, auth_ref=row[0], meta=dict(meta)),
+                providers[0].spec,
+                self._mcp_callbacks,
+            )
+        except ValueError as exc:
+            raise LoginError(str(exc)) from None
+
+    async def _commit_mcp(self, run: _Run, driver: McpOAuthDriver) -> None:
+        """Publish the validated generation and successful session in one transaction."""
+        assert driver.new_ref is not None
+        await self._set(run, "verifying", needs_input=False, auth_url=None)
+        run.committing = True
+        observed_at = self._clock()
+        kept = [tool for tool in driver.tools if is_allowed(tool.name, driver.spec.tools)]
+        evidence = {
+            "tools_count": len(kept),
+            "auth_verified": True,
+            "identity_verified": False,
+        }
+        async with tenant_connection(self._pool) as conn, conn.transaction():
+            cur = await conn.execute(
+                "select config -> 'mcp' from public.providers where id = %s and executor = 'mcp' for update",
+                (run.provider_id,),
+            )
+            provider = await cur.fetchone()
+            if provider is None or McpProviderSpec.model_validate(provider[0]) != driver.spec:
+                raise LoginError("The MCP configuration changed. Start sign-in again.")
+            cur = await conn.execute(
+                "update public.connections set auth_ref = %s, "
+                "status = case when status = 'needs_login' then 'active' else status end, "
+                "meta = coalesce(meta, '{}'::jsonb) || %s "
+                "where id = %s and provider_id = %s and auth_ref = %s and coalesce(meta, '{}') = %s",
+                (
+                    driver.new_ref,
+                    Jsonb({"login": {"method": run.method, "last_login_at": observed_at.isoformat()}}),
+                    run.connection_id,
+                    run.provider_id,
+                    driver.connection.auth_ref,
+                    Jsonb(dict(run.meta)),
+                ),
+            )
+            if cur.rowcount != 1:
+                raise LoginError("The MCP connection changed. Start sign-in again.")
+            # The provider catalogue may already have been discovered under another explicit connection.
+            cur = await conn.execute(
+                "select 1 from public.mcp_tools where provider = %s limit 1", (run.provider_id,)
+            )
+            if await cur.fetchone() is None:
+                await mcp_store.replace_tools_in(conn, run.provider_id, kept, observed_at)
+            changed = await sessions.update_in(
+                conn, run.session_id, state="done", needs_input=False, auth_url=None, evidence=evidence,
+            )
+            if not changed:
+                raise LoginError("This MCP sign-in is no longer active.")
+            await write_audit(
+                conn, run.actor, "connection.login", run.connection_id, {"session_id": str(run.session_id)}
+            )
+        run.staging = None  # This generation is now the active token store.
+        run.finished = True
+        await driver.executor.discard(run.connection_id)
 
     async def _connection(self, connection_id: str) -> tuple[str, Mapping[str, Any]]:
         async with tenant_connection(self._pool) as conn:
@@ -442,13 +655,26 @@ class LoginService:
             row = await cur.fetchone()
         return None if row is None else str(row[0])
 
-    async def _activate(self, run: _Run, shown: Mapping[str, Any], models: list[str]) -> None:
+    async def _activate(
+        self, run: _Run, shown: Mapping[str, Any], models: list[str], quota: dict[str, Any]
+    ) -> None:
         patch: dict[str, Any] = {
             "identity": dict(shown),
             "login": {"method": run.method, "last_login_at": self._clock().isoformat()},
+            "model_discovery": {
+                "status": "observed" if models else "unknown",
+                "source": getattr(run.driver, "model_source", "provider_listing"),
+                "observed_at": self._clock().isoformat() if models else None,
+                "checked_at": self._clock().isoformat(),
+                "models": models,
+            },
+            "verified_models": models,
         }
+        # Historical/operator configuration remains visible, but is not proof of current model access.
         if models:
-            patch["models"] = models
+            configured = run.meta.get("models")
+            configured = configured if isinstance(configured, list) else []
+            patch["models"] = list(dict.fromkeys([*configured, *models]))
         async with tenant_connection(self._pool) as conn, conn.transaction():
             await conn.execute(
                 "update public.connections set "
@@ -456,6 +682,15 @@ class LoginService:
                 "meta = coalesce(meta, '{}'::jsonb) || %s where id = %s",
                 (Jsonb(patch), run.connection_id),
             )
+            if quota.get("status") == "ok":
+                await conn.execute(
+                    "insert into public.ai_usage_snapshots "
+                    "(connection_id,provider_id,status,observed_at,checked_at,snapshot) "
+                    "values(%s,%s,'ok',%s,%s,%s) on conflict(tenant_id,connection_id) do update set "
+                    "status='ok',error_code=null,error_streak=0,observed_at=excluded.observed_at,"
+                    "checked_at=excluded.checked_at,snapshot=excluded.snapshot",
+                    (run.connection_id, run.provider_id, self._clock(), self._clock(), Jsonb(quota)),
+                )
             await write_audit(
                 conn, run.actor, "connection.login", run.connection_id, {"session_id": str(run.session_id)}
             )
@@ -483,6 +718,8 @@ class LoginService:
             if run.staging is not None:
                 await asyncio.to_thread(discard, run.staging)
                 run.staging = None
+        if isinstance(run.driver, McpOAuthDriver):
+            fields.update(auth_url=None, needs_input=False)
         await self._set(run, state, **fields)
 
     async def _finish_row(

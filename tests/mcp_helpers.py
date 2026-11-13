@@ -45,6 +45,7 @@ def mcp_provider(
     deny: Sequence[str] = (),
     auth_ref: str = "cli:none",
     units: Mapping[str, Any] | None = None,
+    pool_group: str | None = "isolated-interchangeable-test-servers",
     **block: Any,
 ) -> dict[str, Any]:
     """One ``executor: mcp`` provider as registry data; its connections are ``<provider>-01``, ``-02``, ..."""
@@ -65,6 +66,7 @@ def mcp_provider(
         "_accounts": accounts,
         "_auth_ref": auth_ref,
         "_units": dict(units) if units else None,
+        "_pool_group": pool_group,
     }
 
 
@@ -80,6 +82,7 @@ def mcp_registry(*, budgets: Mapping[str, Any] | None = None, **providers: dict[
                 "id": f"{provider_id}-{n:02d}",
                 "auth_ref": definition["_auth_ref"],
                 "priority": n,
+                "meta": {"mcp_pool_group": definition["_pool_group"]} if definition["_pool_group"] else {},
                 **({"units": definition["_units"]} if definition["_units"] else {}),
             }
             for n in range(1, definition["_accounts"] + 1)

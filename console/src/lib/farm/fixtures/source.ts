@@ -425,9 +425,18 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
     }
     case "add_accounts": {
       const spec = commandPayloadSchemas.add_accounts.parse(rawPayload);
-      const prov = w.providers.find((p) => p.id === spec.provider_id);
-      if (!prov) throw new Rejection(`Provider "${spec.provider_id}" not found.`);
-
+      let prov = w.providers.find((p) => p.id === spec.provider_id);
+      if (!prov) {
+        prov = {
+          id: spec.provider_id,
+          name: `${spec.provider_id.toUpperCase()} AI Pool`,
+          kind: "ai",
+          executor: "cli_agent",
+          defaultStrategy: "round_robin",
+          enabled: true,
+        };
+        w.providers.push(prov);
+      }
       const existingInPool = w.connections.filter((c) => c.providerId === spec.provider_id);
       let nextNum = existingInPool.length + 1;
 
@@ -443,8 +452,8 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
         nextNum++;
 
         const email = spec.emails?.[i];
-        const label = email ? `${prov.name} (${email})` : `${prov.name} ${connId}`;
-        const planName = spec.plan ?? "Default";
+        const label = spec.names?.[i] || (email ? `${prov.name} (${email})` : `${prov.name} ${connId}`);
+        const planName = "Unknown";
         const isApiKey = spec.provider_id === "perplexity";
 
         w.connections.push({
@@ -458,9 +467,11 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
           concurrency: spec.max_parallel ?? 1,
           ratePerMin: null,
           status: "needs_login",
-          plan: { name: planName, price_usd: 0 },
+          plan: {},
           meta: {
             cli: spec.cli ?? spec.provider_id,
+            expected_email: email,
+            model_discovery: { status: "unknown", observed_at: null },
             ...(isApiKey ? { models: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"] } : {}),
           },
           health: {
@@ -492,20 +503,20 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
           auth_url: isApiKey
             ? "https://www.perplexity.ai/account/api/keys"
             : isDeviceCode
-            ? "https://auth.openai.com/codex/device"
-            : `https://${spec.provider_id}.ai/oauth/authorize`,
+              ? "https://auth.openai.com/codex/device"
+              : `https://${spec.provider_id}.ai/oauth/authorize`,
           user_code: isDeviceCode ? "WDJB-MJGN" : null,
           verification_uri: isApiKey
             ? "https://www.perplexity.ai/account/api/keys"
             : isDeviceCode
-            ? "https://auth.openai.com/codex/device"
-            : null,
+              ? "https://auth.openai.com/codex/device"
+              : null,
           needs_input: true,
           input_hint: isApiKey
             ? "Paste your Perplexity API key"
             : isDeviceCode
-            ? null
-            : "Paste the code the page shows you",
+              ? null
+              : "Paste the code the page shows you",
           expires_at: new Date(now + 10 * 60 * 1000).toISOString(),
           identity: email ? { email_masked: email, plan: planName } : {},
           evidence: {},
@@ -582,20 +593,7 @@ function applyCommand(w: World, kind: CommandKind, rawPayload: JsonObject): Json
       const spec = commandPayloadSchemas.save_secret.parse(rawPayload);
       if (spec.connection_id) {
         const conn = w.connections.find((c) => c.id === spec.connection_id);
-        if (conn) {
-          conn.authRef = `env:${spec.name}`;
-          conn.status = "active";
-        }
-        const session = w.loginSessions.find((s) => s.connection_id === spec.connection_id && !s.finished_at);
-        if (session) {
-          session.state = "done";
-          session.finished_at = new Date(now).toISOString();
-          session.updated_at = new Date(now).toISOString();
-          session.evidence = {
-            models: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
-            test_run_id: "run-pplx-test",
-          };
-        }
+        if (conn) conn.authRef = `env:${spec.name}`;
       }
       return { ok: true, saved: spec.name };
     }

@@ -213,6 +213,10 @@ class McpProviderSpec(_Model):
         default_factory=dict, description="http / sse: header -> env:NAME"
     )
     auth: McpAuth = "none"
+    oauth_client_id: str | None = Field(default=None, max_length=500)
+    oauth_client_secret_ref: EnvRef | None = None
+    oauth_client_metadata_url: str | None = Field(default=None, pattern=r"^https://[^\s]+$")
+    oauth_scopes: list[str] = Field(default_factory=list)
     namespace: Slug | None = Field(
         default=None,
         description="Prefix of the exposed tool names (<namespace>__<tool>); default: the provider id",
@@ -230,6 +234,15 @@ class McpProviderSpec(_Model):
     @model_validator(mode="after")
     def _coherent(self) -> McpProviderSpec:
         problems: list[str] = []
+        if self.auth != "oauth" and (
+            self.oauth_client_id
+            or self.oauth_client_secret_ref
+            or self.oauth_client_metadata_url
+            or self.oauth_scopes
+        ):
+            problems.append("OAuth client configuration requires auth: oauth")
+        if self.oauth_client_secret_ref and not self.oauth_client_id:
+            problems.append("OAuth client secret needs a pre-registered client id")
         if self.transport == "stdio":
             if not (self.command and self.command.strip()):
                 problems.append("a stdio server needs a command")

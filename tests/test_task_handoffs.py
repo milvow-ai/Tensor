@@ -175,7 +175,8 @@ async def test_cli_worker_keeps_jobs_while_new_operator_chooses_how_to_finish(
             worker = profile["workers"][0]
             if worker["busy"] != 2 or worker["queued"] != 1:
                 return False
-            assert worker["slots"] == 2 and worker["open_slots"] == 0 and worker["quota_units"]
+            assert worker["configured_execution_limit"] == 2 and worker["quota_units"]
+            assert worker["remaining_jobs_estimate"] is None and "open_slots" not in worker
             assert worker["running_models"] == [{"model": "opus", "jobs": 1}, {"model": "sonnet", "jobs": 1}]
             assert {job["id"] for job in profile["jobs"]} == set(ids)
             return True

@@ -51,7 +51,7 @@ from farm.registry.models import (
 from farm.resources.trajectory import fail_orphaned_runs
 from farm.secrets import AuthRefError, redact, resolve_auth, resolve_token_store
 from farm.settings import data_dir
-from farm.tenancy import use_tenant
+from farm.tenancy import require_tenant, use_tenant
 
 log = structlog.get_logger(__name__)
 
@@ -571,7 +571,7 @@ async def execute_provider_command(
                 meta["models"] = cmd.models
             meta["max_parallel"] = cmd.max_parallel
 
-            ai_data_dir = data_dir() / "ai" / account_id
+            ai_data_dir = data_dir() / "tenants" / str(require_tenant()) / "ai" / account_id
             if driver in ("claude", "codex"):
                 meta.setdefault("config_dir", str(ai_data_dir))
             elif driver in ("gemini", "agy"):
@@ -628,8 +628,11 @@ async def execute_provider_command(
                     "insert into public.capabilities(name,kind,description,input_schema,output_schema,"
                     "default_strategy,cache_ttl_seconds) values('ask_ai','ai',%s,%s,%s,'failover',0) "
                     "on conflict(name) do nothing",
-                    ("Ask an AI worker to complete a task", Jsonb(AskAiIn.model_json_schema()),
-                     Jsonb(AskAiOut.model_json_schema())),
+                    (
+                        "Ask an AI worker to complete a task",
+                        Jsonb(AskAiIn.model_json_schema()),
+                        Jsonb(AskAiOut.model_json_schema()),
+                    ),
                 )
                 # Ensure capability routes for ask_ai and any configured agent_task.
                 for cap_name in ("ask_ai", "agent_task"):
@@ -725,7 +728,11 @@ async def execute_provider_command(
             next_step = "farm mcp sync"
 
             if auth_type == "oauth":
-                auth_ref = cmd.auth_ref or f"token-store:{conn_id}"
+                from farm.executors.mcp.client import mcp_token_ref
+
+                auth_ref = cmd.auth_ref or mcp_token_ref(require_tenant(), conn_id)
+                if not auth_ref.startswith("token-store:"):
+                    return "rejected", {"error": "MCP OAuth requires a token-store reference."}
                 status = "needs_login"
                 next_step = f"farm mcp login {conn_id}"
             elif auth_type == "env":
@@ -854,6 +861,7 @@ async def execute_provider_command(
                 "status": status,
                 "next_step": next_step,
                 "tools_count": tools_count,
+                "auth_ref": auth_ref,
                 "restart_required": False,
                 "sync_error": sync_error,
             }
@@ -1093,7 +1101,7 @@ async def execute_command(
     if kind in CONNECT_PAYLOADS:
         # Sign-in commands run in the LoginService (farm/connect), which keeps its own connections.
         try:
-            return await execute_connect_command(pool, kind, payload, actor=actor)
+            return await execute_connect_command(pool, kind, payload, actor=actor, command_id=cid)
         except Exception as exc:
             log.exception("command.execution_failed", cmd_id=str(cid), error=str(exc))
             return "failed", {"error": f"Execution exception: {exc}"}
@@ -1381,6 +1389,12 @@ async def execute_command(
 
             elif kind == "remove_connection":
                 assert isinstance(payload, RemoveConnectionPayload)
+                pending = await conn.execute(
+                    "select 1 from public.login_sessions where connection_id=%s and finished_at is null",
+                    (payload.connection_id,),
+                )
+                if await pending.fetchone():
+                    return "rejected", {"error": "Cancel the active sign-in before removing this account"}
                 cur = await conn.execute(
                     "select id, provider_id from public.connections where id = %s",
                     (payload.connection_id,),
@@ -1450,7 +1464,24 @@ async def execute_command(
                 auth_ok = False
                 auth_err = None
 
-                if meta.get("cli") == "perplexity":
+                async with tenant_connection(pool) as provider_conn:
+                    provider_cur = await provider_conn.execute(
+                        "select executor from public.providers where id=%s", (provider_id,)
+                    )
+                    provider_row = await provider_cur.fetchone()
+                if provider_row and provider_row[0] == "mcp":
+                    from farm.executors.mcp.client import McpExecutor
+                    from farm.mcp.store import DbDirectory
+
+                    mcp_executor = McpExecutor(directory=DbDirectory(pool))
+                    try:
+                        await mcp_executor.list_tools(conn_view, timeout_s=30)
+                        auth_ok = True
+                    except Exception as exc:
+                        auth_err = f"MCP handshake failed: {type(exc).__name__}"
+                    finally:
+                        await mcp_executor.aclose()
+                elif meta.get("cli") == "perplexity":
                     # API-key account: one tiny Sonar call proves the saved key (no key: not signed in).
                     if auth_ref.startswith("env:"):
                         from farm.ai.accounts import PING
@@ -1691,8 +1722,10 @@ async def execute_command(
                 if payload.enabled:
                     deny_list = [d for d in deny_list if d != payload.tool]
                     if any(fnmatchcase(payload.tool, pattern) for pattern in deny_list):
-                        return "rejected", {"error": "A broader deny rule still blocks this tool; "
-                            "review the provider's tool policy before allowing it"}
+                        return "rejected", {
+                            "error": "A broader deny rule still blocks this tool; "
+                            "review the provider's tool policy before allowing it"
+                        }
                     if "*" not in allow_list and payload.tool not in allow_list:
                         allow_list.append(payload.tool)
                 else:
@@ -1802,8 +1835,13 @@ async def claim_command(pool: DbPool, command_id: UUID | None = None) -> Claimed
     if row is None:
         return None
     return ClaimedCommand(
-        id=row[0], tenant_id=row[1], kind=row[2], payload=row[3] or {}, created_by=row[4],
-        created_by_user_id=row[5], requires_actor_authorization=row[6],
+        id=row[0],
+        tenant_id=row[1],
+        kind=row[2],
+        payload=row[3] or {},
+        created_by=row[4],
+        created_by_user_id=row[5],
+        requires_actor_authorization=row[6],
     )
 
 

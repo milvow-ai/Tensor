@@ -27,9 +27,10 @@ there too; the policy hook below is the gate in front of it for *who may call wh
 from __future__ import annotations
 
 import hmac
+import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from typing import Any
 from uuid import UUID
@@ -40,8 +41,10 @@ from fastmcp.exceptions import McpError, ToolError
 from fastmcp.server.dependencies import get_http_headers, get_http_request
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from fastmcp.server.middleware.middleware import CallNext
-from fastmcp.tools import ToolResult
+from fastmcp.tools import Tool, ToolResult
 
+from farm.ai.worker_bootstrap import INSPECTION_TOOLS
+from farm.secrets import redact_worker_tokens
 from farm.tenancy import TokenIdentity, use_tenant
 
 log = structlog.get_logger(__name__)
@@ -82,6 +85,20 @@ def _client_name(context: MiddlewareContext[Any]) -> str | None:
 
 IDENTITY_SCOPE_KEY = "farm_identity"
 """ASGI scope key under which the Farm's HTTP runner leaves the request's ``TokenIdentity``."""
+
+WORKER_GATE_SCOPE_KEY = "farm_worker_gate"
+_WORKER_MCP_METHODS = frozenset({
+    "initialize", "ping", "tools/list", "tools/call", "notifications/initialized",
+    "notifications/cancelled", "resources/list", "resources/templates/list", "prompts/list",
+})
+
+
+def request_identity() -> TokenIdentity | None:
+    try:
+        identity = get_http_request().scope.get(IDENTITY_SCOPE_KEY)
+    except RuntimeError:
+        return None
+    return identity if isinstance(identity, TokenIdentity) else None
 
 
 class AuthMiddleware(Middleware):
@@ -133,26 +150,60 @@ class PolicyMiddleware(Middleware):
     def __init__(self, check: PolicyCheck | None = None) -> None:
         self._check = check
 
+    async def on_message(self, context: MiddlewareContext[Any], call_next: CallNext[Any, Any]) -> Any:
+        identity = request_identity()
+        if identity is not None and identity.worker_job_id is not None:
+            if context.method not in _WORKER_MCP_METHODS:
+                raise McpError(code=UNAUTHORIZED, message="policy: worker credentials are limited to tools")
+        return await call_next(context)
+
+    async def on_list_tools(
+        self, context: MiddlewareContext[mt.ListToolsRequest],
+        call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
+    ) -> Sequence[Tool]:
+        identity = request_identity()
+        tools = await call_next(context)
+        if identity is None or identity.worker_job_id is None:
+            return tools
+        from farm.gateway.mcp_tools import PassthroughTool
+
+        return [
+            tool for tool in tools if tool_scope_allows(identity.scopes, tool.name)
+            and (tool.name in INSPECTION_TOOLS or isinstance(tool, PassthroughTool))
+        ]
+
     async def on_call_tool(
         self,
         context: MiddlewareContext[mt.CallToolRequestParams],
         call_next: CallNext[mt.CallToolRequestParams, ToolResult],
     ) -> ToolResult:
-        try:
-            identity = get_http_request().scope.get(IDENTITY_SCOPE_KEY)
-        except RuntimeError:
-            identity = None
-        if isinstance(identity, TokenIdentity) and not tool_scope_allows(
-            identity.scopes, context.message.name
-        ):
+        identity = request_identity()
+        name = context.message.name
+        if identity is not None and not tool_scope_allows(identity.scopes, name):
             raise ToolError("policy: token scope does not allow this tool")
+        worker = identity is not None and identity.worker_job_id is not None
+        if worker:
+            arguments = json.dumps(context.message.arguments)
+            if redact_worker_tokens(arguments) != arguments:
+                raise ToolError("policy: worker credentials cannot be used as tool arguments")
+            if name not in INSPECTION_TOOLS:
+                from farm.gateway.mcp_tools import PassthroughTool
+
+                mcp = context.fastmcp_context
+                if mcp is None or not isinstance(await mcp.fastmcp.get_tool(name), PassthroughTool):
+                    raise ToolError("policy: worker credentials cannot invoke this tool")
         if self._check is not None:
             caller = caller_from_client_name(_client_name(context))
             reason = self._check(caller, context.message.name, dict(context.message.arguments or {}))
             if reason is not None:
                 log.warning("gateway.policy_refused", caller=caller, tool=context.message.name, reason=reason)
                 raise ToolError(f"policy: {reason}")
-        return await call_next(context)
+        result = await call_next(context)
+        if worker:
+            payload = result.model_dump_json()
+            if redact_worker_tokens(payload) != payload:
+                raise ToolError("policy: tool returned a worker credential")
+        return result
 
 
 def tool_scope_allows(scopes: tuple[str, ...], tool: str) -> bool:

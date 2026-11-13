@@ -11,11 +11,15 @@ export interface SignInDrawerProps {
   connectionId?: string;
   sessionId?: string;
   providerId?: string;
+  providerName?: string;
+  mcpOAuth?: boolean;
   title?: string;
   onDone?: (session: LoginSession) => void;
 }
 
-export function SignInDrawer({ open, onOpenChange, connectionId, sessionId, providerId, title, onDone }: SignInDrawerProps) {
+export function SignInDrawer({
+  open, onOpenChange, connectionId, sessionId, providerId, providerName, mcpOAuth, title, onDone,
+}: SignInDrawerProps) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent data-testid="sign-in-drawer" side="right" className="w-full overflow-y-auto p-6 sm:max-w-md">
@@ -30,6 +34,8 @@ export function SignInDrawer({ open, onOpenChange, connectionId, sessionId, prov
             connectionId={connectionId}
             sessionId={sessionId}
             providerId={providerId}
+            providerName={providerName}
+            mcpOAuth={mcpOAuth}
             onDone={onDone}
             onCancelled={() => onOpenChange(false)}
           />

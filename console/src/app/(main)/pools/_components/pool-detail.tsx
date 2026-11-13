@@ -8,9 +8,9 @@ import { CommandsProvider } from "@/components/farm/commands-provider";
 import { KpiCard } from "@/components/farm/kpi-card";
 import { PageHeader } from "@/components/farm/page-header";
 import { ErrorState } from "@/components/farm/states";
-import { type FarmStatus, MeterBar, StatusChip } from "@/components/kit";
 import { ToneBadge } from "@/components/farm/status";
-import { AI_CLI_INFO, AI_CLIS, type AiCli, commandConcernsPool } from "@/lib/farm/command-meta";
+import { type FarmStatus, MeterBar, StatusChip } from "@/components/kit";
+import { commandConcernsPool } from "@/lib/farm/command-meta";
 import { attempt } from "@/lib/farm/data";
 import { fmtCompact, fmtPct, fmtPlanUsd, fmtUsd } from "@/lib/farm/format";
 import { HEALTH_META, poolHref, poolsIndexHref, TONE } from "@/lib/farm/state";
@@ -20,7 +20,6 @@ import { type ListParams, toSearch } from "../_lib/list-params";
 import { AccountsTable } from "./accounts-table";
 import { AddAccountDialog } from "./add-account-dialog";
 import { AddAccountsDialog } from "./add-accounts-dialog";
-import { AddAiAccountDialog } from "./add-ai-account-dialog";
 import { ApiKeyForm } from "./api-key-form";
 import { PoolLive } from "./pool-live";
 import { StrategySelectLazy } from "./strategy-select-lazy";
@@ -31,10 +30,6 @@ const AI_HEALTH_STATUS: Record<PoolHealth, FarmStatus> = {
   down: "failed",
   disabled: "waiting-for-you",
 };
-
-function cliFor(providerId: string): AiCli | undefined {
-  return AI_CLIS.find((cli) => AI_CLI_INFO[cli].providerId === providerId);
-}
 
 export async function PoolDetailView({ id, kind, params }: { id: string; kind: ProviderKind; params: ListParams }) {
   const [poolResult, listResult, tailResult, commandsResult] = await Promise.all([
@@ -74,7 +69,6 @@ export async function PoolDetailView({ id, kind, params }: { id: string; kind: P
   const nextPriority = maxPriority + 1;
   const suggestedId = `${pool.provider_id}-${String(list.total + 1).padStart(2, "0")}`;
   const health = HEALTH_META[pool.health];
-  const cli = cliFor(pool.provider_id);
   const budget = spend?.budget_usd ?? null;
   const overBudget = budget !== null && budget > 0 && (spend?.forecast_usd ?? 0) > budget;
   const usesEnvAuth = kind === "tool" || list.items.some((c) => c.authRef?.startsWith("env:"));
@@ -111,7 +105,6 @@ export async function PoolDetailView({ id, kind, params }: { id: string; kind: P
             kind === "ai" ? (
               <div className="flex items-center gap-2">
                 <AddAccountsDialog defaultProviderId={pool.provider_id} />
-                <AddAiAccountDialog defaultCli={cli} />
               </div>
             ) : (
               <AddAccountDialog
@@ -146,11 +139,15 @@ export async function PoolDetailView({ id, kind, params }: { id: string; kind: P
             </p>
           </KpiCard>
           <KpiCard
-            label="Calls left"
+            label={kind === "ai" ? "Remaining job budget" : "Calls left"}
             icon={Zap}
-            value={pool.unlimited ? "Unlimited" : fmtCompact(pool.remaining_calls)}
+            value={kind === "ai" ? "Unknown" : pool.unlimited ? "Unlimited" : fmtCompact(pool.remaining_calls)}
           >
-            <p className="text-muted-foreground">Across usable accounts, from their tightest limit.</p>
+            <p className="text-muted-foreground">
+              {kind === "ai"
+                ? "Provider quota is separate from configured execution concurrency."
+                : "Across usable accounts, from their tightest limit."}
+            </p>
           </KpiCard>
           <KpiCard
             label="Plans"

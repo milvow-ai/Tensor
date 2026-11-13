@@ -1,16 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+
 import { toast } from "sonner";
 
-import { submitCommand } from "@/lib/farm/actions";
-import {
-  type ConnectPublicKeyJwk,
-  type LoginMethod,
-  type LoginSession,
-  getLoginCardViewModel,
-} from "@/lib/farm/login";
+import { type ConnectPublicKeyJwk, getLoginCardViewModel, type LoginMethod, type LoginSession } from "@/lib/farm/login";
 import { readActiveLoginSession, readConnectPublicKey, readLoginSession } from "@/lib/farm/login-actions";
+import { requireCommandDone, runQueuedCommand } from "@/lib/farm/queued-command";
 import { buildAad, seal } from "@/lib/farm/seal";
 
 export interface UseLoginSessionOptions {
@@ -135,26 +131,15 @@ export function useLoginSession({
       setLoading(true);
       setError(null);
       try {
-        const res = await submitCommand("start_login", {
+        const command = await runQueuedCommand(`login:${connectionId}`, "start_login", {
           connection_id: connectionId,
           ...(method ? { method } : {}),
         });
-        if (!res.ok) {
-          setError(res.error);
-          toast.error(res.error);
-          setLoading(false);
-          return false;
-        }
-
-        // Wait a tick for fixture/command to process
-        setTimeout(() => {
-          if (!isMounted()) return;
-          if (res.data.result && typeof res.data.result.session_id === "string") {
-            setSessionId(res.data.result.session_id);
-          } else {
-            void fetchSession();
-          }
-        }, 500);
+        requireCommandDone(command);
+        if (typeof command.result?.session_id !== "string")
+          throw new Error("Farm did not return a sign-in session id.");
+        if (isMounted()) setSessionId(command.result.session_id);
+        setLoading(false);
 
         return true;
       } catch (err) {
@@ -165,7 +150,7 @@ export function useLoginSession({
         return false;
       }
     },
-    [connectionId, publicKey, isMounted, fetchSession],
+    [connectionId, publicKey, isMounted],
   );
 
   // Submit sealed input mutation
@@ -190,25 +175,14 @@ export function useLoginSession({
         const aad = buildAad(session.id, "login_input");
         const sealed = await seal(cleanCode, publicKey, aad);
 
-        const res = await submitCommand("submit_login_input", {
+        const command = await runQueuedCommand(`login-input:${session.id}`, "submit_login_input", {
           session_id: session.id,
           sealed,
         });
 
-        if (!res.ok) {
-          setError(res.error);
-          toast.error(res.error);
-          setLoading(false);
-          return false;
-        }
-
-        // Optimistically set verifying state
-        setSession((prev) => (prev ? { ...prev, state: "verifying" } : null));
-
-        // Poll after submit
-        setTimeout(() => {
-          void fetchSession();
-        }, 600);
+        requireCommandDone(command);
+        await fetchSession();
+        setLoading(false);
 
         return true;
       } catch (err) {
@@ -227,29 +201,13 @@ export function useLoginSession({
     if (!session) return false;
     setLoading(true);
     try {
-      const res = await submitCommand("cancel_login", {
+      const command = await runQueuedCommand(`login-cancel:${session.id}`, "cancel_login", {
         session_id: session.id,
       });
 
-      if (!res.ok) {
-        setError(res.error);
-        toast.error(res.error);
-        setLoading(false);
-        return false;
-      }
-
-      setSession((prev) =>
-        prev
-          ? {
-              ...prev,
-              state: "cancelled",
-              error_excerpt: "Sign-in cancelled by user",
-              finished_at: new Date().toISOString(),
-            }
-          : null,
-      );
+      requireCommandDone(command);
+      await fetchSession();
       setLoading(false);
-      onCancelled?.();
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to cancel sign-in";
@@ -258,7 +216,7 @@ export function useLoginSession({
       setLoading(false);
       return false;
     }
-  }, [session, onCancelled]);
+  }, [session, fetchSession]);
 
   const viewModel = session ? getLoginCardViewModel(session) : null;
 

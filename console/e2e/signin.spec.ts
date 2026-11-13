@@ -114,7 +114,7 @@ test.describe("Dashboard sign-in and sealed secrets", () => {
     await expect(card.getByRole("heading", { name: "Duplicate account" })).toBeVisible();
     await expect(card.getByText("same account as claude-01")).toBeVisible();
     await expect(card.getByRole("button", { name: "Try again in a private window" })).toBeVisible();
-    await expect(card.getByRole("button", { name: "Remove this slot" })).toBeVisible();
+    await expect(card.getByRole("button", { name: "Remove this account" })).toBeVisible();
   });
 
   test("add-accounts dialog sends add_accounts", async ({ page }) => {
@@ -137,6 +137,7 @@ test.describe("Dashboard sign-in and sealed secrets", () => {
     });
 
     // Submit dialog
+    await dialog.getByTestId("emails-input").fill("claude-browser@example.com");
     const submitBtn = dialog.getByTestId("add-accounts-submit");
     await expect(submitBtn).toBeVisible();
     await submitBtn.click();

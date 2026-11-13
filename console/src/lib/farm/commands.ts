@@ -369,6 +369,8 @@ export const commandPayloadSchemas = {
     cli: z.enum(AI_CLIS).nullable().optional(),
     plan: z.string().max(40).nullable().optional(),
     emails: z.array(z.string()).max(10).default([]),
+    names: z.array(z.string().max(100)).max(10).optional(),
+    request_id: z.string().uuid().optional(),
     max_parallel: z.number().int().min(1).max(4).default(1),
   }),
   save_secret: z.object({
@@ -668,6 +670,8 @@ export interface AddAccountsArgs {
   cli?: AiCli | null;
   plan?: string | null;
   emails?: string[];
+  names?: string[];
+  request_id?: string;
   max_parallel?: number;
 }
 
@@ -678,6 +682,8 @@ export function buildAddAccountsPayload(args: AddAccountsArgs) {
     ...(args.cli ? { cli: args.cli } : {}),
     ...(args.plan ? { plan: args.plan } : {}),
     emails: args.emails ?? [],
+    ...(args.names ? { names: args.names } : {}),
+    ...(args.request_id ? { request_id: args.request_id } : {}),
     max_parallel: args.max_parallel ?? 1,
   };
 }

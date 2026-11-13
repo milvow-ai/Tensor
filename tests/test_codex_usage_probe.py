@@ -83,7 +83,9 @@ for line in sys.stdin:
         encoding="utf-8",
     )
     monkeypatch.setattr(codex_usage, "_argv", lambda _meta: [sys.executable, str(script)])
-    result = asyncio.run(probe_codex({"home": str(home)}, timeout=0.35))
+    # Only the timeout case needs a tight deadline. Windows subprocess startup and pipe draining can
+    # otherwise beat the 350 ms deadline under load and hide the limit/error behavior under test.
+    result = asyncio.run(probe_codex({"home": str(home)}, timeout=0.35 if mode == "timeout" else 2.0))
     if mode == "success":
         assert result["status"] == "ok"
         assert result["rate_limits"]["primary"]["usedPercent"] == 17

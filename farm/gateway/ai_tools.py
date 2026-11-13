@@ -52,6 +52,7 @@ from farm.capabilities.schemas import (
     parse_uuid,
 )
 from farm.context import FarmContext
+from farm.db.pool import tenant_connection
 from farm.executors.base import ErrorKind, ExecRequest, ExecResult
 from farm.gateway.middleware import IDENTITY_SCOPE_KEY, current_caller, current_identity
 from farm.resources.router import route
@@ -62,6 +63,8 @@ log = structlog.get_logger(__name__)
 AI_TOOLS = (
     "list_ais",
     "ai_options",
+    "ai_refresh_models",
+    "ai_usage_observations",
     "ask_ai_batch",
     "ai_start",
     "ai_start_many",
@@ -207,12 +210,95 @@ async def register_ai_tools(
         return await list_ai_accounts(ctx.pool, ctx.clock())
 
     @server.tool(annotations={"readOnlyHint": True})
+    async def ai_refresh_models(
+        account: Annotated[str, Field(pattern=ACCOUNT_SLUG)], retry_model: str | None = None
+    ) -> dict[str, Any]:
+        """Refresh an account's provider model listing without sending an inference prompt.
+
+        Available only for supported metadata adapters. Access remains unknown until a real requested
+        job succeeds; a plan label never proves access. retry_model explicitly clears a prior rejection
+        so the next requested job can recheck it after an account upgrade; this does not assert access.
+        """
+        from farm.connect.service import get_login_service
+
+        try:
+            return {"account": account, **await get_login_service().refresh_models(account, retry_model)}
+        except NotImplementedError:
+            return {"account": account, "status": "unsupported", "access": "unknown"}
+
+    @server.tool(annotations={"readOnlyHint": True})
+    async def ai_usage_observations(
+        account: Annotated[str | None, Field(pattern=ACCOUNT_SLUG)] = None,
+        limit: Annotated[int, Field(ge=1, le=100)] = 20,
+    ) -> dict[str, Any]:
+        """Inspect recorded Farm jobs with their session, model/effort and metering coverage.
+
+        Account quota windows are provider observations; overlapping jobs cannot be assigned a quota
+        percentage. Missing usage/cost stays unknown. These records do not predict how many jobs remain.
+        """
+        from farm.manager.ai_usage import usage_report
+
+        async with tenant_connection(ctx.pool) as conn:
+            cur = await conn.execute(
+                "select id,account,native_session_id,model,resolved_model,effort,effective_effort,"
+                "state,finished_at,usage,cost_usd,cost_estimated from public.ai_jobs "
+                "where (%s::text is null or account=%s) and finished_at is not null "
+                "order by finished_at desc,id limit %s",
+                (account, account, limit),
+            )
+            rows = await cur.fetchall()
+        jobs = [
+            {
+                "job_id": str(jid),
+                "account": aid,
+                "session_id": session,
+                "requested_model": model,
+                "resolved_model": resolved,
+                "requested_effort": effort,
+                "effective_effort": effective,
+                "state": state,
+                "finished_at": at.isoformat(),
+                "usage": usage or None,
+                "usage_scope": "runner_reported_for_job_or_session" if usage else "unknown",
+                "token_coverage": "reported" if usage else "unknown",
+                "cost_usd": float(cost) if cost and not estimated else None,
+                "cost_coverage": "reported" if cost and not estimated else "unknown_or_estimated",
+                "quota_percentage_attribution": "unknown",
+            }
+            for (
+                jid,
+                aid,
+                session,
+                model,
+                resolved,
+                effort,
+                effective,
+                state,
+                at,
+                usage,
+                cost,
+                estimated,
+            ) in rows
+        ]
+        allowances = (await usage_report(ctx.pool, ctx.clock()))["provider_allowances"]
+        return {
+            "scope": "farm_observed_jobs",
+            "jobs": jobs,
+            "provider_allowances": [
+                a for a in allowances if account is None or a["connection_id"] == account
+            ],
+            "remaining_jobs_estimate": None,
+            "estimate_status": "unknown",
+            "quota_scope": "account_windows_not_per_job",
+        }
+
+    @server.tool(annotations={"readOnlyHint": True})
     async def ai_options(
         ai: Annotated[str | None, Field(pattern=ACCOUNT_SLUG, description="Only this AI.")] = None,
         account: Annotated[str | None, Field(pattern=ACCOUNT_SLUG, description="Only this account.")] = None,
     ) -> ToolResult:
         """The menu to pick from before starting AI work: per AI whether effort applies, per account (labelled
-        provider · account) the configured models with their source (configured / verified), the efforts
+        provider · account) the configured models, provider listing and observed-access status, the efforts
         (or not_supported, with what Codex applies for xhigh/max) and the opt-in default policy.
         ai_start / ai_start_many / ask_ai refuse a job without model (and effort where supported) unless
         use_defaults=true and the account's defaults are valid. Read-only."""

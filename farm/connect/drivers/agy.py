@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any
 
 from farm.connect.drivers.base import Failure, Identity, NeedsVerification, Success
-from farm.connect.drivers.process import child_env, resolve_cli, run_once
 from farm.connect.service import CheckResult
 from farm.secrets import redact
 
@@ -38,9 +37,9 @@ class AgyCheckDriver:
         self._out = ""
 
     async def start(self, home: Path, hint: str | None = None) -> None:
-        argv = self._command or (self._prefix + ["agy"] if self._prefix else resolve_cli("agy"))
-        self._status, self._out = await run_once(
-            [*argv, "-p", PROMPT, "--print-timeout", "60s"], child_env({}), None, 120
+        raise NotImplementedError(
+            "Antigravity has no supported isolated sign-in with verified email discovery. "
+            "Use its native account setup; the Farm will not run a credit-consuming prompt during enrollment."
         )
 
     async def events(self) -> AsyncIterator[Any]:

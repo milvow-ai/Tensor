@@ -24,7 +24,6 @@ AUTHORIZE = re.compile(r"https://\S*oauth/authorize\S*")
 TEST_PROMPT = "Respond with only the word PONG"
 PASTE_HINT = "After you sign in and approve, the page shows a code. Paste it here."
 WSL_LATER = "This Claude account runs inside WSL; it signs in from the dashboard after the server move."
-MODELS = ["opus", "sonnet", "haiku"]  # Claude Code's model aliases (every subscription plan)
 
 
 class ClaudePasteDriver:
@@ -42,6 +41,9 @@ class ClaudePasteDriver:
 
     def _cli(self) -> list[str]:
         return self._command or resolve_cli("claude")
+
+    def preflight(self) -> None:
+        self._cli()
 
     async def start(self, home: Path, hint: str | None = None) -> None:
         home.mkdir(parents=True, exist_ok=True)
@@ -99,7 +101,8 @@ class ClaudePasteDriver:
         )
 
     async def models(self, home: Path) -> list[str]:
-        return list(MODELS)
+        # CLI aliases document supported names, not this account's entitlements.
+        return []
 
     async def test_login(self, home: Path) -> CheckResult:
         status, out = await run_once(

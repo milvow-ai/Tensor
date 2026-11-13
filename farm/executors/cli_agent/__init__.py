@@ -34,7 +34,7 @@ class CliAgentExecutor:
                 "claude": ClaudeCliExecutor(),
                 "codex": CodexCliExecutor(),
                 "agy": AgyCliExecutor(),
-                "gemini": AgyCliExecutor(),
+                "gemini": GeminiCliExecutor(),
                 "gemini-cli": GeminiCliExecutor(),
                 "hermes": HermesCliExecutor(),
                 "perplexity": PerplexityApiExecutor(),

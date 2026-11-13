@@ -673,6 +673,19 @@ class _Chain:
 
         now = ctx.clock()
         candidates = await _load_candidates(ctx.pool, provider_pool.id, now)
+        if call.capability.startswith("mcp:") and call.pin is None and len(candidates) > 1:
+            group = candidates[0].meta.get("mcp_pool_group")
+            if not isinstance(group, str) or not group.strip() or any(
+                c.meta.get("mcp_pool_group") != group for c in candidates
+            ):
+                return self.settled_failure(
+                    _error(
+                        "account_selection_required",
+                        "Select an MCP connection explicitly with _farm.account (or route pin). "
+                        "Use list_mcp_connections to see identities. Accounts never rotate silently.",
+                        self.attempts,
+                    )
+                )
         if call.pin is not None:
             candidates = [c for c in candidates if c.id == call.pin]
         if not candidates:
@@ -684,15 +697,7 @@ class _Chain:
         eligible: list[Candidate] = []
         for candidate in candidates:
             if requested_model:
-                models_meta = candidate.meta.get("models")
-                if isinstance(models_meta, str):
-                    candidate_models = [models_meta]
-                elif isinstance(models_meta, list):
-                    candidate_models = [str(m) for m in models_meta]
-                else:
-                    single_m = candidate.meta.get("model")
-                    candidate_models = [str(single_m)] if single_m else []
-                if not any(m.lower() == str(requested_model).lower() for m in candidate_models):
+                if not selection.model_allowed(candidate.meta, str(requested_model)):
                     await self._skip(
                         provider_pool, candidate, "model_not_offered", requested_model=str(requested_model)
                     )
@@ -1021,16 +1026,41 @@ class _Chain:
             else None
         )
         await self._on_failure(provider_pool, candidate, result)
+        if call.capability == ASK_AI_CAPABILITY and result.error_kind is ErrorKind.BAD_REQUEST:
+            # Record only explicit provider model-access refusals, not arbitrary task/argument errors.
+            import re
+
+            message = result.error or ""
+            if re.search(
+                r"model.{0,120}(?:not (?:available|found|supported)|does not exist|access|permission)|"
+                r"(?:access|permission).{0,100}model",
+                message,
+                re.IGNORECASE,
+            ):
+                model = str(call.params.get("model") or "").casefold()
+                if model:
+                    async with tenant_connection(ctx.pool) as conn:
+                        await conn.execute(
+                            "update public.connections set meta=jsonb_set(coalesce(meta,'{}'), "
+                            "'{rejected_models}',coalesce(meta->'rejected_models','{}') || "
+                            "jsonb_build_object(%s::text,jsonb_build_object('observed_at',%s::text,"
+                            "'source','provider_error'))) where id=%s",
+                            (model, ctx.clock().isoformat(), candidate.id),
+                        )
         if result.error_kind is ErrorKind.BAD_REQUEST and (
             call.capability.startswith("mcp:") or call.capability == "ask_ai"
         ):
             return self.settled_failure(
                 _error("bad_request", result.error or "invalid request", self.attempts)
             )
-        if not is_idempotent and result.request_sent is not False and (
-            call.retry_safe is False
-            or call.capability.startswith("mcp:")
-            or (call.capability == "ask_ai" and call.params.get("mode") == "edit")
+        if (
+            not is_idempotent
+            and result.request_sent is not False
+            and (
+                call.retry_safe is False
+                or call.capability.startswith("mcp:")
+                or (call.capability == "ask_ai" and call.params.get("mode") == "edit")
+            )
         ):
             return self.settled_failure(
                 _error(
@@ -1057,6 +1087,18 @@ class _Chain:
         """The provider answered. An empty answer is a completed call that the account is not blamed for."""
         ctx, call = self.ctx, self.call
         empty = result.error_kind is ErrorKind.EMPTY
+        model = str(call.params.get("model") or "").casefold()
+        if call.capability == ASK_AI_CAPABILITY and model and not empty:
+            async with tenant_connection(ctx.pool) as conn:
+                await conn.execute(
+                    "update public.connections set meta=jsonb_set(coalesce(meta,'{}'), "
+                    "'{model_access}',coalesce(meta->'model_access','{}') || "
+                    "jsonb_build_object(%s::text,jsonb_build_object('observed_at',%s::text,"
+                    "'source','successful_job'))) - 'rejected_models' || "
+                    "jsonb_build_object('rejected_models',coalesce(meta->'rejected_models','{}') - %s::text) "
+                    "where id=%s",
+                    (model, ctx.clock().isoformat(), model, candidate.id),
+                )
         if not empty:
             await _best_effort(
                 health.record_success(ctx.pool, candidate.id, now=ctx.clock()), "health.success"
@@ -1064,8 +1106,13 @@ class _Chain:
         elif candidate.circuit != "closed":
             # An empty answer changes nothing for a healthy account, but it still ends a half-open probe.
             await _best_effort(
-                health.record_failure(ctx.pool, candidate.id, ErrorKind.EMPTY,
-                    self._health_error(result.error, ErrorKind.EMPTY), now=ctx.clock()),
+                health.record_failure(
+                    ctx.pool,
+                    candidate.id,
+                    ErrorKind.EMPTY,
+                    self._health_error(result.error, ErrorKind.EMPTY),
+                    now=ctx.clock(),
+                ),
                 "health.probe_empty",
             )
         await self.traj.event(
@@ -1251,7 +1298,8 @@ class _Chain:
                     try:
                         await _best_effort(
                             self.traj.slot(
-                                request.connection.id, model if isinstance(model, str) else None,
+                                request.connection.id,
+                                model if isinstance(model, str) else None,
                                 timeout_s + 5,
                             ),
                             "slot.open",
@@ -1410,7 +1458,16 @@ async def route(
     )
     try:
         return await _route(
-            ctx, cap, traj, params, strategy, pin, caller, scope, selection_exempt, retry_safe,
+            ctx,
+            cap,
+            traj,
+            params,
+            strategy,
+            pin,
+            caller,
+            scope,
+            selection_exempt,
+            retry_safe,
             isolated=run_id is not None,
         )
     except Exception as exc:

@@ -134,7 +134,7 @@ describe("Sign-in logic & view model (login.ts)", () => {
       expect(vm.title).toBe("Verifying account");
       expect(vm.statusChipStatus).toBe("running");
       expect(vm.statusChipLabel).toBe("Verifying");
-      expect(vm.checklist).toEqual(["Signed in", "Checking who it is", "Test reply"]);
+      expect(vm.checklist).toEqual(["Signed in", "Checking verified identity", "Reading supported metadata"]);
       expect(vm.canCancel).toBe(true);
       expect(vm.isTerminal).toBe(false);
       expect(vm.actions).toContain("cancel");
@@ -149,7 +149,7 @@ describe("Sign-in logic & view model (login.ts)", () => {
       });
       const vm = getLoginCardViewModel(session);
 
-      expect(vm.title).toBe("Ready");
+      expect(vm.title).toBe("Signed in");
       expect(vm.statusChipStatus).toBe("ready");
       expect(vm.statusChipLabel).toBe("Ready");
       expect(vm.identity?.email_masked).toBe("us**@example.com");

@@ -80,6 +80,7 @@ from farm.ai.conversations import (
     point_to_job,
 )
 from farm.ai.failures import AiRequestError, Busy, Failure, classify, retryable_on_another_account
+from farm.ai.worker_bootstrap import WorkerBootstrap
 from farm.capabilities.schemas import (
     TERMINAL_STATES,
     AiAttempt,
@@ -92,9 +93,10 @@ from farm.capabilities.schemas import (
 )
 from farm.context import FarmContext
 from farm.db.pool import DbPool, system_connection, tenant_connection
+from farm.gateway.middleware import current_identity
 from farm.resources.router import MAX_PARTIAL_CHARS, UnknownCapability, route
 from farm.secrets import redact
-from farm.tenancy import require_tenant, use_tenant
+from farm.tenancy import TokenIdentity, require_tenant, use_tenant
 from farm.tenancy.provenance import operator_snapshot, recorded_operator
 
 log = structlog.get_logger(__name__)
@@ -876,6 +878,7 @@ class _Work:
     pool_limit: int | None
     tenant_id: UUID
     """The tenant that queued the job: the runner, ticker and shutdown act for it, in any task."""
+    bootstrap_parent: TokenIdentity | None = None
     attempts: list[dict[str, Any]] = field(default_factory=list)
     tried: list[str] = field(default_factory=list)
     cost: Decimal = Decimal(0)
@@ -1027,6 +1030,7 @@ class JobManager:
         self.tick_s = tick_s
         self.busy_backoff_s = busy_backoff_s
         self.store = JobStore(ctx.pool)
+        self.worker_bootstrap: WorkerBootstrap | None = None
         self.conversations = ConversationStore(ctx.pool)
         self._live: dict[UUID, _Work] = {}
         self._pending: list[_Work] = []
@@ -1252,6 +1256,7 @@ class JobManager:
         recovery_approval_actor: str | None = None,
         new_job_id: UUID | None = None,
     ) -> AiStarted:
+        bootstrap_parent = current_identity.get() if self.worker_bootstrap is not None else None
         record = await self.store.create(
             conversation=conv,
             ai=account.ai,
@@ -1276,6 +1281,7 @@ class JobManager:
             limit=account.max_parallel,
             pool_limit=account.pool_max_parallel,
             tenant_id=require_tenant(),
+            bootstrap_parent=bootstrap_parent,
         )
         self._live[record.id] = work
         ahead = self._jobs_ahead(work)
@@ -1382,7 +1388,16 @@ class JobManager:
                 "ai.job_started", job=str(work.job_id), ai=work.ai, account=work.account, turn=record.turn
             )
             work.attempt_started_at = self.clock()
-            attempt = await self.transport.run(work.record, work.task)
+            bootstrap = self.worker_bootstrap
+            if bootstrap is None:
+                attempt = await self.transport.run(record, work.task)
+            else:
+                with bootstrap.launch(
+                    work.bootstrap_parent, job_id=record.id, owner_id=self.instance_id,
+                    tenant_id=work.tenant_id, user_id=record.operator_user_id,
+                    timeout_s=record.timeout_s, heartbeat_s=self.lease_s,
+                ):
+                    attempt = await self.transport.run(record, work.task)
             work.attempt_started_at = None
             requeued = await self._conclude(work, attempt)
         except asyncio.CancelledError:

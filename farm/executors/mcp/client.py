@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import mcp_types
 import structlog
@@ -49,6 +50,7 @@ from farm.executors.mcp.mapping import get_capability_mapping, map_request_param
 from farm.registry.models import MCP_CAPABILITY_PREFIX, McpProviderSpec
 from farm.secrets import ensure_token_store_dir, redact, resolve_auth, resolve_token_store
 from farm.settings import data_dir_path
+from farm.tenancy import current_tenant
 
 logger = structlog.get_logger(__name__)
 
@@ -59,6 +61,15 @@ for its own purposes, such as ``model`` or ``session_id``, can collide with the 
 REJECTION_KEY = "rpc_error"
 ERROR_CODES = frozenset({"CREDITS_EXHAUSTED", "LIMIT_REACHED", "UNAUTHORIZED", "RATE_LIMITED"})
 """Codes in a tool's answer that mark it as an error (still the tool's answer, not an account state)."""
+
+GENERATED_TOKEN_PREFIX = "farm-mcp-"
+
+
+def mcp_token_ref(tenant: UUID, connection_id: str, generation: UUID | None = None) -> str:
+    """New stores are tenant/account scoped. Explicit legacy references remain readable."""
+    account = hashlib.sha256(connection_id.encode()).hexdigest()[:24]
+    suffix = f"-{generation.hex}" if generation is not None else ""
+    return f"token-store:{GENERATED_TOKEN_PREFIX}{tenant.hex}-{account}{suffix}"
 
 
 @dataclass
@@ -97,8 +108,8 @@ class McpExecutor:
         self._clients: dict[str, Client[Any]] = {}
         self._directory = directory
         self._transports = transports
-        self._relays: dict[str, _Held] = {}
-        """Relay clients: connection id -> the client (and the fingerprint of what it was built from)."""
+        self._relays: dict[tuple[UUID | None, str], _Held] = {}
+        """Relay clients are scoped to the tenant and connection."""
         self._retired: list[_Held] = []
         """Stale clients that still have calls running; each is closed when its last call is done."""
 
@@ -120,6 +131,14 @@ class McpExecutor:
             # that is a plain name on Linux ("..\\..\\x") must not become a path on Windows.
             raise ValueError(f"Path traversal detected: connection id {connection.id!r} has a path separator")
         if connection.auth_ref.startswith("token-store:"):
+            if connection.auth_ref.startswith(f"token-store:{GENERATED_TOKEN_PREFIX}"):
+                tenant = current_tenant.get()
+                if tenant is None:
+                    raise ValueError("This MCP token store requires tenant context")
+                expected = mcp_token_ref(tenant, connection.id)
+                actual = connection.auth_ref
+                if actual != expected and not actual.startswith(f"{expected}-"):
+                    raise ValueError("The MCP token store belongs to a different tenant or connection")
             store_dir = resolve_token_store(connection.auth_ref, data_dir=self._data_dir)
         else:
             store_dir = self._data_dir / "tokens" / connection.id
@@ -193,7 +212,7 @@ class McpExecutor:
     def _get_or_create_client(self, connection: ConnectionView) -> Client[Any]:
         """Retrieve existing client or instantiate a new one."""
         server_id = id(connection.meta.get("server")) if "server" in connection.meta else 0
-        cache_key = f"{connection.id}_{server_id}"
+        cache_key = f"{current_tenant.get()}:{connection.id}:{server_id}"
         if cache_key not in self._clients:
             self._clients[cache_key] = self._create_client(connection)
         return self._clients[cache_key]
@@ -225,14 +244,15 @@ class McpExecutor:
             override = json.dumps(meta.get("mcp") or {}, sort_keys=True)
             source = f"{spec.model_dump_json()}|{override}|{connection.auth_ref}"
             fingerprint = hashlib.sha256(source.encode()).hexdigest()
-        cached = self._relays.get(connection.id)
+        cache_key = (current_tenant.get(), connection.id)
+        cached = self._relays.get(cache_key)
         if cached is not None and cached.fingerprint == fingerprint:
             return cached
         if cached is not None:
             await self.discard(connection.id)
         built = build_client(target if spec is None else self._transport(connection, spec), connection.id)
         held = _Held(fingerprint, built)
-        self._relays[connection.id] = held
+        self._relays[cache_key] = held
         return held
 
     async def _acquire(self, connection: ConnectionView) -> _Held:
@@ -250,8 +270,9 @@ class McpExecutor:
         if not held.managed:
             return
         held.stale = True
-        if self._relays.get(connection_id) is held:
-            del self._relays[connection_id]
+        cache_key = (current_tenant.get(), connection_id)
+        if self._relays.get(cache_key) is held:
+            del self._relays[cache_key]
         if held.users > 0:
             if held not in self._retired:
                 self._retired.append(held)
@@ -295,7 +316,7 @@ class McpExecutor:
     async def discard(self, connection_id: str) -> None:
         """Forget a connection's relay client (its next use starts a fresh server / session); calls running
         on it finish first."""
-        held = self._relays.get(connection_id)
+        held = self._relays.get((current_tenant.get(), connection_id))
         if held is not None:
             await self._retire(connection_id, held)
 

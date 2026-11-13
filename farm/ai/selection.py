@@ -9,9 +9,8 @@ reservation or a CLI exists. An account's default choice applies only when the r
 The legacy keys ``meta.model`` / ``default_model`` / ``effort`` / ``default_effort`` never count as that
 opt-in (``meta.model`` still lists a configured model, nothing more).
 
-Models are reported with their source: ``configured`` (``meta.models``, written by the operator) or
-``verified`` (also in ``meta.verified_models``, written by a discovery that asked the CLI). A configured name
-may be a CLI alias (``opus``); it is never presented as the exact provider model the CLI resolved it to.
+The menu separates configured model names, provider listings, and access observed on real jobs. A CLI
+alias such as ``opus`` remains distinct from the resolved provider model reported by a job.
 
 This module is pure (no database, no ``farm`` import at all), so the router, the CLI drivers and the schemas
 can use it, and the router enforces the same rule on the blocking ``ask_ai`` path that ``JobManager`` enforces
@@ -22,6 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Final, Literal
 
 SelectionSource = Literal["explicit", "account_defaults", "inherited"]
@@ -75,12 +75,53 @@ def configured_models(meta: Mapping[str, Any]) -> tuple[str, ...]:
     return found or _names(meta.get("model"))
 
 
-def model_menu(meta: Mapping[str, Any]) -> list[dict[str, str]]:
-    """Each configured model with its source: ``verified`` (a discovery confirmed it) or ``configured``."""
-    verified = {m.lower() for m in _names(meta.get("verified_models"))}
+def available_models(meta: Mapping[str, Any]) -> tuple[str, ...]:
+    rejected = meta.get("rejected_models")
+    rejected = rejected if isinstance(rejected, Mapping) else {}
+    return tuple(m for m in configured_models(meta) if m.casefold() not in rejected)
+
+
+def model_allowed(meta: Mapping[str, Any], model: str) -> bool:
+    """Unknown or partial provider listings permit an operator's explicit model choice."""
+    rejected = meta.get("rejected_models")
+    if isinstance(rejected, Mapping) and model.casefold() in rejected:
+        return False
+    return (
+        isinstance(meta.get("model_discovery"), Mapping)
+        or _offered(configured_models(meta), model) is not None
+    )
+
+
+def model_menu(meta: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Historical configuration and current evidence, with timestamps for listings and access."""
+    discovery = meta.get("model_discovery")
+    discovery = discovery if isinstance(discovery, Mapping) else {}
+    observed = {m.casefold() for m in _names(discovery.get("models"))}
+    rejected = meta.get("rejected_models")
+    rejected = rejected if isinstance(rejected, Mapping) else {}
+    access = meta.get("model_access")
+    access = access if isinstance(access, Mapping) else {}
+    at = discovery.get("observed_at")
+    freshness = "unknown"
+    if isinstance(at, str):
+        try:
+            age = (datetime.now(UTC) - datetime.fromisoformat(at)).total_seconds()
+            freshness = "current" if 0 <= age <= 3600 else "stale"
+        except (ValueError, TypeError):
+            pass
     return [
-        {"id": m, "source": "verified" if m.lower() in verified else "configured"}
-        for m in configured_models(meta)
+        {
+            "id": m,
+            "source": discovery.get("source") if m.casefold() in observed else "configured",
+            "access": "rejected"
+            if m.casefold() in rejected
+            else ("observed_success" if m.casefold() in access else "unknown"),
+            "access_observation": rejected.get(m.casefold()) or access.get(m.casefold()),
+            "listed": m.casefold() in observed,
+            "observed_at": at if m.casefold() in observed else None,
+            "freshness": freshness if m.casefold() in observed else "unknown",
+        }
+        for m in dict.fromkeys((*configured_models(meta), *access, *rejected))
     ]
 
 
@@ -121,7 +162,7 @@ def defaults_of(provider: str, meta: Mapping[str, Any]) -> Defaults:
     problem: str | None = None
     if model is None:
         problem = "no default model configured"
-    elif _offered(configured_models(meta), model) is None:
+    elif _offered(available_models(meta), model) is None:
         problem = f"default model '{model}' is not one of the account's configured models"
     elif supports_effort(provider) and effort is None:
         problem = "no default effort configured"
@@ -200,8 +241,8 @@ def resolve(
     if missing:
         return Problem("selection_required", f"choose {' and '.join(missing)} before starting", missing)
     assert model is not None
-    offered = _offered(configured_models(meta), model)
-    if offered is None:
+    offered = _offered(available_models(meta), model) or model
+    if not model_allowed(meta, model):
         return Problem("invalid_selection", f"model '{model}' is not offered by this account")
     if effort is not None:
         if not supports_effort(provider):

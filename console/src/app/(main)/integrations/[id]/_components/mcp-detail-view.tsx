@@ -3,8 +3,10 @@
 import { useState } from "react";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { ArrowLeft, CheckCircle2, Code, Lock, Play, RefreshCw, Search, Terminal, Wrench } from "lucide-react";
+import { SignInDrawer } from "@/app/(main)/pools/_components/sign-in-drawer";
 
 import { CommandChip } from "@/components/farm/command-chip";
 import { CopyCommand } from "@/components/farm/copy-command";
@@ -26,6 +28,8 @@ export function McpDetailView({ initialDetail, connections }: { initialDetail: M
   const tools = initialDetail.tools;
   const [toolSearch, setToolSearch] = useState("");
   const [inspectingSchemaTool, setInspectingSchemaTool] = useState<McpToolItem | null>(null);
+  const [signInAccount, setSignInAccount] = useState<string | null>(null);
+  const router = useRouter();
   const { run, pending } = useCommands();
   const syncing = Boolean(pending.sync);
   const testing = Boolean(pending.test);
@@ -303,6 +307,11 @@ export function McpDetailView({ initialDetail, connections }: { initialDetail: M
                     </TableCell>
                     <TableCell className="text-right">
                       <StatusChip status={status} label={acc.status.replaceAll("_", " ")} size="sm" />
+                      {acc.authRef.startsWith("token-store:") && (
+                        <Button variant="outline" size="sm" onClick={() => setSignInAccount(acc.id)}>
+                          {acc.status === "needs_login" ? "Sign in" : "Reconnect"}
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 );
@@ -311,6 +320,17 @@ export function McpDetailView({ initialDetail, connections }: { initialDetail: M
           </Table>
         </CardContent>
       </Card>
+
+      <SignInDrawer
+        open={signInAccount !== null}
+        onOpenChange={(open) => !open && setSignInAccount(null)}
+        connectionId={signInAccount ?? undefined}
+        providerId={detail.integration.id}
+        providerName={detail.integration.name}
+        title={`Connect ${detail.integration.name}`}
+        mcpOAuth
+        onDone={() => router.refresh()}
+      />
 
       {/* Tool Input Schema Inspector Modal */}
       <Dialog open={inspectingSchemaTool !== null} onOpenChange={(open) => !open && setInspectingSchemaTool(null)}>
