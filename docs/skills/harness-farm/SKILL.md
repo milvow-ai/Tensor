@@ -22,14 +22,18 @@ Not a plugin, not a website: it is a **connector**. The owner manages it from a 
 
 ## 2. Connect to Harness Farm (once per PC / IDE)
 The Farm runs on the owner's Windows PC (`D:\Harness Farm\Tensor`) and serves MCP at **`http://127.0.0.1:8787/mcp`** (streamable HTTP, bearer token).
-1. **Farm running?** `curl http://127.0.0.1:8787/health` → `{"status":"ok"}`. If not, start it (PowerShell):
-   `$env:FARM_REGISTRY_PATH='D:\Harness Farm\Tensor\config\registry.owner.yaml'; uv run --directory "D:\Harness Farm\Tensor" farm run`
-2. **A token per IDE** (shown once): `uv run --directory "D:\Harness Farm\Tensor" farm token create <ide-name>` — then store it as an
-   environment variable, e.g. `setx FARM_TOKEN "<token>"` (never paste it into chats, tasks or files that get shared).
+1. Check the local gateway with `curl.exe http://127.0.0.1:8787/health`.
+   Start the installed watchdog with `Start-ScheduledTask -TaskName HarnessFarm`.
+   Check `D:\farm-data\logs\farm-run.err.log` if startup fails. For a schema mismatch, back up the configured
+   database and run `farm db migrate` from the intended checkout before restarting.
+2. Create a member-bound token for each IDE with `farm token create <ide-name> --user <member-email>`
+   in the Farm checkout. Bind the IDEs that should resume the same tasks to the same Farm member. Store the
+   token in a user environment variable, such as `FARM_CLAUDE_TOKEN` for Claude Code. Keep it out of chats,
+   prompts, and shared files. Unbound service tokens cannot open or resume member-owned tasks.
 3. **Attach the IDE:**
    - **Claude Code** (all projects):
-     `claude mcp add --transport http -s user harness-farm http://127.0.0.1:8787/mcp --header 'Authorization: Bearer ${FARM_TOKEN}'`
-     then fully restart the app and check `/mcp` → `harness-farm` connected.
+     `claude mcp add --transport http -s user harness-farm http://127.0.0.1:8787/mcp --header 'Authorization: Bearer ${FARM_CLAUDE_TOKEN}'`
+     then reopen Claude Code from a fresh terminal and check `/mcp` for `harness-farm`.
    - **Any other MCP client** (Codex, Cursor, Gemini CLI, …): add an HTTP MCP server with URL `http://127.0.0.1:8787/mcp` and header
      `Authorization: Bearer <FARM_TOKEN>` (use the client's env-var reference if it has one). `uv run --directory "D:\Harness Farm\Tensor"
      farm connect <claude-code|codex|cursor|gemini|generic>` prints the exact snippet for that client.
